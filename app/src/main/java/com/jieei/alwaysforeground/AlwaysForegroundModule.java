@@ -2,8 +2,10 @@ package com.jieei.alwaysforeground;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.Instrumentation;
 import android.app.KeyguardManager;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 import android.os.PowerManager;
 import android.util.Log;
 
@@ -46,6 +48,7 @@ public final class AlwaysForegroundModule extends XposedModule {
         installStandardHooks();
         installEnhancedHooks();
         installSafeStrongHooks();
+        installLifecycleDiagnostics();
     }
 
     private void installStandardHooks() {
@@ -66,13 +69,51 @@ public final class AlwaysForegroundModule extends XposedModule {
     }
 
     /**
-     * Strong mode intentionally avoids AndroidX LifecycleRegistry.
-     * Spoofing getCurrentState() during ComponentActivity construction can make AndroidX
-     * believe the owner is already RESUMED and crash with initialization-stage exceptions.
+     * Strong mode intentionally avoids AndroidX LifecycleRegistry and real lifecycle callbacks.
      * Only stateless/query-style framework APIs are spoofed here.
      */
     private void installSafeStrongHooks() {
         hookBoolean(Activity.class, "hasWindowFocus", true, ModeConfig.MODE_STRONG);
+    }
+
+    /**
+     * Diagnostic-only lifecycle hooks. They never alter execution or return values.
+     * Instrumentation is the central dispatch point for Activity lifecycle transitions,
+     * so this remains useful even when an Activity overrides onPause/onStop/onResume.
+     */
+    private void installLifecycleDiagnostics() {
+        hookInstrumentationActivity("callActivityOnResume", Activity.class);
+        hookInstrumentationActivity("callActivityOnPause", Activity.class);
+        hookInstrumentationActivity("callActivityOnStop", Activity.class);
+        hookInstrumentationActivity("callActivityOnStart", Activity.class);
+        hookInstrumentationActivity("callActivityOnRestart", Activity.class);
+        hookInstrumentationActivity("callActivityOnDestroy", Activity.class);
+        hookInstrumentationActivity("callActivityOnSaveInstanceState", Activity.class, Bundle.class);
+    }
+
+    private void hookInstrumentationActivity(String methodName, Class<?>... parameterTypes) {
+        String label = "Instrumentation." + methodName;
+        try {
+            Method method = Instrumentation.class.getDeclaredMethod(methodName, parameterTypes);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    List<Object> args = chain.getArgs();
+                    if (!args.isEmpty() && args.get(0) instanceof Activity activity) {
+                        log(Log.INFO, TAG, "LIFECYCLE " + methodName
+                                + " activity=" + activity.getClass().getName()
+                                + " finishing=" + activity.isFinishing()
+                                + " changingConfig=" + activity.isChangingConfigurations()
+                                + " package=" + activePackage);
+                    }
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (NoSuchMethodException e) {
+            log(Log.INFO, TAG, "SKIPPED " + label + ": method not present");
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
     }
 
     private void hookRunningProcesses() {
