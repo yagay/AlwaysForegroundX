@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">始终前台</string>
+    <string name="app_description">让所选应用在后台或锁屏时尽量认为自己仍处于前台。</string>
+</resources>
