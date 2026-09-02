@@ -45,18 +45,7 @@ public final class AlwaysForegroundModule extends XposedModule {
 
         installStandardHooks();
         installEnhancedHooks();
-        installSafeStrongFrameworkHooks();
-    }
-
-    @Override
-    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
-        if (!param.isFirstPackage()) return;
-        if (MODULE_PACKAGE.equals(param.getPackageName())) return;
-
-        activePackage = param.getPackageName();
-        installStrongAppHooks(param.getClassLoader());
-        log(Log.INFO, TAG, "package ready: " + activePackage
-                + ", effective mode=" + TargetConfig.getMode());
+        installSafeStrongHooks();
     }
 
     private void installStandardHooks() {
@@ -77,16 +66,13 @@ public final class AlwaysForegroundModule extends XposedModule {
     }
 
     /**
-     * Strong mode must not suppress Activity or AndroidX lifecycle transitions.
-     * Doing so desynchronizes LifecycleRegistry observers from the real Activity state
-     * and can crash apps. Only query-style APIs are spoofed here.
+     * Strong mode intentionally avoids AndroidX LifecycleRegistry.
+     * Spoofing getCurrentState() during ComponentActivity construction can make AndroidX
+     * believe the owner is already RESUMED and crash with initialization-stage exceptions.
+     * Only stateless/query-style framework APIs are spoofed here.
      */
-    private void installSafeStrongFrameworkHooks() {
+    private void installSafeStrongHooks() {
         hookBoolean(Activity.class, "hasWindowFocus", true, ModeConfig.MODE_STRONG);
-    }
-
-    private void installStrongAppHooks(ClassLoader classLoader) {
-        hookAndroidXLifecycleQuery(classLoader);
     }
 
     private void hookRunningProcesses() {
@@ -156,30 +142,6 @@ public final class AlwaysForegroundModule extends XposedModule {
             logInstalled("ActivityManager.getMyMemoryState");
         } catch (Throwable t) {
             logSkipped("ActivityManager.getMyMemoryState", t);
-        }
-    }
-
-    private void hookAndroidXLifecycleQuery(ClassLoader classLoader) {
-        try {
-            Class<?> lifecycleRegistry = classLoader.loadClass("androidx.lifecycle.LifecycleRegistry");
-            Class<?> stateClass = classLoader.loadClass("androidx.lifecycle.Lifecycle$State");
-
-            @SuppressWarnings({"rawtypes", "unchecked"})
-            Object resumed = Enum.valueOf((Class<? extends Enum>) stateClass.asSubclass(Enum.class), "RESUMED");
-
-            Method getCurrentState = lifecycleRegistry.getDeclaredMethod("getCurrentState");
-            hook(getCurrentState).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit("AndroidX LifecycleRegistry.getCurrentState");
-                    return resumed;
-                }
-                return chain.proceed();
-            });
-            logInstalled("AndroidX LifecycleRegistry.getCurrentState");
-        } catch (ClassNotFoundException ignored) {
-            log(Log.INFO, TAG, "AndroidX LifecycleRegistry not present in " + activePackage);
-        } catch (Throwable t) {
-            logSkipped("AndroidX LifecycleRegistry.getCurrentState", t);
         }
     }
 
