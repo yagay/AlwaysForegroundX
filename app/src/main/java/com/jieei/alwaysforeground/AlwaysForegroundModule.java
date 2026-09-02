@@ -1,5 +1,6 @@
 package com.jieei.alwaysforeground;
 
+import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.content.SharedPreferences;
@@ -44,6 +45,7 @@ public final class AlwaysForegroundModule extends XposedModule {
 
         installStandardHooks();
         installEnhancedHooks();
+        installSafeStrongFrameworkHooks();
     }
 
     @Override
@@ -52,7 +54,7 @@ public final class AlwaysForegroundModule extends XposedModule {
         if (MODULE_PACKAGE.equals(param.getPackageName())) return;
 
         activePackage = param.getPackageName();
-        installStrongHooks(param.getClassLoader());
+        installStrongAppHooks(param.getClassLoader());
         log(Log.INFO, TAG, "package ready: " + activePackage
                 + ", effective mode=" + TargetConfig.getMode());
     }
@@ -74,8 +76,17 @@ public final class AlwaysForegroundModule extends XposedModule {
         hookMyMemoryState();
     }
 
-    private void installStrongHooks(ClassLoader classLoader) {
-        hookAndroidXLifecycle(classLoader);
+    /**
+     * Strong mode must not suppress Activity or AndroidX lifecycle transitions.
+     * Doing so desynchronizes LifecycleRegistry observers from the real Activity state
+     * and can crash apps. Only query-style APIs are spoofed here.
+     */
+    private void installSafeStrongFrameworkHooks() {
+        hookBoolean(Activity.class, "hasWindowFocus", true, ModeConfig.MODE_STRONG);
+    }
+
+    private void installStrongAppHooks(ClassLoader classLoader) {
+        hookAndroidXLifecycleQuery(classLoader);
     }
 
     private void hookRunningProcesses() {
@@ -148,11 +159,10 @@ public final class AlwaysForegroundModule extends XposedModule {
         }
     }
 
-    private void hookAndroidXLifecycle(ClassLoader classLoader) {
+    private void hookAndroidXLifecycleQuery(ClassLoader classLoader) {
         try {
             Class<?> lifecycleRegistry = classLoader.loadClass("androidx.lifecycle.LifecycleRegistry");
             Class<?> stateClass = classLoader.loadClass("androidx.lifecycle.Lifecycle$State");
-            Class<?> eventClass = classLoader.loadClass("androidx.lifecycle.Lifecycle$Event");
 
             @SuppressWarnings({"rawtypes", "unchecked"})
             Object resumed = Enum.valueOf((Class<? extends Enum>) stateClass.asSubclass(Enum.class), "RESUMED");
@@ -166,64 +176,10 @@ public final class AlwaysForegroundModule extends XposedModule {
                 return chain.proceed();
             });
             logInstalled("AndroidX LifecycleRegistry.getCurrentState");
-
-            hookLifecycleEventGate(lifecycleRegistry, eventClass, "handleLifecycleEvent");
-            hookLifecycleStateGate(lifecycleRegistry, stateClass, "setCurrentState");
-            hookLifecycleStateGate(lifecycleRegistry, stateClass, "markState");
         } catch (ClassNotFoundException ignored) {
             log(Log.INFO, TAG, "AndroidX LifecycleRegistry not present in " + activePackage);
         } catch (Throwable t) {
-            logSkipped("AndroidX LifecycleRegistry", t);
-        }
-    }
-
-    private void hookLifecycleEventGate(Class<?> lifecycleRegistry, Class<?> eventClass, String methodName) {
-        String label = "AndroidX LifecycleRegistry." + methodName;
-        try {
-            Method method = lifecycleRegistry.getDeclaredMethod(methodName, eventClass);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    List<Object> args = chain.getArgs();
-                    if (!args.isEmpty()) {
-                        String event = String.valueOf(args.get(0));
-                        if ("ON_PAUSE".equals(event) || "ON_STOP".equals(event)) {
-                            logFirstHit(label + "[" + event + "] blocked");
-                            return null;
-                        }
-                    }
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (NoSuchMethodException e) {
-            log(Log.INFO, TAG, "SKIPPED " + label + ": method not present");
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
-    }
-
-    private void hookLifecycleStateGate(Class<?> lifecycleRegistry, Class<?> stateClass, String methodName) {
-        String label = "AndroidX LifecycleRegistry." + methodName;
-        try {
-            Method method = lifecycleRegistry.getDeclaredMethod(methodName, stateClass);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    List<Object> args = chain.getArgs();
-                    if (!args.isEmpty()) {
-                        String state = String.valueOf(args.get(0));
-                        if ("STARTED".equals(state) || "CREATED".equals(state) || "INITIALIZED".equals(state)) {
-                            logFirstHit(label + "[" + state + "] blocked");
-                            return null;
-                        }
-                    }
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (NoSuchMethodException e) {
-            log(Log.INFO, TAG, "SKIPPED " + label + ": method not present");
-        } catch (Throwable t) {
-            logSkipped(label, t);
+            logSkipped("AndroidX LifecycleRegistry.getCurrentState", t);
         }
     }
 
