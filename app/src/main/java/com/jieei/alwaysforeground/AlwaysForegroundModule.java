@@ -151,11 +151,13 @@ public final class AlwaysForegroundModule extends XposedModule {
     private void hookAndroidXLifecycle(ClassLoader classLoader) {
         try {
             Class<?> lifecycleRegistry = classLoader.loadClass("androidx.lifecycle.LifecycleRegistry");
-            Method getCurrentState = lifecycleRegistry.getDeclaredMethod("getCurrentState");
             Class<?> stateClass = classLoader.loadClass("androidx.lifecycle.Lifecycle$State");
+            Class<?> eventClass = classLoader.loadClass("androidx.lifecycle.Lifecycle$Event");
+
             @SuppressWarnings({"rawtypes", "unchecked"})
             Object resumed = Enum.valueOf((Class<? extends Enum>) stateClass.asSubclass(Enum.class), "RESUMED");
 
+            Method getCurrentState = lifecycleRegistry.getDeclaredMethod("getCurrentState");
             hook(getCurrentState).intercept(chain -> {
                 if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
                     logFirstHit("AndroidX LifecycleRegistry.getCurrentState");
@@ -164,10 +166,64 @@ public final class AlwaysForegroundModule extends XposedModule {
                 return chain.proceed();
             });
             logInstalled("AndroidX LifecycleRegistry.getCurrentState");
+
+            hookLifecycleEventGate(lifecycleRegistry, eventClass, "handleLifecycleEvent");
+            hookLifecycleStateGate(lifecycleRegistry, stateClass, "setCurrentState");
+            hookLifecycleStateGate(lifecycleRegistry, stateClass, "markState");
         } catch (ClassNotFoundException ignored) {
             log(Log.INFO, TAG, "AndroidX LifecycleRegistry not present in " + activePackage);
         } catch (Throwable t) {
-            logSkipped("AndroidX LifecycleRegistry.getCurrentState", t);
+            logSkipped("AndroidX LifecycleRegistry", t);
+        }
+    }
+
+    private void hookLifecycleEventGate(Class<?> lifecycleRegistry, Class<?> eventClass, String methodName) {
+        String label = "AndroidX LifecycleRegistry." + methodName;
+        try {
+            Method method = lifecycleRegistry.getDeclaredMethod(methodName, eventClass);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    List<Object> args = chain.getArgs();
+                    if (!args.isEmpty()) {
+                        String event = String.valueOf(args.get(0));
+                        if ("ON_PAUSE".equals(event) || "ON_STOP".equals(event)) {
+                            logFirstHit(label + "[" + event + "] blocked");
+                            return null;
+                        }
+                    }
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (NoSuchMethodException e) {
+            log(Log.INFO, TAG, "SKIPPED " + label + ": method not present");
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    private void hookLifecycleStateGate(Class<?> lifecycleRegistry, Class<?> stateClass, String methodName) {
+        String label = "AndroidX LifecycleRegistry." + methodName;
+        try {
+            Method method = lifecycleRegistry.getDeclaredMethod(methodName, stateClass);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    List<Object> args = chain.getArgs();
+                    if (!args.isEmpty()) {
+                        String state = String.valueOf(args.get(0));
+                        if ("STARTED".equals(state) || "CREATED".equals(state) || "INITIALIZED".equals(state)) {
+                            logFirstHit(label + "[" + state + "] blocked");
+                            return null;
+                        }
+                    }
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (NoSuchMethodException e) {
+            log(Log.INFO, TAG, "SKIPPED " + label + ": method not present");
+        } catch (Throwable t) {
+            logSkipped(label, t);
         }
     }
 
