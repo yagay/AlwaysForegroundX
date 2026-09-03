@@ -88,17 +88,6 @@ public final class AlwaysForegroundModule extends XposedModule {
         installHongguoVideoPendantBlock(classLoader);
         installVoidNoArgBlock(classLoader,
                 "tp6.c", "onInVisible", "Hongguo tp6.c.onInVisible");
-
-        // v1.3.9 diagnostics proved that this is the active short-video Fragment and that
-        // AndroidX dispatches both callbacks whenever MainFragmentActivity goes background.
-        // Block only the app Fragment callbacks; Fragment.performPause/performStop still run,
-        // so FragmentManager/Lifecycle internal state remains consistent.
-        installVoidNoArgBlock(classLoader,
-                "com.dragon.read.component.shortvideo.impl.v2.SeriesBookMallTabFragment",
-                "onPause", "Hongguo SeriesBookMallTabFragment.onPause");
-        installVoidNoArgBlock(classLoader,
-                "com.dragon.read.component.shortvideo.impl.v2.SeriesBookMallTabFragment",
-                "onStop", "Hongguo SeriesBookMallTabFragment.onStop");
     }
 
     private void installHongguoPauseBlock(ClassLoader classLoader) {
@@ -156,6 +145,12 @@ public final class AlwaysForegroundModule extends XposedModule {
         }
     }
 
+    /**
+     * Diagnostic only: FragmentActivity.onPause()/onStop() propagates lifecycle to every
+     * active Fragment before/around the app-specific MainFragmentActivity callbacks. A video
+     * Fragment can therefore pause itself even after all known Activity-side pause callbacks
+     * are blocked. Log the concrete Fragment classes without changing lifecycle execution.
+     */
     private void installHongguoFragmentDiagnostics(ClassLoader classLoader) {
         try {
             Class<?> fragmentClass = classLoader.loadClass("androidx.fragment.app.Fragment");
