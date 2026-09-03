@@ -82,13 +82,8 @@ public final class AlwaysForegroundModule extends XposedModule {
 
     private void installHongguoHooks(ClassLoader classLoader) {
         installHongguoPauseBlock(classLoader);
-
-        // Second-stage diagnostics from MainFragmentActivity.onPause()/onStop().
-        // These do not alter execution. They identify the next real pause path after
-        // d2.onActivityPause() has already been successfully blocked.
-        hookHongguoDiagnosticNoArgs(classLoader, "qv3.r", "n", "Hongguo videoService.n");
-        hookHongguoDiagnosticNoArgs(classLoader, "oo6.a", "onInVisible", "Hongguo oo6.a.onInVisible");
-        hookHongguoVideoPendantDiagnostic(classLoader);
+        installHongguoVideoServiceBlock(classLoader);
+        installHongguoVideoPendantBlock(classLoader);
     }
 
     private void installHongguoPauseBlock(ClassLoader classLoader) {
@@ -109,24 +104,25 @@ public final class AlwaysForegroundModule extends XposedModule {
         }
     }
 
-    private void hookHongguoDiagnosticNoArgs(
-            ClassLoader classLoader, String className, String methodName, String label) {
+    private void installHongguoVideoServiceBlock(ClassLoader classLoader) {
+        final String label = "Hongguo videoService.n";
         try {
-            Class<?> clazz = classLoader.loadClass(className);
-            Method method = clazz.getDeclaredMethod(methodName);
+            Class<?> clazz = classLoader.loadClass("qv3.r");
+            Method method = clazz.getDeclaredMethod("n");
             hook(method).intercept(chain -> {
                 if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit(label);
+                    logFirstHit(label + " blocked");
+                    return null;
                 }
                 return chain.proceed();
             });
-            logInstalled(label + " diagnostic");
+            logInstalled(label);
         } catch (Throwable t) {
-            logSkipped(label + " diagnostic", t);
+            logSkipped(label, t);
         }
     }
 
-    private void hookHongguoVideoPendantDiagnostic(ClassLoader classLoader) {
+    private void installHongguoVideoPendantBlock(ClassLoader classLoader) {
         final String label = "Hongguo videoPendantFacade.h";
         try {
             Class<?> clazz = classLoader.loadClass("t56.x");
@@ -134,13 +130,14 @@ public final class AlwaysForegroundModule extends XposedModule {
             Method method = clazz.getDeclaredMethod("h", model);
             hook(method).intercept(chain -> {
                 if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit(label);
+                    logFirstHit(label + " blocked");
+                    return null;
                 }
                 return chain.proceed();
             });
-            logInstalled(label + " diagnostic");
+            logInstalled(label);
         } catch (Throwable t) {
-            logSkipped(label + " diagnostic", t);
+            logSkipped(label, t);
         }
     }
 
