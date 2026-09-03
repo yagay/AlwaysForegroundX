@@ -20,6 +20,7 @@ import io.github.libxposed.api.XposedModuleInterface;
 public final class AlwaysForegroundModule extends XposedModule {
     private static final String TAG = "AlwaysForeground";
     private static final String MODULE_PACKAGE = "com.jieei.alwaysforeground";
+    private static final String HONGGUO_PACKAGE = "com.phoenix.read";
 
     private final Set<String> firstHitLogs = ConcurrentHashMap.newKeySet();
     private volatile String activePackage;
@@ -51,6 +52,13 @@ public final class AlwaysForegroundModule extends XposedModule {
         installLifecycleDiagnostics();
     }
 
+    @Override
+    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
+        if (!param.isFirstPackage()) return;
+        if (!HONGGUO_PACKAGE.equals(param.getPackageName())) return;
+        installHongguoHooks(param.getClassLoader());
+    }
+
     private void installStandardHooks() {
         hookBoolean(PowerManager.class, "isInteractive", true, ModeConfig.MODE_STANDARD);
         hookBoolean(PowerManager.class, "isScreenOn", true, ModeConfig.MODE_STANDARD);
@@ -68,19 +76,28 @@ public final class AlwaysForegroundModule extends XposedModule {
         hookMyMemoryState();
     }
 
-    /**
-     * Strong mode intentionally avoids AndroidX LifecycleRegistry and real lifecycle callbacks.
-     * Only stateless/query-style framework APIs are spoofed here.
-     */
     private void installSafeStrongHooks() {
         hookBoolean(Activity.class, "hasWindowFocus", true, ModeConfig.MODE_STRONG);
     }
 
-    /**
-     * Diagnostic-only lifecycle hooks. They never alter execution or return values.
-     * Instrumentation is the central dispatch point for Activity lifecycle transitions,
-     * so this remains useful even when an Activity overrides onPause/onStop/onResume.
-     */
+    private void installHongguoHooks(ClassLoader classLoader) {
+        final String label = "Hongguo d2.onActivityPause";
+        try {
+            Class<?> clazz = classLoader.loadClass("com.dragon.read.polaris.video.d2");
+            Method method = clazz.getDeclaredMethod("onActivityPause", Activity.class);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    logFirstHit(label + " blocked");
+                    return null;
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
     private void installLifecycleDiagnostics() {
         hookInstrumentationActivity("callActivityOnResume", Activity.class);
         hookInstrumentationActivity("callActivityOnPause", Activity.class);
