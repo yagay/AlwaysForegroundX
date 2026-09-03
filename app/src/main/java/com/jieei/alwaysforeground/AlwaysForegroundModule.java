@@ -5,13 +5,9 @@ import android.app.ActivityManager;
 import android.app.Instrumentation;
 import android.app.KeyguardManager;
 import android.content.SharedPreferences;
-import android.graphics.SurfaceTexture;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.util.Log;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
-import android.view.TextureView;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -27,7 +23,6 @@ public final class AlwaysForegroundModule extends XposedModule {
     private static final String HONGGUO_PACKAGE = "com.phoenix.read";
 
     private final Set<String> firstHitLogs = ConcurrentHashMap.newKeySet();
-    private final Set<String> dynamicSurfaceHooks = ConcurrentHashMap.newKeySet();
     private volatile String activePackage;
 
     @Override
@@ -86,10 +81,12 @@ public final class AlwaysForegroundModule extends XposedModule {
     }
 
     private void installHongguoHooks(ClassLoader classLoader) {
+        installVoidNoArgBlock(classLoader,
+                "qv3.r", "n", "Hongguo videoService.n");
         installHongguoPauseBlock(classLoader);
-        installHongguoVideoServiceBlock(classLoader);
         installHongguoVideoPendantBlock(classLoader);
-        installHongguoSurfaceDiagnostics();
+        installVoidNoArgBlock(classLoader,
+                "tp6.c", "onInVisible", "Hongguo tp6.c.onInVisible");
     }
 
     private void installHongguoPauseBlock(ClassLoader classLoader) {
@@ -97,24 +94,6 @@ public final class AlwaysForegroundModule extends XposedModule {
         try {
             Class<?> clazz = classLoader.loadClass("com.dragon.read.polaris.video.d2");
             Method method = clazz.getDeclaredMethod("onActivityPause", Activity.class);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit(label + " blocked");
-                    return null;
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
-    }
-
-    private void installHongguoVideoServiceBlock(ClassLoader classLoader) {
-        final String label = "Hongguo videoService.n";
-        try {
-            Class<?> clazz = classLoader.loadClass("qv3.r");
-            Method method = clazz.getDeclaredMethod("n");
             hook(method).intercept(chain -> {
                 if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
                     logFirstHit(label + " blocked");
@@ -147,31 +126,15 @@ public final class AlwaysForegroundModule extends XposedModule {
         }
     }
 
-    /**
-     * Diagnostic-only surface hooks for Hongguo. The confirmed Activity pause/stop callbacks
-     * are already blocked, but Android still destroys the rendering surface when the Activity
-     * becomes invisible. These hooks discover the concrete app/player listener class that
-     * receives surfaceDestroyed/onSurfaceTextureDestroyed without changing its behavior.
-     */
-    private void installHongguoSurfaceDiagnostics() {
-        hookTextureViewListenerRegistration();
-        hookSurfaceViewHolderDiscovery();
-    }
-
-    private void hookTextureViewListenerRegistration() {
-        final String label = "Hongguo TextureView.setSurfaceTextureListener";
+    private void installVoidNoArgBlock(
+            ClassLoader classLoader, String className, String methodName, String label) {
         try {
-            Method method = TextureView.class.getDeclaredMethod(
-                    "setSurfaceTextureListener", TextureView.SurfaceTextureListener.class);
+            Class<?> clazz = classLoader.loadClass(className);
+            Method method = clazz.getDeclaredMethod(methodName);
             hook(method).intercept(chain -> {
                 if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    List<Object> args = chain.getArgs();
-                    if (!args.isEmpty() && args.get(0) != null) {
-                        Object listener = args.get(0);
-                        Class<?> listenerClass = listener.getClass();
-                        logFirstHit("SURFACE TextureListener registered class=" + listenerClass.getName());
-                        hookTextureDestroyedCallback(listenerClass);
-                    }
+                    logFirstHit(label + " blocked");
+                    return null;
                 }
                 return chain.proceed();
             });
@@ -179,96 +142,6 @@ public final class AlwaysForegroundModule extends XposedModule {
         } catch (Throwable t) {
             logSkipped(label, t);
         }
-    }
-
-    private void hookTextureDestroyedCallback(Class<?> listenerClass) {
-        String key = "texture:" + listenerClass.getName();
-        if (!dynamicSurfaceHooks.add(key)) return;
-        try {
-            Method method = findMethodInHierarchy(
-                    listenerClass, "onSurfaceTextureDestroyed", SurfaceTexture.class);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit("SURFACE onSurfaceTextureDestroyed class=" + listenerClass.getName());
-                }
-                return chain.proceed();
-            });
-            logInstalled("Hongguo onSurfaceTextureDestroyed " + listenerClass.getName());
-        } catch (Throwable t) {
-            logSkipped("Hongguo onSurfaceTextureDestroyed " + listenerClass.getName(), t);
-        }
-    }
-
-    private void hookSurfaceViewHolderDiscovery() {
-        final String label = "Hongguo SurfaceView.getHolder";
-        try {
-            Method method = SurfaceView.class.getDeclaredMethod("getHolder");
-            hook(method).intercept(chain -> {
-                Object holder = chain.proceed();
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG && holder != null) {
-                    hookSurfaceHolderAddCallback(holder.getClass());
-                }
-                return holder;
-            });
-            logInstalled(label);
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
-    }
-
-    private void hookSurfaceHolderAddCallback(Class<?> holderClass) {
-        String key = "holder:" + holderClass.getName();
-        if (!dynamicSurfaceHooks.add(key)) return;
-        try {
-            Method method = findMethodInHierarchy(holderClass, "addCallback", SurfaceHolder.Callback.class);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    List<Object> args = chain.getArgs();
-                    if (!args.isEmpty() && args.get(0) != null) {
-                        Object callback = args.get(0);
-                        Class<?> callbackClass = callback.getClass();
-                        logFirstHit("SURFACE HolderCallback registered class=" + callbackClass.getName());
-                        hookSurfaceDestroyedCallback(callbackClass);
-                    }
-                }
-                return chain.proceed();
-            });
-            logInstalled("Hongguo SurfaceHolder.addCallback " + holderClass.getName());
-        } catch (Throwable t) {
-            logSkipped("Hongguo SurfaceHolder.addCallback " + holderClass.getName(), t);
-        }
-    }
-
-    private void hookSurfaceDestroyedCallback(Class<?> callbackClass) {
-        String key = "destroy:" + callbackClass.getName();
-        if (!dynamicSurfaceHooks.add(key)) return;
-        try {
-            Method method = findMethodInHierarchy(callbackClass, "surfaceDestroyed", SurfaceHolder.class);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit("SURFACE surfaceDestroyed class=" + callbackClass.getName());
-                }
-                return chain.proceed();
-            });
-            logInstalled("Hongguo surfaceDestroyed " + callbackClass.getName());
-        } catch (Throwable t) {
-            logSkipped("Hongguo surfaceDestroyed " + callbackClass.getName(), t);
-        }
-    }
-
-    private static Method findMethodInHierarchy(
-            Class<?> startClass, String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
-        Class<?> current = startClass;
-        while (current != null) {
-            try {
-                Method method = current.getDeclaredMethod(methodName, parameterTypes);
-                method.setAccessible(true);
-                return method;
-            } catch (NoSuchMethodException ignored) {
-                current = current.getSuperclass();
-            }
-        }
-        throw new NoSuchMethodException(startClass.getName() + "." + methodName);
     }
 
     private void installLifecycleDiagnostics() {
