@@ -57,6 +57,7 @@ public final class AlwaysForegroundModule extends XposedModule {
         if (!param.isFirstPackage()) return;
         if (!HONGGUO_PACKAGE.equals(param.getPackageName())) return;
         installHongguoHooks(param.getClassLoader());
+        installHongguoFragmentDiagnostics(param.getClassLoader());
     }
 
     private void installStandardHooks() {
@@ -135,6 +136,44 @@ public final class AlwaysForegroundModule extends XposedModule {
                 if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
                     logFirstHit(label + " blocked");
                     return null;
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    /**
+     * Diagnostic only: FragmentActivity.onPause()/onStop() propagates lifecycle to every
+     * active Fragment before/around the app-specific MainFragmentActivity callbacks. A video
+     * Fragment can therefore pause itself even after all known Activity-side pause callbacks
+     * are blocked. Log the concrete Fragment classes without changing lifecycle execution.
+     */
+    private void installHongguoFragmentDiagnostics(ClassLoader classLoader) {
+        try {
+            Class<?> fragmentClass = classLoader.loadClass("androidx.fragment.app.Fragment");
+            hookFragmentLifecycle(fragmentClass, "performResume");
+            hookFragmentLifecycle(fragmentClass, "performPause");
+            hookFragmentLifecycle(fragmentClass, "performStop");
+        } catch (Throwable t) {
+            logSkipped("Hongguo Fragment diagnostics", t);
+        }
+    }
+
+    private void hookFragmentLifecycle(Class<?> fragmentClass, String methodName) {
+        final String label = "Hongguo Fragment." + methodName;
+        try {
+            Method method = fragmentClass.getDeclaredMethod(methodName);
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    Object fragment = chain.getThisObject();
+                    if (fragment != null) {
+                        logFirstHit("FRAGMENT " + methodName + " class="
+                                + fragment.getClass().getName());
+                    }
                 }
                 return chain.proceed();
             });
