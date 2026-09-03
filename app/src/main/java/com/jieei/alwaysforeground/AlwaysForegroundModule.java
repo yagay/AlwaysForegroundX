@@ -81,6 +81,17 @@ public final class AlwaysForegroundModule extends XposedModule {
     }
 
     private void installHongguoHooks(ClassLoader classLoader) {
+        installHongguoPauseBlock(classLoader);
+
+        // Second-stage diagnostics from MainFragmentActivity.onPause()/onStop().
+        // These do not alter execution. They identify the next real pause path after
+        // d2.onActivityPause() has already been successfully blocked.
+        hookHongguoDiagnosticNoArgs(classLoader, "qv3.r", "n", "Hongguo videoService.n");
+        hookHongguoDiagnosticNoArgs(classLoader, "oo6.a", "onInVisible", "Hongguo oo6.a.onInVisible");
+        hookHongguoVideoPendantDiagnostic(classLoader);
+    }
+
+    private void installHongguoPauseBlock(ClassLoader classLoader) {
         final String label = "Hongguo d2.onActivityPause";
         try {
             Class<?> clazz = classLoader.loadClass("com.dragon.read.polaris.video.d2");
@@ -95,6 +106,41 @@ public final class AlwaysForegroundModule extends XposedModule {
             logInstalled(label);
         } catch (Throwable t) {
             logSkipped(label, t);
+        }
+    }
+
+    private void hookHongguoDiagnosticNoArgs(
+            ClassLoader classLoader, String className, String methodName, String label) {
+        try {
+            Class<?> clazz = classLoader.loadClass(className);
+            Method method = clazz.getDeclaredMethod(methodName);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    logFirstHit(label);
+                }
+                return chain.proceed();
+            });
+            logInstalled(label + " diagnostic");
+        } catch (Throwable t) {
+            logSkipped(label + " diagnostic", t);
+        }
+    }
+
+    private void hookHongguoVideoPendantDiagnostic(ClassLoader classLoader) {
+        final String label = "Hongguo videoPendantFacade.h";
+        try {
+            Class<?> clazz = classLoader.loadClass("t56.x");
+            Class<?> model = classLoader.loadClass("com.dragon.read.pages.bookmall.model.RecentReadModel");
+            Method method = clazz.getDeclaredMethod("h", model);
+            hook(method).intercept(chain -> {
+                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
+                    logFirstHit(label);
+                }
+                return chain.proceed();
+            });
+            logInstalled(label + " diagnostic");
+        } catch (Throwable t) {
+            logSkipped(label + " diagnostic", t);
         }
     }
 
