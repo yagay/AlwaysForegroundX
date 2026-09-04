@@ -57,16 +57,16 @@ public final class AlwaysForegroundApp extends Application {
         }
     }
 
-    static boolean setDiagnosticsState(boolean active, String target, long startMs) {
-        SharedPreferences local = getInstancePrefs();
-        local.edit()
+    static boolean setDiagnosticsState(boolean active, String target) {
+        String safeTarget = target == null ? "" : target;
+        getInstancePrefs().edit()
                 .putBoolean(ModeConfig.KEY_DIAGNOSTICS_ACTIVE, active)
-                .putString(ModeConfig.KEY_DIAGNOSTICS_TARGET, target == null ? "" : target)
-                .putLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, startMs)
+                .putString(ModeConfig.KEY_DIAGNOSTICS_TARGET, safeTarget)
                 .apply();
+
         XposedService service = xposedService;
         if (service == null) return false;
-        return writeDiagnostics(service, active, target, startMs);
+        return writeDiagnostics(service, active, safeTarget);
     }
 
     private static void syncPendingMode(XposedService service) {
@@ -85,18 +85,15 @@ public final class AlwaysForegroundApp extends Application {
         SharedPreferences local = getInstancePrefs();
         writeDiagnostics(service,
                 local.getBoolean(ModeConfig.KEY_DIAGNOSTICS_ACTIVE, false),
-                local.getString(ModeConfig.KEY_DIAGNOSTICS_TARGET, ""),
-                local.getLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, 0L));
+                local.getString(ModeConfig.KEY_DIAGNOSTICS_TARGET, ""));
     }
 
-    private static boolean writeDiagnostics(XposedService service, boolean active,
-                                            String target, long startMs) {
+    private static boolean writeDiagnostics(XposedService service, boolean active, String target) {
         try {
             return service.getRemotePreferences(ModeConfig.REMOTE_GROUP)
                     .edit()
                     .putBoolean(ModeConfig.KEY_DIAGNOSTICS_ACTIVE, active)
                     .putString(ModeConfig.KEY_DIAGNOSTICS_TARGET, target == null ? "" : target)
-                    .putLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, startMs)
                     .commit();
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync diagnostic state", t);
