@@ -36,6 +36,7 @@ final class DiagnosticsManager {
     private static final String KEY_TARGET = "target";
     private static final String DEFAULT_TARGET = "com.phoenix.read";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
+    private static final int MAX_CANDIDATE_LINES = 5000;
 
     interface Callback {
         void onComplete(ExportResult result);
@@ -71,18 +72,21 @@ final class DiagnosticsManager {
     static void start(Context context, String targetPackage) {
         String target = targetPackage == null ? "" : targetPackage.trim();
         if (target.isEmpty()) target = DEFAULT_TARGET;
+        long startMs = System.currentTimeMillis();
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean(KEY_ACTIVE, true)
-                .putLong(KEY_START_MS, System.currentTimeMillis())
+                .putLong(KEY_START_MS, startMs)
                 .putString(KEY_TARGET, target)
                 .apply();
+        AlwaysForegroundApp.setDiagnosticsState(true, target, startMs);
     }
 
     static void stopAndExport(Context context, Callback callback) {
         Context app = context.getApplicationContext();
         EXECUTOR.execute(() -> {
             ExportResult result;
+            String target = getTarget(app);
             try {
                 result = export(app);
             } catch (Throwable t) {
@@ -90,6 +94,7 @@ final class DiagnosticsManager {
             }
             app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                     .edit().putBoolean(KEY_ACTIVE, false).apply();
+            AlwaysForegroundApp.setDiagnosticsState(false, target, 0L);
             callback.onComplete(result);
         });
     }
@@ -124,7 +129,11 @@ final class DiagnosticsManager {
                 "ProcessLifecycleOwner",
                 "FragmentManager",
                 "SurfaceView",
-                "TextureView");
+                "TextureView",
+                "MediaPlayer",
+                "AudioTrack",
+                "TTVideoEngine",
+                "ExoPlayer");
         String systemEvents = filter(eventLog,
                 target,
                 "wm_pause_activity",
@@ -146,6 +155,13 @@ final class DiagnosticsManager {
         writeText(new File(work, "environment.txt"), buildEnvironment(context, target, root, startMs, endMs));
 
         boolean lsposedCopied = root && copyLsposedLogs(work);
+        String hookCandidates = collectHookCandidates(rawLogcat, new File(work, "lsposed"));
+        if (hookCandidates.isEmpty()) {
+            hookCandidates = "No playback endpoint events were captured in this diagnostic session.\n"
+                    + "Make sure the diagnostic session is active, the target package is correct, "
+                    + "and reproduce the exact moment playback stops before exporting.\n";
+        }
+        writeText(new File(work, "hook-candidates.txt"), hookCandidates);
         writeText(new File(work, "summary.txt"), buildSummary(target, root, lsposedCopied, startMs, endMs));
 
         File zipFile = new File(context.getCacheDir(), "AlwaysForegroundX-diagnostic-" + stamp + ".zip");
@@ -195,6 +211,61 @@ final class DiagnosticsManager {
         return !result.isEmpty();
     }
 
+    private static String collectHookCandidates(String rawLogcat, File lsposedDir) {
+        StringBuilder out = new StringBuilder();
+        appendHookLines(rawLogcat, out);
+        if (lsposedDir != null && lsposedDir.isDirectory()) {
+            appendHookLinesFromTree(lsposedDir, out, new int[]{countLines(out)});
+        }
+        return out.toString();
+    }
+
+    private static void appendHookLines(String source, StringBuilder out) {
+        if (source == null || source.isEmpty()) return;
+        for (String line : source.split("\\r?\\n")) {
+            if (isHookLine(line)) out.append(line).append('\n');
+        }
+    }
+
+    private static void appendHookLinesFromTree(File file, StringBuilder out, int[] count) {
+        if (count[0] >= MAX_CANDIDATE_LINES || file == null || !file.exists()) return;
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    appendHookLinesFromTree(child, out, count);
+                    if (count[0] >= MAX_CANDIDATE_LINES) break;
+                }
+            }
+            return;
+        }
+        if (file.length() > 32L * 1024L * 1024L) return;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null && count[0] < MAX_CANDIDATE_LINES) {
+                if (isHookLine(line)) {
+                    out.append(line).append('\n');
+                    count[0]++;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static boolean isHookLine(String line) {
+        return line != null && (line.contains("HOOK_CANDIDATE")
+                || line.contains("HOOK_SUGGEST")
+                || line.contains("HOOK_STACK")
+                || line.contains("HOOK_TRACE_FAILED"));
+    }
+
+    private static int countLines(CharSequence value) {
+        int count = 0;
+        for (int i = 0; i < value.length(); i++) if (value.charAt(i) == '\n') count++;
+        return count;
+    }
+
     private static String buildEnvironment(Context context, String target, boolean root,
                                            long startMs, long endMs) {
         StringBuilder s = new StringBuilder();
@@ -208,6 +279,7 @@ final class DiagnosticsManager {
         s.append("modulePackage=").append(context.getPackageName()).append('\n');
         appendPackageInfo(context, context.getPackageName(), "module", s);
         s.append("libxposedApi=102.0.0\n");
+        s.append("automaticHookPointLocator=true\n");
         s.append("targetPackage=").append(target).append('\n');
         appendPackageInfo(context, target, "target", s);
         s.append("mode=").append(AlwaysForegroundApp.getConfiguredMode()).append('\n');
@@ -235,10 +307,12 @@ final class DiagnosticsManager {
                 + "End: " + formatFull(endMs) + "\n"
                 + "DurationMs: " + (endMs - startMs) + "\n"
                 + "Root: " + root + "\n"
-                + "LSPosed logs copied: " + lsposedCopied + "\n\n"
+                + "LSPosed logs copied: " + lsposedCopied + "\n"
+                + "Automatic hook-point locator: enabled\n\n"
                 + "Files:\n"
+                + "- hook-candidates.txt: playback pause/stop/release endpoint events, suggested caller and full stack\n"
                 + "- module.log: AlwaysForeground/libxposed/LSPosed related logcat\n"
-                + "- logcat.txt: target + lifecycle/window/runtime related logcat\n"
+                + "- logcat.txt: target + lifecycle/window/runtime/player related logcat\n"
                 + "- system-events.txt: ActivityManager/WindowManager event buffer entries\n"
                 + "- environment.txt: device/module/target environment\n"
                 + "- lsposed/: raw readable LSPosed logs when root access is available\n";
