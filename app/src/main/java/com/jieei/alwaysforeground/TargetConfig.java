@@ -33,14 +33,4 @@ final class TargetConfig {
             return false;
         }
     }
-
-    static long getDiagnosticsStartMs() {
-        SharedPreferences prefs = remotePreferences;
-        if (prefs == null) return 0L;
-        try {
-            return prefs.getLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, 0L);
-        } catch (Throwable ignored) {
-            return 0L;
-        }
-    }
 }
