@@ -85,7 +85,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView diagHeading = new TextView(this);
-        diagHeading.setText("一键诊断日志");
+        diagHeading.setText("自动定位 Hook 点");
         diagHeading.setTextSize(19);
         diagHeading.setTextColor(0xFF111111);
         diagHeading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
         root.addView(diagHeading);
 
         TextView diagHelp = new TextView(this);
-        diagHelp.setText("开始诊断 → 去目标应用复现问题 → 回来点“停止并导出”。Root 可用时会自动附带 LSPosed 日志。ZIP 保存到 Download/AlwaysForegroundX/。 ");
+        diagHelp.setText("开始诊断后，模块会自动监听 MediaPlayer、AudioTrack、ExoPlayer/Media3、TTVideoEngine 等播放器的 pause/stop/release 终点。去目标应用播放视频并退到后台，等播放停止后回来导出。ZIP 里的 hook-candidates.txt 会包含建议 Hook 点和完整调用栈。Root 可用时同时附带 LSPosed 原始日志。");
         diagHelp.setTextSize(14);
         diagHelp.setTextColor(0xFF555555);
         diagHelp.setLineSpacing(0, 1.15f);
@@ -122,18 +122,19 @@ public final class MainActivity extends Activity {
             if (!DiagnosticsManager.isActive(this)) {
                 DiagnosticsManager.start(this, targetPackage.getText().toString());
                 updateDiagnosticUi(targetPackage, diagStatus, diagButton);
-                Toast.makeText(this, "诊断已开始，现在去目标应用复现问题", Toast.LENGTH_LONG).show();
+                Toast.makeText(this,
+                        "自动定位已开始：现在去目标应用播放并复现后台停止",
+                        Toast.LENGTH_LONG).show();
                 return;
             }
 
             diagButton.setEnabled(false);
-            diagButton.setText("正在收集并打包日志…");
-            diagStatus.setText("正在抓取 logcat、system events 和 LSPosed 日志，请保持应用在前台直到完成。 ");
+            diagButton.setText("正在分析并打包日志…");
+            diagStatus.setText("正在抓取播放器终点调用栈、logcat、system events 和 LSPosed 日志，请保持应用在前台直到完成。");
             DiagnosticsManager.stopAndExport(this, result -> runOnUiThread(() -> {
                 diagButton.setEnabled(true);
                 updateDiagnosticUi(targetPackage, diagStatus, diagButton);
-                Toast.makeText(this, result.message,
-                        result.success ? Toast.LENGTH_LONG : Toast.LENGTH_LONG).show();
+                Toast.makeText(this, result.message, Toast.LENGTH_LONG).show();
                 if (result.success) diagStatus.setText(result.message);
             }));
         });
@@ -145,14 +146,16 @@ public final class MainActivity extends Activity {
         body.setPadding(0, dp(24), 0, 0);
 
         SpannableStringBuilder text = new SpannableStringBuilder();
-        appendHeading(text, "使用方法\n");
-        text.append("1. 在 LSPosed 中启用本模块。\n");
-        text.append("2. 在模块作用域中勾选需要后台播放或挂机的应用。\n");
-        text.append("3. 从普通模式开始测试；改模式后强制停止并重新打开目标应用最稳妥。\n\n");
-        appendHeading(text, "日志判断\n");
-        text.append("LSPosed 日志中 INSTALLED 表示 Hook 安装成功；HIT 表示目标应用真的调用了该检测点。诊断 ZIP 会自动收集本次复现窗口中的这些记录。\n\n");
+        appendHeading(text, "一次定位流程\n");
+        text.append("1. 在 LSPosed 中启用模块，并把目标应用加入作用域。\n");
+        text.append("2. 填入目标包名后点“开始自动定位”。\n");
+        text.append("3. 打开目标应用播放视频，按 Home 或锁屏，等播放自动停止。\n");
+        text.append("4. 回到本模块点“停止并导出”。\n");
+        text.append("5. 直接查看/发送 ZIP 中的 hook-candidates.txt，不再逐个猜 onPause/onStop。\n\n");
+        appendHeading(text, "候选判断\n");
+        text.append("HOOK_CANDIDATE 是真正发生的播放器停止终点；HOOK_SUGGEST 是自动评分后的建议上游调用者；HOOK_STACK 是完整调用链。优先 Hook 分数高的应用自身方法，而不是 MediaPlayer/Fragment 生命周期本身。\n\n");
         appendHeading(text, "限制\n");
-        text.append("本模块欺骗的是应用自身的前后台查询，不会把 Android 系统中的 Activity 真正保持为前台，也不会阻止系统/OEM 杀进程或冻结。直接在 onPause/onStop 中暂停的应用仍可能需要专用 Hook。\n");
+        text.append("如果目标应用完全在 native/JNI 层停止播放，Java 终点可能抓不到；这种情况 ZIP 仍会保留系统事件和 LSPosed 日志，再继续定位 native 或 Surface/AudioFocus 路径。\n");
         body.setText(text);
         root.addView(body);
 
@@ -165,13 +168,13 @@ public final class MainActivity extends Activity {
         if (active) {
             long start = DiagnosticsManager.getStartMs(this);
             String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(start));
-            status.setText("● 诊断中  目标：" + DiagnosticsManager.getTarget(this) + "  开始：" + time);
+            status.setText("● 自动定位中  目标：" + DiagnosticsManager.getTarget(this) + "  开始：" + time);
             status.setTextColor(0xFFD32F2F);
             button.setText("停止并导出诊断 ZIP");
         } else {
-            status.setText("未开始诊断");
+            status.setText("未开始自动定位");
             status.setTextColor(0xFF666666);
-            button.setText("开始诊断");
+            button.setText("开始自动定位 Hook 点");
         }
     }
 
