@@ -56,7 +56,11 @@ public final class AlwaysForegroundModule extends XposedModule {
     public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
         if (!param.isFirstPackage()) return;
         if (!HONGGUO_PACKAGE.equals(param.getPackageName())) return;
-        installHongguoHooks(param.getClassLoader());
+
+        // Keep Hongguo-specific behavior diagnostic-only for now. The previously blocked
+        // videoService/onActivityPause/onInVisible/videoPendant callbacks are all part of
+        // normal app state bookkeeping; blocking them caused the page to reload when the app
+        // returned from background even though the process itself remained alive.
         installHongguoFragmentDiagnostics(param.getClassLoader());
     }
 
@@ -81,76 +85,6 @@ public final class AlwaysForegroundModule extends XposedModule {
         hookBoolean(Activity.class, "hasWindowFocus", true, ModeConfig.MODE_STRONG);
     }
 
-    private void installHongguoHooks(ClassLoader classLoader) {
-        installVoidNoArgBlock(classLoader,
-                "qv3.r", "n", "Hongguo videoService.n");
-        installHongguoPauseBlock(classLoader);
-        installHongguoVideoPendantBlock(classLoader);
-        installVoidNoArgBlock(classLoader,
-                "tp6.c", "onInVisible", "Hongguo tp6.c.onInVisible");
-    }
-
-    private void installHongguoPauseBlock(ClassLoader classLoader) {
-        final String label = "Hongguo d2.onActivityPause";
-        try {
-            Class<?> clazz = classLoader.loadClass("com.dragon.read.polaris.video.d2");
-            Method method = clazz.getDeclaredMethod("onActivityPause", Activity.class);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit(label + " blocked");
-                    return null;
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
-    }
-
-    private void installHongguoVideoPendantBlock(ClassLoader classLoader) {
-        final String label = "Hongguo videoPendantFacade.h";
-        try {
-            Class<?> clazz = classLoader.loadClass("t56.x");
-            Class<?> model = classLoader.loadClass("com.dragon.read.pages.bookmall.model.RecentReadModel");
-            Method method = clazz.getDeclaredMethod("h", model);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit(label + " blocked");
-                    return null;
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
-    }
-
-    private void installVoidNoArgBlock(
-            ClassLoader classLoader, String className, String methodName, String label) {
-        try {
-            Class<?> clazz = classLoader.loadClass(className);
-            Method method = clazz.getDeclaredMethod(methodName);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.getMode() >= ModeConfig.MODE_STRONG) {
-                    logFirstHit(label + " blocked");
-                    return null;
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
-    }
-
-    /**
-     * Diagnostic only: FragmentActivity.onPause()/onStop() propagates lifecycle to every
-     * active Fragment before/around the app-specific MainFragmentActivity callbacks. A video
-     * Fragment can therefore pause itself even after all known Activity-side pause callbacks
-     * are blocked. Log the concrete Fragment classes without changing lifecycle execution.
-     */
     private void installHongguoFragmentDiagnostics(ClassLoader classLoader) {
         try {
             Class<?> fragmentClass = classLoader.loadClass("androidx.fragment.app.Fragment");
