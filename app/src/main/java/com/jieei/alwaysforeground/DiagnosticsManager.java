@@ -78,7 +78,7 @@ final class DiagnosticsManager {
                 .putLong(KEY_START_MS, startMs)
                 .putString(KEY_TARGET, target)
                 .apply();
-        AlwaysForegroundApp.setDiagnosticsState(true, target, startMs);
+        AlwaysForegroundApp.setDiagnosticsState(true, target);
     }
 
     static void stopAndExport(Context context, Callback callback) {
@@ -93,7 +93,7 @@ final class DiagnosticsManager {
             }
             app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                     .edit().putBoolean(KEY_ACTIVE, false).apply();
-            AlwaysForegroundApp.setDiagnosticsState(false, target, 0L);
+            AlwaysForegroundApp.setDiagnosticsState(false, target);
             callback.onComplete(result);
         });
     }
@@ -158,11 +158,6 @@ final class DiagnosticsManager {
                 buildEnvironment(context, target, root, startMs, endMs));
 
         boolean lsposedCopied = root && copyLsposedLogs(work);
-
-        // IMPORTANT: candidates must come only from the current session's time-scoped logcat.
-        // Raw LSPosed files are intentionally kept under lsposed/ for manual inspection, but are
-        // not merged here because they contain historical sessions and previously polluted the
-        // automatic candidate report with old pause chains.
         String hookCandidates = extractHookCandidates(rawLogcat);
         if (hookCandidates.isEmpty()) {
             hookCandidates = "No playback endpoint events were captured in this diagnostic session.\n"
