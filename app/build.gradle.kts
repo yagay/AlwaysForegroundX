@@ -10,8 +10,8 @@ android {
         applicationId = "com.jieei.alwaysforeground"
         minSdk = 31
         targetSdk = 37
-        versionCode = 17
-        versionName = "1.5.1"
+        versionCode = 18
+        versionName = "1.6.0"
     }
 
     compileOptions {
