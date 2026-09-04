@@ -15,9 +15,8 @@ import io.github.libxposed.api.XposedModuleInterface;
  * AbsFragment.onPause -> VideoFeedTabFragment.onInvisible -> VideoFeedTabFragmentImpl.Q0 ->
  * SeriesBookMallTabFragment.D9 -> view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
  *
- * Episode/detail background chain:
- * Fragment.performPause/LifecycleRegistry -> gp4.d.onLifeCycleOnPause ->
- * ShortSeriesSingleFragment$g.a -> ShortSeriesSingleFragment.P0 -> view.adapter.f.x ->
+ * Episode/detail background chain (confirmed by v1.6.2 diagnostics):
+ * ShortSeriesSingleFragment.onStop -> ShortSeriesSingleFragment.P0 -> view.adapter.f.x ->
  * view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
  *
  * DEX analysis shows a.x() is void/no-arg and only does:
@@ -101,9 +100,10 @@ public final class HongguoBackgroundModule extends XposedModule {
      */
     private static int backgroundPausePath() {
         boolean fragmentPause = false;
+        boolean fragmentStop = false;
         boolean feedInvisible = false;
-        boolean shortSeriesSingle = false;
-        boolean lifecyclePause = false;
+        boolean shortSeriesSingleP0 = false;
+        boolean shortSeriesSingleStop = false;
 
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         for (StackTraceElement frame : stack) {
@@ -116,6 +116,12 @@ public final class HongguoBackgroundModule extends XposedModule {
                 fragmentPause = true;
             }
 
+            if (("androidx.fragment.app.Fragment".equals(cls) && "performStop".equals(method))
+                    || ("androidx.fragment.app.FragmentManager".equals(cls)
+                    && "dispatchStop".equals(method))) {
+                fragmentStop = true;
+            }
+
             if (("com.dragon.read.component.biz.impl.bookmall.VideoFeedTabFragment".equals(cls)
                     && "onInvisible".equals(method))
                     || ("com.dragon.read.component.shortvideo.impl.feedtab.VideoFeedTabFragmentImpl"
@@ -124,20 +130,14 @@ public final class HongguoBackgroundModule extends XposedModule {
             }
 
             if ("com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment"
-                    .equals(cls) && "P0".equals(method)) {
-                shortSeriesSingle = true;
-            }
-
-            if (("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))
-                    || ("androidx.lifecycle.LifecycleRegistry".equals(cls)
-                    && ("handleLifecycleEvent".equals(method)
-                    || "backwardPass".equals(method)))) {
-                lifecyclePause = true;
+                    .equals(cls)) {
+                if ("P0".equals(method)) shortSeriesSingleP0 = true;
+                if ("onStop".equals(method)) shortSeriesSingleStop = true;
             }
         }
 
         if (fragmentPause && feedInvisible) return 1;
-        if (fragmentPause && shortSeriesSingle && lifecyclePause) return 2;
+        if (fragmentStop && shortSeriesSingleStop && shortSeriesSingleP0) return 2;
         return 0;
     }
 }
