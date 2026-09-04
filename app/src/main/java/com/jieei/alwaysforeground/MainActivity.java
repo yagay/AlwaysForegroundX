@@ -7,12 +7,18 @@ import android.text.SpannableStringBuilder;
 import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private int dp(float value) {
@@ -64,7 +70,7 @@ public final class MainActivity extends Activity {
         addMode(modes, ModeConfig.MODE_ENHANCED, "增强模式",
                 "在普通模式基础上，再伪装后台限制、待机/省电状态和 UID 重要性。", selectedMode);
         addMode(modes, ModeConfig.MODE_STRONG, "强力模式",
-                "在增强模式基础上，额外把 AndroidX Lifecycle 当前状态伪装为 RESUMED。", selectedMode);
+                "在增强模式基础上，额外启用安全的强力前台查询 Hook 和应用专用诊断。", selectedMode);
         modes.setOnCheckedChangeListener((group, checkedId) -> {
             if (!ModeConfig.isValid(checkedId)) return;
             boolean synced = AlwaysForegroundApp.setConfiguredMode(checkedId);
@@ -78,6 +84,60 @@ public final class MainActivity extends Activity {
         root.addView(modes, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        TextView diagHeading = new TextView(this);
+        diagHeading.setText("一键诊断日志");
+        diagHeading.setTextSize(19);
+        diagHeading.setTextColor(0xFF111111);
+        diagHeading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        diagHeading.setPadding(0, dp(28), 0, dp(8));
+        root.addView(diagHeading);
+
+        TextView diagHelp = new TextView(this);
+        diagHelp.setText("开始诊断 → 去目标应用复现问题 → 回来点“停止并导出”。Root 可用时会自动附带 LSPosed 日志。ZIP 保存到 Download/AlwaysForegroundX/。 ");
+        diagHelp.setTextSize(14);
+        diagHelp.setTextColor(0xFF555555);
+        diagHelp.setLineSpacing(0, 1.15f);
+        root.addView(diagHelp);
+
+        EditText targetPackage = new EditText(this);
+        targetPackage.setSingleLine(true);
+        targetPackage.setHint("目标包名，例如 com.phoenix.read");
+        targetPackage.setText(DiagnosticsManager.getTarget(this));
+        targetPackage.setTextSize(15);
+        targetPackage.setPadding(0, dp(8), 0, dp(8));
+        root.addView(targetPackage, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView diagStatus = new TextView(this);
+        diagStatus.setTextSize(14);
+        diagStatus.setPadding(0, dp(6), 0, dp(8));
+        root.addView(diagStatus);
+
+        Button diagButton = new Button(this);
+        root.addView(diagButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        updateDiagnosticUi(targetPackage, diagStatus, diagButton);
+        diagButton.setOnClickListener(v -> {
+            if (!DiagnosticsManager.isActive(this)) {
+                DiagnosticsManager.start(this, targetPackage.getText().toString());
+                updateDiagnosticUi(targetPackage, diagStatus, diagButton);
+                Toast.makeText(this, "诊断已开始，现在去目标应用复现问题", Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            diagButton.setEnabled(false);
+            diagButton.setText("正在收集并打包日志…");
+            diagStatus.setText("正在抓取 logcat、system events 和 LSPosed 日志，请保持应用在前台直到完成。 ");
+            DiagnosticsManager.stopAndExport(this, result -> runOnUiThread(() -> {
+                diagButton.setEnabled(true);
+                updateDiagnosticUi(targetPackage, diagStatus, diagButton);
+                Toast.makeText(this, result.message,
+                        result.success ? Toast.LENGTH_LONG : Toast.LENGTH_LONG).show();
+                if (result.success) diagStatus.setText(result.message);
+            }));
+        });
+
         TextView body = new TextView(this);
         body.setTextSize(15);
         body.setTextColor(0xFF333333);
@@ -90,13 +150,29 @@ public final class MainActivity extends Activity {
         text.append("2. 在模块作用域中勾选需要后台播放或挂机的应用。\n");
         text.append("3. 从普通模式开始测试；改模式后强制停止并重新打开目标应用最稳妥。\n\n");
         appendHeading(text, "日志判断\n");
-        text.append("LSPosed 日志中 INSTALLED 表示 Hook 安装成功；HIT 表示目标应用真的调用了该检测点。没有 HIT 的 Hook 对该应用通常没有实际作用。\n\n");
+        text.append("LSPosed 日志中 INSTALLED 表示 Hook 安装成功；HIT 表示目标应用真的调用了该检测点。诊断 ZIP 会自动收集本次复现窗口中的这些记录。\n\n");
         appendHeading(text, "限制\n");
         text.append("本模块欺骗的是应用自身的前后台查询，不会把 Android 系统中的 Activity 真正保持为前台，也不会阻止系统/OEM 杀进程或冻结。直接在 onPause/onStop 中暂停的应用仍可能需要专用 Hook。\n");
         body.setText(text);
         root.addView(body);
 
         setContentView(scroll);
+    }
+
+    private void updateDiagnosticUi(EditText targetPackage, TextView status, Button button) {
+        boolean active = DiagnosticsManager.isActive(this);
+        targetPackage.setEnabled(!active);
+        if (active) {
+            long start = DiagnosticsManager.getStartMs(this);
+            String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(start));
+            status.setText("● 诊断中  目标：" + DiagnosticsManager.getTarget(this) + "  开始：" + time);
+            status.setTextColor(0xFFD32F2F);
+            button.setText("停止并导出诊断 ZIP");
+        } else {
+            status.setText("未开始诊断");
+            status.setTextColor(0xFF666666);
+            button.setText("开始诊断");
+        }
     }
 
     private void addMode(RadioGroup group, int id, String title, String description, int selectedMode) {
