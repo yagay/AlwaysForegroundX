@@ -11,15 +11,19 @@ import io.github.libxposed.api.XposedModuleInterface;
 /**
  * Narrow Hongguo compatibility hook discovered from automatic playback-endpoint tracing.
  *
- * The captured background chain is:
- * AbsFragment.onPause -> onActivityVisibilityChange -> checkVisibility ->
- * PageVisibilityHelper -> VideoFeedTabFragment.onInvisible -> VideoFeedTabFragmentImpl.Q0 ->
- * SeriesBookMallTabFragment.D9 -> fh -> view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
+ * Home/feed background chain:
+ * AbsFragment.onPause -> VideoFeedTabFragment.onInvisible -> VideoFeedTabFragmentImpl.Q0 ->
+ * SeriesBookMallTabFragment.D9 -> view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
+ *
+ * Episode/detail background chain:
+ * Fragment.performPause/LifecycleRegistry -> gp4.d.onLifeCycleOnPause ->
+ * ShortSeriesSingleFragment$g.a -> ShortSeriesSingleFragment.P0 -> view.adapter.f.x ->
+ * view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
  *
  * DEX analysis shows a.x() is void/no-arg and only does:
  *   player.isPlaying(); if true -> player.pause();
  * It does not perform Fragment or page-state bookkeeping. Therefore only suppress it when the
- * current stack proves this invocation came from the background lifecycle path.
+ * current stack proves this invocation came from one of the captured background lifecycle paths.
  */
 public final class HongguoBackgroundModule extends XposedModule {
     private static final String TAG = "AlwaysForeground";
@@ -28,7 +32,8 @@ public final class HongguoBackgroundModule extends XposedModule {
             "com.dragon.read.component.shortvideo.impl.v2.view.adapter.a";
 
     private volatile SharedPreferences preferences;
-    private volatile boolean firstBlockedLogged;
+    private volatile boolean firstFeedBlockedLogged;
+    private volatile boolean firstEpisodeBlockedLogged;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -50,11 +55,23 @@ public final class HongguoBackgroundModule extends XposedModule {
             Method method = clazz.getDeclaredMethod("x");
             method.setAccessible(true);
             hook(method).intercept(chain -> {
-                if (getMode() >= ModeConfig.MODE_STRONG && isBackgroundPausePath()) {
-                    if (!firstBlockedLogged) {
-                        firstBlockedLogged = true;
+                if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
+
+                int path = backgroundPausePath();
+                if (path == 1) {
+                    if (!firstFeedBlockedLogged) {
+                        firstFeedBlockedLogged = true;
                         log(Log.INFO, TAG,
-                                "HIT Hongguo precise background pause blocked "
+                                "HIT Hongguo feed background pause blocked "
+                                        + PLAYER_ADAPTER + ".x package=" + HONGGUO_PACKAGE);
+                    }
+                    return null;
+                }
+                if (path == 2) {
+                    if (!firstEpisodeBlockedLogged) {
+                        firstEpisodeBlockedLogged = true;
+                        log(Log.INFO, TAG,
+                                "HIT Hongguo episode background pause blocked "
                                         + PLAYER_ADAPTER + ".x package=" + HONGGUO_PACKAGE);
                     }
                     return null;
@@ -79,9 +96,15 @@ public final class HongguoBackgroundModule extends XposedModule {
         }
     }
 
-    private static boolean isBackgroundPausePath() {
+    /**
+     * @return 0 = unrelated pause, 1 = home/feed background path, 2 = episode/detail path.
+     */
+    private static int backgroundPausePath() {
         boolean fragmentPause = false;
         boolean feedInvisible = false;
+        boolean shortSeriesSingle = false;
+        boolean lifecyclePause = false;
+
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         for (StackTraceElement frame : stack) {
             String cls = frame.getClassName();
@@ -100,8 +123,21 @@ public final class HongguoBackgroundModule extends XposedModule {
                 feedInvisible = true;
             }
 
-            if (fragmentPause && feedInvisible) return true;
+            if ("com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment"
+                    .equals(cls) && "P0".equals(method)) {
+                shortSeriesSingle = true;
+            }
+
+            if (("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))
+                    || ("androidx.lifecycle.LifecycleRegistry".equals(cls)
+                    && ("handleLifecycleEvent".equals(method)
+                    || "backwardPass".equals(method)))) {
+                lifecyclePause = true;
+            }
         }
-        return false;
+
+        if (fragmentPause && feedInvisible) return 1;
+        if (fragmentPause && shortSeriesSingle && lifecyclePause) return 2;
+        return 0;
     }
 }
