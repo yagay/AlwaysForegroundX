@@ -1,5 +1,6 @@
 package com.jieei.alwaysforeground;
 
+import android.app.Application;
 import android.content.SharedPreferences;
 import android.util.Log;
 
@@ -15,9 +16,11 @@ import io.github.libxposed.api.XposedModuleInterface;
  * AbsFragment.onPause -> VideoFeedTabFragment.onInvisible -> VideoFeedTabFragmentImpl.Q0 ->
  * SeriesBookMallTabFragment.D9 -> view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
  *
- * Episode/detail background chain (confirmed by v1.6.2 diagnostics):
- * ShortSeriesSingleFragment.onStop -> ShortSeriesSingleFragment.P0 -> view.adapter.f.x ->
- * view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
+ * Episode/detail has been observed through two background lifecycle paths:
+ * 1) Fragment.performPause/LifecycleRegistry -> gp4.d.onLifeCycleOnPause ->
+ *    ShortSeriesSingleFragment.P0 -> view.adapter.f.x -> view.adapter.a.x -> pause.
+ * 2) Fragment.performStop -> ShortSeriesSingleFragment.onStop ->
+ *    ShortSeriesSingleFragment.P0 -> view.adapter.f.x -> view.adapter.a.x -> pause.
  *
  * DEX analysis shows a.x() is void/no-arg and only does:
  *   player.isPlaying(); if true -> player.pause();
@@ -48,6 +51,11 @@ public final class HongguoBackgroundModule extends XposedModule {
     public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
         if (!param.isFirstPackage()) return;
         if (!HONGGUO_PACKAGE.equals(param.getPackageName())) return;
+        if (!isMainProcess()) {
+            log(Log.INFO, TAG, "SKIPPED Hongguo precise background pause in process="
+                    + safeProcessName());
+            return;
+        }
 
         try {
             Class<?> clazz = param.getClassLoader().loadClass(PLAYER_ADAPTER);
@@ -78,7 +86,7 @@ public final class HongguoBackgroundModule extends XposedModule {
                 return chain.proceed();
             });
             log(Log.INFO, TAG, "INSTALLED Hongguo precise background pause "
-                    + PLAYER_ADAPTER + ".x");
+                    + PLAYER_ADAPTER + ".x process=" + safeProcessName());
         } catch (Throwable t) {
             log(Log.WARN, TAG, "SKIPPED Hongguo precise background pause: " + t, t);
         }
@@ -104,6 +112,7 @@ public final class HongguoBackgroundModule extends XposedModule {
         boolean feedInvisible = false;
         boolean shortSeriesSingleP0 = false;
         boolean shortSeriesSingleStop = false;
+        boolean lifecyclePause = false;
 
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         for (StackTraceElement frame : stack) {
@@ -134,10 +143,34 @@ public final class HongguoBackgroundModule extends XposedModule {
                 if ("P0".equals(method)) shortSeriesSingleP0 = true;
                 if ("onStop".equals(method)) shortSeriesSingleStop = true;
             }
+
+            if (("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))
+                    || ("androidx.lifecycle.LifecycleRegistry".equals(cls)
+                    && ("handleLifecycleEvent".equals(method)
+                    || "backwardPass".equals(method)))) {
+                lifecyclePause = true;
+            }
         }
 
         if (fragmentPause && feedInvisible) return 1;
-        if (fragmentStop && shortSeriesSingleStop && shortSeriesSingleP0) return 2;
+
+        boolean episodePausePath = fragmentPause && shortSeriesSingleP0 && lifecyclePause;
+        boolean episodeStopPath = fragmentStop && shortSeriesSingleP0 && shortSeriesSingleStop;
+        if (episodePausePath || episodeStopPath) return 2;
+
         return 0;
+    }
+
+    private static boolean isMainProcess() {
+        return HONGGUO_PACKAGE.equals(safeProcessName());
+    }
+
+    private static String safeProcessName() {
+        try {
+            String process = Application.getProcessName();
+            return process == null ? "unknown" : process;
+        } catch (Throwable ignored) {
+            return "unknown";
+        }
     }
 }
