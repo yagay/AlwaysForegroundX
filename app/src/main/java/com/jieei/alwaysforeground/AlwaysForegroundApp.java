@@ -19,6 +19,7 @@ public final class AlwaysForegroundApp extends Application {
             public void onServiceBind(XposedService service) {
                 xposedService = service;
                 syncPendingMode(service);
+                syncPendingDiagnostics(service);
                 Log.i(TAG, "Xposed service connected: " + service.getFrameworkName());
             }
 
@@ -56,6 +57,18 @@ public final class AlwaysForegroundApp extends Application {
         }
     }
 
+    static boolean setDiagnosticsState(boolean active, String target, long startMs) {
+        SharedPreferences local = getInstancePrefs();
+        local.edit()
+                .putBoolean(ModeConfig.KEY_DIAGNOSTICS_ACTIVE, active)
+                .putString(ModeConfig.KEY_DIAGNOSTICS_TARGET, target == null ? "" : target)
+                .putLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, startMs)
+                .apply();
+        XposedService service = xposedService;
+        if (service == null) return false;
+        return writeDiagnostics(service, active, target, startMs);
+    }
+
     private static void syncPendingMode(XposedService service) {
         try {
             int mode = getConfiguredMode();
@@ -65,6 +78,29 @@ public final class AlwaysForegroundApp extends Application {
                     .apply();
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync remote preferences", t);
+        }
+    }
+
+    private static void syncPendingDiagnostics(XposedService service) {
+        SharedPreferences local = getInstancePrefs();
+        writeDiagnostics(service,
+                local.getBoolean(ModeConfig.KEY_DIAGNOSTICS_ACTIVE, false),
+                local.getString(ModeConfig.KEY_DIAGNOSTICS_TARGET, ""),
+                local.getLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, 0L));
+    }
+
+    private static boolean writeDiagnostics(XposedService service, boolean active,
+                                            String target, long startMs) {
+        try {
+            return service.getRemotePreferences(ModeConfig.REMOTE_GROUP)
+                    .edit()
+                    .putBoolean(ModeConfig.KEY_DIAGNOSTICS_ACTIVE, active)
+                    .putString(ModeConfig.KEY_DIAGNOSTICS_TARGET, target == null ? "" : target)
+                    .putLong(ModeConfig.KEY_DIAGNOSTICS_START_MS, startMs)
+                    .commit();
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to sync diagnostic state", t);
+            return false;
         }
     }
 
