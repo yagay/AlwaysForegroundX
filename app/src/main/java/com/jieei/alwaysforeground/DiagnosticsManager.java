@@ -36,7 +36,6 @@ final class DiagnosticsManager {
     private static final String KEY_TARGET = "target";
     private static final String DEFAULT_TARGET = "com.phoenix.read";
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
-    private static final int MAX_CANDIDATE_LINES = 5000;
 
     interface Callback {
         void onComplete(ExportResult result);
@@ -113,9 +112,12 @@ final class DiagnosticsManager {
             throw new IOException("cannot create diagnostics work directory");
         }
 
-        String since = new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(new Date(startMs));
-        String rawLogcat = runShell(root, "logcat -d -v threadtime -T '" + since + "' 2>&1");
-        String eventLog = runShell(root, "logcat -b events -d -v threadtime -T '" + since + "' 2>&1");
+        String since = new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+                .format(new Date(startMs));
+        String rawLogcat = runShell(root,
+                "logcat -d -v threadtime -T '" + since + "' 2>&1");
+        String eventLog = runShell(root,
+                "logcat -b events -d -v threadtime -T '" + since + "' 2>&1");
 
         String moduleLog = filter(rawLogcat,
                 "AlwaysForeground", "libxposed", "LSPosed", "Xposed");
@@ -152,19 +154,27 @@ final class DiagnosticsManager {
         writeText(new File(work, "module.log"), moduleLog);
         writeText(new File(work, "logcat.txt"), filteredLogcat);
         writeText(new File(work, "system-events.txt"), systemEvents);
-        writeText(new File(work, "environment.txt"), buildEnvironment(context, target, root, startMs, endMs));
+        writeText(new File(work, "environment.txt"),
+                buildEnvironment(context, target, root, startMs, endMs));
 
         boolean lsposedCopied = root && copyLsposedLogs(work);
-        String hookCandidates = collectHookCandidates(rawLogcat, new File(work, "lsposed"));
+
+        // IMPORTANT: candidates must come only from the current session's time-scoped logcat.
+        // Raw LSPosed files are intentionally kept under lsposed/ for manual inspection, but are
+        // not merged here because they contain historical sessions and previously polluted the
+        // automatic candidate report with old pause chains.
+        String hookCandidates = extractHookCandidates(rawLogcat);
         if (hookCandidates.isEmpty()) {
             hookCandidates = "No playback endpoint events were captured in this diagnostic session.\n"
                     + "Make sure the diagnostic session is active, the target package is correct, "
                     + "and reproduce the exact moment playback stops before exporting.\n";
         }
         writeText(new File(work, "hook-candidates.txt"), hookCandidates);
-        writeText(new File(work, "summary.txt"), buildSummary(target, root, lsposedCopied, startMs, endMs));
+        writeText(new File(work, "summary.txt"),
+                buildSummary(target, root, lsposedCopied, startMs, endMs));
 
-        File zipFile = new File(context.getCacheDir(), "AlwaysForegroundX-diagnostic-" + stamp + ".zip");
+        File zipFile = new File(context.getCacheDir(),
+                "AlwaysForegroundX-diagnostic-" + stamp + ".zip");
         if (zipFile.exists()) zipFile.delete();
         zipDirectory(work, zipFile);
         String displayPath = saveToDownloads(context, zipFile);
@@ -173,9 +183,24 @@ final class DiagnosticsManager {
         return new ExportResult(true, "已导出到 " + displayPath);
     }
 
+    private static String extractHookCandidates(String rawLogcat) {
+        if (rawLogcat == null || rawLogcat.isEmpty()) return "";
+        StringBuilder out = new StringBuilder();
+        for (String line : rawLogcat.split("\\r?\\n")) {
+            if (line.contains("HOOK_CANDIDATE")
+                    || line.contains("HOOK_SUGGEST")
+                    || line.contains("HOOK_STACK")
+                    || line.contains("HOOK_TRACE_FAILED")) {
+                out.append(line).append('\n');
+            }
+        }
+        return out.toString();
+    }
+
     private static boolean hasRoot() {
         try {
-            Process process = new ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start();
+            Process process = new ProcessBuilder("su", "-c", "id")
+                    .redirectErrorStream(true).start();
             String output = readAll(process.getInputStream());
             int code = process.waitFor();
             return code == 0 && output.contains("uid=0");
@@ -204,66 +229,11 @@ final class DiagnosticsManager {
         String command = "for d in /data/adb/lspd/log /data/adb/lsposed/log "
                 + "/data/adb/modules/zygisk_lsposed/log /data/adb/modules/LSPosed/log; do "
                 + "if [ -d \"$d\" ]; then n=$(echo \"$d\" | tr '/' '_'); "
-                + "mkdir -p " + outPath + "/$n; cp -a \"$d\"/. " + outPath + "/$n/ 2>/dev/null; fi; done; "
+                + "mkdir -p " + outPath + "/$n; cp -a \"$d\"/. "
+                + outPath + "/$n/ 2>/dev/null; fi; done; "
                 + "chmod -R a+rX " + outPath + " 2>/dev/null; "
                 + "find " + outPath + " -type f 2>/dev/null | head -1";
-        String result = runShell(true, command).trim();
-        return !result.isEmpty();
-    }
-
-    private static String collectHookCandidates(String rawLogcat, File lsposedDir) {
-        StringBuilder out = new StringBuilder();
-        appendHookLines(rawLogcat, out);
-        if (lsposedDir != null && lsposedDir.isDirectory()) {
-            appendHookLinesFromTree(lsposedDir, out, new int[]{countLines(out)});
-        }
-        return out.toString();
-    }
-
-    private static void appendHookLines(String source, StringBuilder out) {
-        if (source == null || source.isEmpty()) return;
-        for (String line : source.split("\\r?\\n")) {
-            if (isHookLine(line)) out.append(line).append('\n');
-        }
-    }
-
-    private static void appendHookLinesFromTree(File file, StringBuilder out, int[] count) {
-        if (count[0] >= MAX_CANDIDATE_LINES || file == null || !file.exists()) return;
-        if (file.isDirectory()) {
-            File[] children = file.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    appendHookLinesFromTree(child, out, count);
-                    if (count[0] >= MAX_CANDIDATE_LINES) break;
-                }
-            }
-            return;
-        }
-        if (file.length() > 32L * 1024L * 1024L) return;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null && count[0] < MAX_CANDIDATE_LINES) {
-                if (isHookLine(line)) {
-                    out.append(line).append('\n');
-                    count[0]++;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private static boolean isHookLine(String line) {
-        return line != null && (line.contains("HOOK_CANDIDATE")
-                || line.contains("HOOK_SUGGEST")
-                || line.contains("HOOK_STACK")
-                || line.contains("HOOK_TRACE_FAILED"));
-    }
-
-    private static int countLines(CharSequence value) {
-        int count = 0;
-        for (int i = 0; i < value.length(); i++) if (value.charAt(i) == '\n') count++;
-        return count;
+        return !runShell(true, command).trim().isEmpty();
     }
 
     private static String buildEnvironment(Context context, String target, boolean root,
@@ -271,19 +241,23 @@ final class DiagnosticsManager {
         StringBuilder s = new StringBuilder();
         s.append("diagnosticStart=").append(formatFull(startMs)).append('\n');
         s.append("diagnosticEnd=").append(formatFull(endMs)).append('\n');
-        s.append("device=").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n');
+        s.append("device=").append(Build.MANUFACTURER).append(' ')
+                .append(Build.MODEL).append('\n');
         s.append("product=").append(Build.PRODUCT).append('\n');
-        s.append("android=").append(Build.VERSION.RELEASE).append(" sdk=").append(Build.VERSION.SDK_INT).append('\n');
+        s.append("android=").append(Build.VERSION.RELEASE)
+                .append(" sdk=").append(Build.VERSION.SDK_INT).append('\n');
         s.append("fingerprint=").append(Build.FINGERPRINT).append('\n');
         s.append("rootAvailable=").append(root).append('\n');
         s.append("modulePackage=").append(context.getPackageName()).append('\n');
         appendPackageInfo(context, context.getPackageName(), "module", s);
         s.append("libxposedApi=102.0.0\n");
         s.append("automaticHookPointLocator=true\n");
+        s.append("hookCandidatesSource=current-session-logcat-only\n");
         s.append("targetPackage=").append(target).append('\n');
         appendPackageInfo(context, target, "target", s);
         s.append("mode=").append(AlwaysForegroundApp.getConfiguredMode()).append('\n');
-        s.append("xposedServiceConnected=").append(AlwaysForegroundApp.isServiceConnected()).append('\n');
+        s.append("xposedServiceConnected=")
+                .append(AlwaysForegroundApp.isServiceConnected()).append('\n');
         return s.toString();
     }
 
@@ -292,7 +266,8 @@ final class DiagnosticsManager {
         try {
             PackageInfo info = context.getPackageManager().getPackageInfo(packageName, 0);
             s.append(prefix).append("VersionName=").append(info.versionName).append('\n');
-            long code = Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+            long code = Build.VERSION.SDK_INT >= 28
+                    ? info.getLongVersionCode() : info.versionCode;
             s.append(prefix).append("VersionCode=").append(code).append('\n');
         } catch (PackageManager.NameNotFoundException e) {
             s.append(prefix).append("PackageInfo=not installed\n");
@@ -308,20 +283,21 @@ final class DiagnosticsManager {
                 + "DurationMs: " + (endMs - startMs) + "\n"
                 + "Root: " + root + "\n"
                 + "LSPosed logs copied: " + lsposedCopied + "\n"
-                + "Automatic hook-point locator: enabled\n\n"
+                + "Automatic hook-point locator: enabled\n"
+                + "Hook candidates: current diagnostic session only\n\n"
                 + "Files:\n"
-                + "- hook-candidates.txt: playback pause/stop/release endpoint events, suggested caller and full stack\n"
+                + "- hook-candidates.txt: current-session playback endpoint events only\n"
                 + "- module.log: AlwaysForeground/libxposed/LSPosed related logcat\n"
                 + "- logcat.txt: target + lifecycle/window/runtime/player related logcat\n"
                 + "- system-events.txt: ActivityManager/WindowManager event buffer entries\n"
                 + "- environment.txt: device/module/target environment\n"
-                + "- lsposed/: raw readable LSPosed logs when root access is available\n";
+                + "- lsposed/: raw readable LSPosed logs (may contain historical sessions)\n";
     }
 
     private static String filter(String source, String... terms) {
         StringBuilder out = new StringBuilder();
-        String[] lines = source.split("\\r?\\n");
-        for (String line : lines) {
+        if (source == null || source.isEmpty()) return "";
+        for (String line : source.split("\\r?\\n")) {
             for (String term : terms) {
                 if (term != null && !term.isEmpty() && line.contains(term)) {
                     out.append(line).append('\n');
@@ -333,7 +309,8 @@ final class DiagnosticsManager {
     }
 
     private static void writeText(File file, String value) throws IOException {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8))) {
+        try (BufferedWriter writer = new BufferedWriter(
+                new FileWriter(file, StandardCharsets.UTF_8))) {
             writer.write(value == null ? "" : value);
         }
     }
@@ -344,14 +321,17 @@ final class DiagnosticsManager {
         }
     }
 
-    private static void zipChildren(File root, File current, ZipOutputStream zip) throws IOException {
+    private static void zipChildren(File root, File current, ZipOutputStream zip)
+            throws IOException {
         File[] files = current.listFiles();
         if (files == null) return;
         byte[] buffer = new byte[32 * 1024];
         for (File file : files) {
-            String name = root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/');
+            String name = root.toPath().relativize(file.toPath()).toString()
+                    .replace(File.separatorChar, '/');
             if (file.isDirectory()) {
-                if ((file.listFiles() == null || file.listFiles().length == 0)) {
+                File[] children = file.listFiles();
+                if (children == null || children.length == 0) {
                     zip.putNextEntry(new ZipEntry(name + "/"));
                     zip.closeEntry();
                 } else {
@@ -375,9 +355,11 @@ final class DiagnosticsManager {
         values.put(MediaStore.MediaColumns.RELATIVE_PATH,
                 Environment.DIRECTORY_DOWNLOADS + "/AlwaysForegroundX");
         values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+
         ContentResolver resolver = context.getContentResolver();
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
         if (uri == null) throw new IOException("MediaStore insert failed");
+
         try {
             try (OutputStream out = resolver.openOutputStream(uri);
                  InputStream in = new FileInputStream(zipFile)) {
@@ -399,7 +381,8 @@ final class DiagnosticsManager {
 
     private static String readAll(InputStream input) throws IOException {
         StringBuilder out = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(input, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) out.append(line).append('\n');
         }
@@ -411,14 +394,17 @@ final class DiagnosticsManager {
     }
 
     private static String formatFull(long time) {
-        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.US).format(new Date(time));
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.US)
+                .format(new Date(time));
     }
 
     private static void deleteRecursively(File file) {
         if (file == null || !file.exists()) return;
         if (file.isDirectory()) {
             File[] children = file.listFiles();
-            if (children != null) for (File child : children) deleteRecursively(child);
+            if (children != null) {
+                for (File child : children) deleteRecursively(child);
+            }
         }
         file.delete();
     }
