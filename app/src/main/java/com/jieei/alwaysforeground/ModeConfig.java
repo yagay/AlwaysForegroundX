@@ -10,7 +10,6 @@ public final class ModeConfig {
     public static final String KEY_MODE = "mode";
     public static final String KEY_DIAGNOSTICS_ACTIVE = "diagnostics_active";
     public static final String KEY_DIAGNOSTICS_TARGET = "diagnostics_target";
-    public static final String KEY_DIAGNOSTICS_START_MS = "diagnostics_start_ms";
     public static final int DEFAULT_MODE = MODE_STANDARD;
 
     private ModeConfig() {}
