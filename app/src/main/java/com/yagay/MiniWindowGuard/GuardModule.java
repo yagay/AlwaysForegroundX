@@ -22,7 +22,7 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
-    private static final String SYSTEM_PACKAGE = "android";
+    private static final String SYSTEM_PACKAGE = "system";
     private static final int PROCESS_STATE_TOP = 2;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
@@ -46,17 +46,9 @@ public final class GuardModule extends XposedModule {
     }
 
     @Override
-    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
-        if (!param.isFirstPackage()) return;
-        if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
-        log(Log.INFO, TAG, "SYSTEM_SCOPE android package loaded");
-    }
-
-    @Override
-    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
-        if (!param.isFirstPackage()) return;
-        if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
-
+    public void onSystemServerStarting(
+            XposedModuleInterface.SystemServerStartingParam param
+    ) {
         systemClassLoader = param.getClassLoader();
         Handler handler = new Handler(Looper.getMainLooper());
 
@@ -73,7 +65,7 @@ public final class GuardModule extends XposedModule {
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
 
-        log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready");
+        log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready in system_server");
         diag("ENGINE_READY",
                 "targets=" + GuardConfig.targetPackages()
                         + " hooks=" + installedHooks.size()
@@ -392,13 +384,13 @@ public final class GuardModule extends XposedModule {
     }
 
     private long resolveInstalledVersionCode(Context context) {
-        if (context == null) return 48L;
+        if (context == null) return 49L;
         try {
             return context.getPackageManager()
                     .getPackageInfo("com.yagay.MiniWindowGuard", 0)
                     .getLongVersionCode();
         } catch (Throwable ignored) {
-            return 48L;
+            return 49L;
         }
     }
 
