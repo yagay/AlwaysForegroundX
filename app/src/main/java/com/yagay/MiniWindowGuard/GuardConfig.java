@@ -57,15 +57,21 @@ final class GuardConfig {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
-    static int containerWidth() {
+    static int containerInitialScale() {
         return ConfigKeys.sanitizePercent(
                 integer(ConfigKeys.CONTAINER_WIDTH),
                 58);
     }
 
+    static int containerWidth() {
+        return containerInitialScale();
+    }
+
     static int containerHeight() {
-        return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.CONTAINER_HEIGHT),
-                66);
+        // OxygenOS may fail to produce the first VirtualDisplay frame when
+        // initial width/height percentages differ. The first attach therefore
+        // always uses the same scale on both axes. Once the window is alive,
+        // interactive resize remains completely free-form.
+        return containerInitialScale();
     }
 }
