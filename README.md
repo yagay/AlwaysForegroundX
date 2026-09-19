@@ -1,5 +1,80 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.1.1 — 锁屏继续播放修复
+
+5.1.1 保持 5.1.0 的 OPlus 小窗白名单架构不变，只修正锁屏保活时序。
+
+### 修复原因
+
+5.1.0 的诊断显示：
+
+```
+PowerKey
+→ FlexibleWindowManagerService mInteractive=false
+→ ActivityTaskManager Create SleepToken
+→ OPlus onScreenLockedChanged
+→ Activity setVisibility(false)
+→ pause / stop
+→ 后续才建立 lockKeepAlive
+```
+
+因此播放器已经先收到 `onPause/onStop`。
+
+### 5.1.1
+
+锁屏改为：
+
+```
+FlexibleTaskController.onScreenLockedChanged
+→ 进入方法之前
+→ 对“始终前台白名单 + 当前真实 OPlus 小窗”预先建立 lockKeepAlive
+→ 再执行 OPlus 原生锁屏流程
+```
+
+并只在 **OPlus 自己的 onScreenLockedChanged 调用栈内部**：
+
+- 阻止白名单小窗的 `ActivityRecord.setVisibility(false)`
+- 阻止白名单小窗的 `ActivityRecord.makeInvisible()`
+- `TaskFragment.sleepIfPossible()` 保持活跃
+- 继续阻止该 UID 的 OPlus Hans freeze
+- 继续阻止 AOSP freezer
+- 继续阻止锁屏 stopUid
+
+这些 Hook 不作用于：
+
+- 普通全屏
+- 普通 Home / Recents / Back
+- 普通应用切后台
+- 非白名单应用
+- 非 OPlus FlexibleWindow Task
+
+因此不会恢复旧版全局 `pause/invisible` 强拦截。
+
+### 贴边 / 最小化
+
+继续使用 5.1.0 的 OPlus 原生路径：
+
+- `TaskExtImpl.moveTaskToBackForPanorama`
+- `FloatHandleController.isInFloatingList(taskId)`
+- 保留一加贴边动画和图标
+- 跳过最终 moveTaskToBack
+- 焦点交给下面的正常窗口
+- 隐藏贴边 Task Surface
+- App 继续运行/播放
+
+### 诊断
+
+新增/重点观察：
+
+- `OPLUS_LOCK_PREARM`
+- `OPLUS_LOCK_VISIBILITY_BLOCK`
+- `OPLUS_LOCK_SLEEP_BLOCK`
+- `OPLUS_HANS_FREEZE_BLOCK`
+- `OPLUS_AOSP_FREEZE_BLOCK`
+- `OPLUS_STOP_UID_BLOCK`
+
+> 5.1.1 增加了新的 system_server Bootstrap Hook。安装后需要完整重启手机一次。
+
 ## 5.1.0 — OPlus 小窗始终前台
 
 5.1.0 不再负责启动 App，也不再主动调用 `toggleFlexibleWindow`。
