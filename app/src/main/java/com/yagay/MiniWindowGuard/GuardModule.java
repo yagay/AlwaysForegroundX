@@ -68,6 +68,7 @@ public final class GuardModule extends XposedModule {
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
+        installTaskFreeformHooks(systemClassLoader);
         installTaskFragmentHooks(systemClassLoader);
         installWindowTokenHooks(systemClassLoader);
         installRemovedTaskServiceGuard(systemClassLoader);
@@ -251,6 +252,41 @@ public final class GuardModule extends XposedModule {
         for (Method method : record.getDeclaredMethods()) {
             String name = method.getName();
 
+            if (("supportsFreeform".equals(name)
+                    || "supportsFreeformInDisplayArea".equals(name)
+                    || "isResizeable".equals(name))
+                    && method.getReturnType() == boolean.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        if (!enabled()
+                                || current == null
+                                || !current.isManagedTopActivityRecord(
+                                        chain.getThisObject())) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(chain.getThisObject());
+                        diag("ACTIVITY_FREEFORM_FORCE",
+                                "pkg=" + pkg
+                                        + " method=" + name
+                                        + " forced=true");
+                        return true;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord." + name);
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord."
+                                    + name + " error=" + t);
+                }
+                continue;
+            }
+
             if ("shouldPauseActivity".equals(name)
                     && method.getReturnType() == boolean.class) {
                 try {
@@ -270,7 +306,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(chain.getThisObject());
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_WINDOW) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -518,6 +554,48 @@ public final class GuardModule extends XposedModule {
                     log(Log.WARN, TAG,
                             "SYSTEM_SCOPE skipped ActivityRecord.setState error=" + t);
                 }
+            }
+        }
+    }
+
+
+    private void installTaskFreeformHooks(ClassLoader loader) {
+        Class<?> task = load(loader, "com.android.server.wm.Task");
+        if (task == null) return;
+
+        for (Method method : task.getDeclaredMethods()) {
+            String name = method.getName();
+            if (!("supportsFreeform".equals(name)
+                    || "supportsFreeformInDisplayArea".equals(name)
+                    || "isResizeable".equals(name))
+                    || method.getReturnType() != boolean.class) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+
+                hook(method).intercept(chain -> {
+                    TaskSurfaceController current = container;
+                    if (!enabled()
+                            || current == null
+                            || !current.isManagedTask(chain.getThisObject())) {
+                        return chain.proceed();
+                    }
+
+                    diag("TASK_FREEFORM_FORCE",
+                            "method=" + name + " forced=true");
+                    return true;
+                });
+
+                log(Log.INFO, TAG,
+                        "SYSTEM_SCOPE installed Task." + name);
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG,
+                        "SYSTEM_SCOPE skipped Task."
+                                + name + " error=" + t);
             }
         }
     }
