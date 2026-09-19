@@ -634,10 +634,18 @@ final class OplusFlexibleWindowController {
                 userLeaving
                         && resumingPackage == null;
 
+        boolean recentsBackground =
+                reason != null
+                        && (reason.contains(
+                                "pauseInRecentsAnim")
+                        || reason.contains(
+                                "pauseBackTasks"));
+
         if (!session.backgroundProtected
                 && !switchingPackage
                 && !explicitLeave
-                && !uiSleeping) {
+                && !uiSleeping
+                && !recentsBackground) {
             return false;
         }
 
@@ -653,6 +661,8 @@ final class OplusFlexibleWindowController {
                         + " resumingPkg=" + resumingPackage
                         + " userLeaving=" + userLeaving
                         + " uiSleeping=" + uiSleeping
+                        + " recentsBackground="
+                        + recentsBackground
                         + " reason=" + reason);
 
         return true;
