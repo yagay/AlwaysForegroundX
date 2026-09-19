@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AlwaysForeground"
+rootProject.name = "MiniWindowGuard"
 include(":app")
