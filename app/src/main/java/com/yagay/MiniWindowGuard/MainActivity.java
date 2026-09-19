@@ -61,8 +61,7 @@ public final class MainActivity extends Activity {
 
         addHeader(root);
         addEngineCard(root);
-        addLauncherCard(root);
-        addOplusCard(root);
+        addAppListsCard(root);
         addForegroundCard(root);
         addDiagnosticsCard(root);
 
@@ -183,69 +182,58 @@ public final class MainActivity extends Activity {
         card.addView(refresh);
     }
 
-    private void addLauncherCard(
+    private void addAppListsCard(
             LinearLayout parent
     ) {
         LinearLayout card =
                 card(
                         parent,
-                        "打开一加系统小窗",
-                        "选择应用后，MiniWindowGuard 只向 OplusActivityTaskManager 请求 FlexibleWindow；"
-                                + "窗口本身完全由 OxygenOS 创建和管理。");
+                        "应用名单",
+                        "App 的启动、进入小窗、恢复和关闭完全使用 OxygenOS 自己的方式。MiniWindowGuard 只监听一加小窗状态。");
 
-        Button openApps =
+        Button foreground =
                 button(
-                        "选择应用并打开系统小窗");
+                        "始终前台应用");
 
-        openApps.setOnClickListener(v -> {
-            try {
-                startActivity(
-                        new Intent(
-                                this,
-                                TargetAppsActivity.class));
-            } catch (Throwable t) {
-                CrashStore.record(
-                        this,
-                        "MainActivity.openAppList",
-                        t);
-
-                Toast.makeText(
-                        this,
-                        "打开应用列表失败："
-                                + t.getClass()
-                                .getSimpleName(),
-                        Toast.LENGTH_LONG).show();
-            }
+        foreground.setOnClickListener(v -> {
+            Intent intent =
+                    new Intent(
+                            this,
+                            TargetAppsActivity.class);
+            intent.putExtra(
+                    TargetAppsActivity.EXTRA_MODE,
+                    TargetAppsActivity.MODE_FOREGROUND);
+            startActivity(intent);
         });
 
-        card.addView(openApps);
+        card.addView(foreground);
 
         card.addView(
                 detailBlock(
-                        "窗口全部由一加管理",
-                        "拖动、缩放、最大化、最小化、贴边、恢复、关闭、视频 Surface、输入焦点和导航键都不由 MiniWindowGuard 接管。"));
-    }
+                        "始终前台",
+                        "勾选的 App 只有在真实 OPlus FlexibleWindow、贴边/最小化小窗，或该小窗进入锁屏状态时才保持运行。普通全屏状态不干预。"));
 
-    private void addOplusCard(
-            LinearLayout parent
-    ) {
-        LinearLayout card =
-                card(
-                        parent,
-                        "一加小窗 Hook",
-                        "只修改 OxygenOS 自己的小窗判断，不创建替代窗口。");
+        Button support =
+                button(
+                        "强制允许一加小窗应用");
 
-        addSwitch(
-                card,
-                "强制允许所选应用使用一加小窗",
-                "仅对当前选择/跟踪的应用放行 FlexibleWindowUtils、FlexibleTaskController 和旧 Zoom 配置中的支持/黑名单检查，不全局修改其他应用。",
-                ConfigKeys.OPLUS_FORCE_SUPPORT);
+        support.setOnClickListener(v -> {
+            Intent intent =
+                    new Intent(
+                            this,
+                            TargetAppsActivity.class);
+            intent.putExtra(
+                    TargetAppsActivity.EXTRA_MODE,
+                    TargetAppsActivity.MODE_FORCE_SUPPORT);
+            startActivity(intent);
+        });
+
+        card.addView(support);
 
         card.addView(
                 detailBlock(
-                        "状态来源",
-                        "前台保护只认 OxygenOS 的真实 FlexibleWindow Task、实际小窗 bounds，或一加自己的贴边/最小化 FloatingList。"
-                                + "应用一旦真正回到普通全屏，前台保护会自动停止，不再阻止系统导航。"));
+                        "小窗支持",
+                        "只对勾选的 App 放行一加 FlexibleWindow 支持/黑名单检查；不会主动启动或主动切换小窗。"));
     }
 
     private void addForegroundCard(
@@ -255,24 +243,24 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "小窗前台保护",
-                        "不再 Hook pause / invisible / setVisible。所有 Activity 生命周期继续完全交给 OxygenOS。");
+                        "普通全屏仍完全交给 OxygenOS；只有白名单中的真实一加小窗在贴边或锁屏时才做定向保活。");
 
         addSwitch(
                 card,
                 "小窗进程状态保持 TOP",
-                "仅当 Task 当前真实属于一加 FlexibleWindow/贴边小窗时，对相关前台查询返回 TOP。",
+                "仅对白名单中当前真实属于一加 FlexibleWindow、贴边小窗或锁屏保活状态的进程返回 TOP。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(
                 card,
                 "小窗视为存在 Resumed Activity",
-                "仅在真实一加小窗状态下，对 hasResumedActivity 返回 true；普通全屏状态不修改。",
+                "仅对白名单中的真实一加小窗/锁屏保活状态返回 true；普通全屏不修改。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
                 "阻止一加清理链路强杀小窗",
-                "仅保护当前仍属于一加 FlexibleWindow/贴边小窗的进程；应用更新、强制停止以及普通全屏状态放行。",
+                "保护白名单中的一加小窗、贴边小窗和锁屏保活进程；应用更新、强制停止和普通全屏状态放行。",
                 ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
 
