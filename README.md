@@ -1,5 +1,23 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.9 — 后台通知与生命周期保护解耦
+
+5.3.8 新诊断确认：抖音退后台后虽然进入 PAUSED/STOPPED，但系统 MediaSession 仍持续 PLAYING 超过 8 秒。也就是说抖音本身可以后台播放，问题只是旧通知逻辑要求先建立 BACKGROUND_PROTECTED Session，导致“不需要保护也能播放”的 App 永远没有 MiniWindowGuard 通知。
+
+5.3.9 将后台通知改为独立、按包名的状态机：
+
+- 直接遍历“后台播放应用”名单，不再要求已有 Controller Session；
+- AudioManager.AudioPlaybackCallback 检测目标包 UID 是否仍有 active playback；
+- 记录系统当前 focused package：目标 App 在前台时立即隐藏通知；
+- 目标 App 在普通后台且仍播放时显示 ongoing 通知；
+- 播放停止后由音频回调立即撤销；
+- 锁屏时不显示；
+- 真实 OPlus FlexibleWindow / FloatHandle 小窗状态不显示；
+- 生命周期保护仍独立工作：需要保护的 App 继续走 BACKGROUND_PROTECTED，像抖音这种原生可后台播放的 App 不必强行进入保护状态；
+- 通知继续显示目标 App 的 large icon，状态栏 small icon 保持 MiniWindowGuard 单色图标。
+
+Bootstrap API 仍为 4，仅修改 HotReload Engine，可直接热重载。
+
 ## 5.3.8 — 从真实 Task 身份建立后台 Session
 
 5.3.7 后的新诊断确认，抖音在普通后台切换时 `startPausing()` 已拿到真实
