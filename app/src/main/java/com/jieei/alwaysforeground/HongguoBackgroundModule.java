@@ -29,6 +29,10 @@ public final class HongguoBackgroundModule extends XposedModule {
     private static final String HONGGUO_PACKAGE = "com.phoenix.read";
     private static final String PLAYER_ADAPTER =
             "com.dragon.read.component.shortvideo.impl.v2.view.adapter.a";
+    private static final String SERIES_FRAGMENT =
+            "com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment";
+    private static final String SERIES_LIFECYCLE_OBSERVER =
+            "com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment$g";
 
     private static final String[] VIDEO_ENGINE_CLASSES = {
             "com.ss.ttvideoengine.TTVideoEngine",
@@ -42,6 +46,7 @@ public final class HongguoBackgroundModule extends XposedModule {
     private volatile boolean firstLandscapeBlockedLogged;
     private volatile boolean firstGenericBlockedLogged;
     private volatile boolean firstEngineBlockedLogged;
+    private volatile boolean firstEpisodeP0BlockedLogged;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -63,12 +68,87 @@ public final class HongguoBackgroundModule extends XposedModule {
             return;
         }
 
+        installEpisodeLifecyclePauseHook(param.getClassLoader());
         installPauseOnlyAdapterHook(param.getClassLoader());
         installVideoEngineFallbacks(param.getClassLoader());
     }
 
     /**
-     * Primary hook.  In the current APK adapter.a.x() still only performs:
+     * Red Fruit 7.3.5.32 episode/detail background chain:
+     *
+     * ShortSeriesSingleFragment$g.a -> ShortSeriesSingleFragment.P0 ->
+     * view.adapter.f.x -> view.adapter.a.x -> player.pause()
+     *
+     * and:
+     *
+     * ShortSeriesSingleFragment.onStop -> ShortSeriesSingleFragment.P0 ->
+     * view.adapter.f.x -> view.adapter.a.x -> player.pause()
+     *
+     * Intercept P0 only when the caller is the lifecycle pause observer or Fragment.onStop.
+     * This moves the decision before the deep player stack, which is much less sensitive to
+     * ART/JIT stack-frame changes. Other P0 calls and manual pause operations still proceed.
+     */
+    private void installEpisodeLifecyclePauseHook(ClassLoader classLoader) {
+        try {
+            Class<?> clazz = classLoader.loadClass(SERIES_FRAGMENT);
+            Method method = clazz.getDeclaredMethod("P0");
+            if (method.getParameterCount() != 0 || method.getReturnType() != void.class) {
+                log(Log.WARN, TAG, "SKIPPED Hongguo episode P0 endpoint: unexpected signature "
+                        + method);
+                return;
+            }
+
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
+
+                int source = episodeP0BackgroundSource();
+                if (source == 0) return chain.proceed();
+
+                if (!firstEpisodeP0BlockedLogged) {
+                    firstEpisodeP0BlockedLogged = true;
+                    log(Log.INFO, TAG, "HIT Hongguo episode P0 background pause blocked source="
+                            + (source == 1 ? "lifecyclePause" : "fragmentStop")
+                            + " package=" + HONGGUO_PACKAGE);
+                }
+                return null;
+            });
+
+            log(Log.INFO, TAG, "INSTALLED Hongguo episode P0 endpoint "
+                    + SERIES_FRAGMENT + ".P0 process=" + safeProcessName());
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "SKIPPED Hongguo episode P0 endpoint: " + t, t);
+        }
+    }
+
+    /**
+     * @return 0 = unrelated P0 call, 1 = lifecycle pause observer, 2 = Fragment.onStop.
+     */
+    private static int episodeP0BackgroundSource() {
+        boolean lifecyclePause = false;
+        boolean fragmentStop = false;
+
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            String cls = frame.getClassName();
+            String method = frame.getMethodName();
+
+            if ((SERIES_LIFECYCLE_OBSERVER.equals(cls) && "a".equals(method))
+                    || ("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))) {
+                lifecyclePause = true;
+            }
+
+            if (SERIES_FRAGMENT.equals(cls) && "onStop".equals(method)) {
+                fragmentStop = true;
+            }
+        }
+
+        if (lifecyclePause) return 1;
+        if (fragmentStop) return 2;
+        return 0;
+    }
+
+    /**
+     * Primary fallback hook.  In the current APK adapter.a.x() still only performs:
      *   player.isPlaying(); if (true) player.pause();
      *
      * That makes suppressing this method safe when the stack is a proven background lifecycle
@@ -210,8 +290,7 @@ public final class HongguoBackgroundModule extends XposedModule {
                 feedInvisible = true;
             }
 
-            if ("com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment"
-                    .equals(cls)) {
+            if (SERIES_FRAGMENT.equals(cls)) {
                 if ("P0".equals(method)) shortSeriesSingleP0 = true;
                 if ("onStop".equals(method)) shortSeriesSingleStop = true;
             }
@@ -222,6 +301,7 @@ public final class HongguoBackgroundModule extends XposedModule {
             }
 
             if (("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))
+                    || (SERIES_LIFECYCLE_OBSERVER.equals(cls) && "a".equals(method))
                     || ("androidx.lifecycle.LifecycleRegistry".equals(cls)
                     && ("handleLifecycleEvent".equals(method)
                     || "backwardPass".equals(method)))) {
@@ -241,8 +321,8 @@ public final class HongguoBackgroundModule extends XposedModule {
 
         if (fragmentPause && feedInvisible) return 1;
 
-        boolean episodePausePath = fragmentPause && shortSeriesSingleP0 && lifecyclePause;
-        boolean episodeStopPath = fragmentStop && shortSeriesSingleP0 && shortSeriesSingleStop;
+        boolean episodePausePath = shortSeriesSingleP0 && lifecyclePause;
+        boolean episodeStopPath = shortSeriesSingleP0 && shortSeriesSingleStop;
         if (episodePausePath || episodeStopPath) return 2;
 
         if (landscapePause && (fragmentPause || fragmentStop)) return 3;
