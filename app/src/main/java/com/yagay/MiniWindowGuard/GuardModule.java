@@ -36,15 +36,17 @@ public final class GuardModule extends XposedModule {
             new ConcurrentHashMap<>();
 
     private volatile ClassLoader systemClassLoader;
-    private volatile VirtualDisplayController container;
+    private volatile SharedPreferences remotePrefs;
+    private volatile EngineBridge engine;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
         try {
-            SharedPreferences prefs = getRemotePreferences(ConfigKeys.REMOTE_GROUP);
-            GuardConfig.initialize(prefs);
+            remotePrefs = getRemotePreferences(ConfigKeys.REMOTE_GROUP);
+            GuardConfig.initialize(remotePrefs);
             log(Log.INFO, TAG, "SYSTEM_SCOPE remote settings ready");
         } catch (Throwable t) {
+            remotePrefs = null;
             GuardConfig.initialize(null);
             log(Log.WARN, TAG, "SYSTEM_SCOPE remote settings unavailable", t);
         }
@@ -59,11 +61,13 @@ public final class GuardModule extends XposedModule {
 
         Context context = resolveSystemUiContext(systemClassLoader);
 
-        container = new VirtualDisplayController(
+        engine = new EngineBridge(
                 handler,
                 context,
-                this::containerLog);
-        container.start();
+                remotePrefs,
+                systemClassLoader);
+
+        boolean initialLoaded = engine.loadInitial();
 
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
@@ -73,9 +77,14 @@ public final class GuardModule extends XposedModule {
         installRemovedTaskServiceGuard(systemClassLoader);
         installProcessKillGuard(systemClassLoader);
 
-        log(Log.INFO, TAG, "SYSTEM_SCOPE original VirtualDisplay engine ready in system_server");
+        log(Log.INFO, TAG,
+                "SYSTEM_SCOPE hot-reload bootstrap ready in system_server");
         diag("ENGINE_READY",
-                "backend=OriginalVirtualDisplay"
+                "backend=HotReloadBootstrap"
+                        + " initialLoaded=" + initialLoaded
+                        + " engineVersion="
+                        + (engine == null ? -1 : engine.versionCode())
+                        + " bootstrapApi=" + EngineBridge.BOOTSTRAP_API
                         + " hooks=" + installedHooks.size()
                         + " systemUiContext=" + (context != null));
 
@@ -83,11 +92,17 @@ public final class GuardModule extends XposedModule {
     }
 
     private boolean enabled() {
-        return GuardConfig.enabled();
+        EngineBridge current = engine;
+        return current != null && current.enabled();
+    }
+
+    private boolean engineBool(String key) {
+        EngineBridge current = engine;
+        return current != null && current.bool(key);
     }
 
     private boolean isTargetPackage(String packageName) {
-        VirtualDisplayController current = container;
+        EngineBridge current = engine;
         return packageName != null
                 && enabled()
                 && current != null
@@ -125,7 +140,7 @@ public final class GuardModule extends XposedModule {
 
                     hook(method).intercept(chain -> {
                         List<Object> args = chain.getArgs();
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                        if (engineBool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
                                 && !args.isEmpty()
                                 && args.get(0) instanceof String pkg
                                 && isTargetPackage(pkg)) {
@@ -153,7 +168,7 @@ public final class GuardModule extends XposedModule {
 
                     hook(method).intercept(chain -> {
                         List<Object> args = chain.getArgs();
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                        if (engineBool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
                                 && !args.isEmpty()
                                 && args.get(0) instanceof Integer uid
                                 && isTargetUid(uid)) {
@@ -184,7 +199,7 @@ public final class GuardModule extends XposedModule {
 
                     hook(method).intercept(chain -> {
                         List<Object> args = chain.getArgs();
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                        if (engineBool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
                                 && !args.isEmpty()
                                 && args.get(0) instanceof Integer uid
                                 && isTargetUid(uid)) {
@@ -223,7 +238,7 @@ public final class GuardModule extends XposedModule {
 
                 hook(method).intercept(chain -> {
                     List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
+                    if (engineBool(ConfigKeys.SYSTEM_HAS_RESUMED)
                             && !args.isEmpty()
                             && args.get(0) instanceof Integer uid
                             && isTargetUid(uid)) {
@@ -260,10 +275,10 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        VirtualDisplayController current = container;
+                        EngineBridge current = engine;
                         if (!enabled()
                                 || current == null
-                                || !GuardConfig.bool(
+                                || !engineBool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)
                                 || !current.isManagedTopActivityRecord(
                                         chain.getThisObject())) {
@@ -300,11 +315,11 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        VirtualDisplayController current = container;
+                        EngineBridge current = engine;
                         Object activityRecord = chain.getThisObject();
                         if (!enabled()
                                 || current == null
-                                || !GuardConfig.bool(
+                                || !engineBool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
                                 || !current.isManagedTopActivityRecord(
                                         activityRecord)) {
@@ -353,11 +368,11 @@ public final class GuardModule extends XposedModule {
                             return chain.proceed();
                         }
 
-                        VirtualDisplayController current = container;
+                        EngineBridge current = engine;
                         Object activityRecord = chain.getThisObject();
                         if (!enabled()
                                 || current == null
-                                || !GuardConfig.bool(
+                                || !engineBool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
                                 || !current.isManagedTopActivityRecord(
                                         activityRecord)) {
@@ -404,11 +419,11 @@ public final class GuardModule extends XposedModule {
                             return chain.proceed();
                         }
 
-                        VirtualDisplayController current = container;
+                        EngineBridge current = engine;
                         Object activityRecord = chain.getThisObject();
                         if (!enabled()
                                 || current == null
-                                || !GuardConfig.bool(
+                                || !engineBool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
                                 || !current.isManagedTopActivityRecord(
                                         activityRecord)) {
@@ -448,7 +463,7 @@ public final class GuardModule extends XposedModule {
                         Object result = chain.proceed();
 
                         if (!enabled()
-                                || !GuardConfig.bool(ConfigKeys.AUTO_CONTAINER)) {
+                                || !engineBool(ConfigKeys.AUTO_CONTAINER)) {
                             return result;
                         }
 
@@ -462,7 +477,7 @@ public final class GuardModule extends XposedModule {
                         Object activityRecord = chain.getThisObject();
                         String pkg = activityPackage(activityRecord);
 
-                        VirtualDisplayController current = container;
+                        EngineBridge current = engine;
                         if (current != null && current.wantsPackage(pkg)) {
                             current.capture(activityRecord, pkg);
                         }
@@ -500,10 +515,10 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        VirtualDisplayController current = container;
+                        EngineBridge current = engine;
                         if (!enabled()
                                 || current == null
-                                || !GuardConfig.bool(
+                                || !engineBool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)) {
                             return chain.proceed();
                         }
@@ -572,11 +587,11 @@ public final class GuardModule extends XposedModule {
                         return chain.proceed();
                     }
 
-                    VirtualDisplayController current = container;
+                    EngineBridge current = engine;
                     Object token = chain.getThisObject();
                     if (!enabled()
                             || current == null
-                            || !GuardConfig.bool(
+                            || !engineBool(
                                     ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
                             || !current.isManagedTopActivityRecord(token)) {
                         return chain.proceed();
@@ -629,7 +644,7 @@ public final class GuardModule extends XposedModule {
 
                 hook(method).intercept(chain -> {
                     if (!enabled()
-                            || !GuardConfig.bool(
+                            || !engineBool(
                                     ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL)) {
                         return chain.proceed();
                     }
@@ -693,7 +708,7 @@ public final class GuardModule extends XposedModule {
 
                 hook(method).intercept(chain -> {
                     if (!enabled()
-                            || !GuardConfig.bool(
+                            || !engineBool(
                                     ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL)) {
                         return chain.proceed();
                     }
@@ -754,7 +769,7 @@ public final class GuardModule extends XposedModule {
     }
 
     private String targetPackageForProcess(String processName) {
-        VirtualDisplayController current = container;
+        EngineBridge current = engine;
         return current == null
                 ? null
                 : current.managedPackageForProcess(processName);
@@ -983,7 +998,7 @@ public final class GuardModule extends XposedModule {
     }
 
     private boolean diagnosticsActive() {
-        return GuardConfig.bool(ConfigKeys.DIAGNOSTICS_ACTIVE);
+        return engineBool(ConfigKeys.DIAGNOSTICS_ACTIVE);
     }
 
     private void containerLog(String event, String detail) {
