@@ -2,179 +2,140 @@
 
 MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
 
-## 4.3.0
+## 4.4.0
 
-4.3.0 引入 **固定 Bootstrap + 可热重载 Engine**。
+4.4.0 把 **目标 App 的内部 VirtualDisplay** 和 **用户看到的外部小窗**彻底分离。
 
-目标是解决开发测试阶段最麻烦的问题：以前每次更新 APK 后，system_server 里仍然运行旧模块 ClassLoader，因此必须重启手机。现在只有 Hook 注册层固定驻留，窗口、VirtualDisplay、输入、前台策略和大部分运行逻辑都放进可重新加载的 Engine。
+这是针对视频 App 的 SurfaceView / MediaCodec 兼容问题做的结构调整：部分应用只有在某些首次 VirtualDisplay 尺寸下才能正常建立视频 Surface，但一旦建立成功，后续外部窗口怎么缩放都能继续显示。
 
-### 第一次升级
+### 默认模式：固定内部显示
 
-从 4.2.x 或更早版本升级到 4.3.0：
+默认开启：
 
-1. 安装 4.3.0 APK。
-2. 仍然需要 **最后重启一次手机**。
-3. 重启后，新的 Bootstrap 会进入 system_server。
-4. 设置页会显示：
-   - Bootstrap code
-   - Engine code
-   - 热重载可用
-   - Engine generation
-   - 活动小窗数量
-   - 上一次 reload 结果
+`固定内部显示（推荐）`
 
-完成这一次之后，正常 APK 更新不再需要重启手机。
+开启后：
 
-### 以后更新 APK
+- 目标 App 运行在稳定的 VirtualDisplay 内部画布。
+- 默认内部渲染比例为 **48%**。
+- 当前设备上 48% 已验证可以正常建立视频 Surface。
+- 外部 TextureView 可以自由改变长宽。
+- 拖动 resize 时不再调用 `VirtualDisplay.resize()`。
+- 目标 App 不会因为外部窗口变化反复收到 display configuration change。
+- SurfaceView / MediaCodec 不需要跟着外部窗口反复重建。
 
-Bootstrap 每 2 秒检查：
+### 内部与外部尺寸
 
-- 当前安装 APK 的 versionCode
-- 当前运行 Engine 的 versionCode
-- 手动 reload sequence
-- 当前活动小窗数量
-
-默认开启 **自动热重载**。
-
-如果安装新版 APK 时没有活动小窗：
+4.4.0 使用两套独立尺寸：
 
 ```
-APK 更新
-  ↓
-Bootstrap 检测 versionCode 不一致
-  ↓
-停止旧 Engine
-  ↓
-从当前安装 APK sourceDir 创建新的 PathClassLoader
-  ↓
-加载 HotReloadEngine
-  ↓
-启动新版 VirtualDisplay / 输入 / 前台逻辑
-  ↓
-原子切换 current Engine
+目标 App
+   ↓
+固定 VirtualDisplay
+   ↓
+TextureView
+   ↓
+外部可见小窗
 ```
 
-整个过程不重启 system_server，也不重启手机。
+内部尺寸由：
 
-如果更新时仍有活动小窗，自动 reload 会暂缓，避免突然关闭正在运行的窗口。可以：
+`内部渲染比例`
 
-- 先关闭当前小窗，Bootstrap 会自动加载新版；
-- 或在设置页点击 **“立即重新加载 System Engine”**，强制 reload。强制 reload 会关闭当前小窗并把对应 Task 恢复到原 display。
+控制。
 
-### Reload 失败保护
+外部尺寸由：
 
-新版 Engine 会先完成：
+- 外部窗口宽度
+- 外部窗口高度
+- 最小外部宽度
+- 最小外部高度
 
-- APK 路径解析
-- ClassLoader 创建
-- Engine 类实例化
-- Bootstrap API 兼容性检查
+控制。
 
-确认候选 Engine 可以加载后，才停止旧 Engine。
+默认：
 
-如果新版启动失败：
+- 内部渲染比例：48%
+- 最小外部宽度：160dp
+- 最小外部高度：220dp
 
-- Bootstrap 尝试重新启动旧 Engine；
-- 保留旧 Engine 引用；
-- 写入 `ENGINE_RELOAD_FAILED`；
-- 如果回滚也失败，会记录 `ENGINE_ROLLBACK_FAILED`。
+因此内部仍可维持视频兼容所需的安全尺寸，而外部小窗可以比以前明显更小。
 
-### Bootstrap 与 Engine
+### 触摸坐标映射
 
-Bootstrap 负责：
+固定内部显示开启时，外部 TextureView 和内部 VirtualDisplay 尺寸可以不同。
 
-- LSPosed system_server Hook 注册
-- Hook 回调入口
-- Engine ClassLoader 生命周期
-- 自动/手动热重载
-- Engine 状态上报
+MiniWindowGuard 会自动换算触摸坐标：
 
-Engine 负责：
+```
+internalX = hostX × internalWidth / hostWidth
+internalY = hostY × internalHeight / hostHeight
+```
 
-- VirtualDisplay
-- TextureView / Surface
-- 输入注入
-- 小窗拖动 / resize
-- 图标 / 隐藏 / 恢复
-- 当前受管 Task
-- 前台策略数据
-- Engine 级运行逻辑
+因此即使把外部小窗缩小，点击和滑动仍然会落到正确的 App 坐标。
 
-Bootstrap Hook 只安装一次，不会因为 reload 重复注册。
+### 动态模式
 
-### 什么时候仍然需要重启
+关闭：
 
-普通功能更新原则上不需要重启，例如：
+`固定内部显示（推荐）`
 
-- 修复黑屏
-- 修复输入
-- 修改 VirtualDisplay
-- 修改窗口 UI
-- 修改 resize
-- 修改图标 / 隐藏
-- 修改 Engine 内部前台策略
-- 修改诊断
+以后恢复动态模式：
 
-只有以后修改了 **Bootstrap 本身**，例如：
+- 外部窗口 resize 时先只做预览。
+- 松手时真正调用一次 `VirtualDisplay.resize()`。
+- App 会收到新的显示配置。
+- 适合确实希望 App 根据窗口尺寸重新排版的应用。
 
-- 新增以前没有注册过的 system_server Hook 点
-- 改变 Bootstrap / Engine 接口版本
-- 修改 LSPosed 初始化方式
+视频 App 如果存在 SurfaceView 首次创建或重新布局问题，建议继续使用固定内部显示。
 
-才可能再次需要重启 system_server / 手机。
+## 设置页新增
 
-## 4.2 窗口架构
+“小窗显示与兼容性”中现在可以调整：
 
-窗口层继续使用 MiniWindowGuard 自己实现的 VirtualDisplay 引擎：
+- 固定内部显示
+- 内部渲染比例
+- 外部窗口默认宽度
+- 外部窗口默认高度
+- 最小外部宽度
+- 最小外部高度
 
-- system_server 创建独立 VirtualDisplay；
-- 使用稳定 `TextureView + SurfaceTexture + Surface`；
-- Surface 就绪后才迁移 Task；
-- 宿主窗口存活期间不 remove/add 根 View；
-- VirtualDisplay 使用 `SUPPORTS_TOUCH / TRUSTED / OWN_FOCUS / STEAL_TOP_FOCUS_DISABLED`；
-- 触摸事件重新构造并带目标 displayId 注入；
-- resize 手势移动阶段只预览，松手时才提交一次 VirtualDisplay resize；
-- 标题栏直接提供返回、缩小成图标、隐藏和关闭。
+内部渲染比例只对新建小窗生效。
 
-## 始终前台
+最小外部宽高只限制之后的拖动缩放，不会降低内部 VirtualDisplay 的安全尺寸。
 
-MiniWindowGuard 保留自己的 system_server 前台保护：
+## 热重载
 
-- 进程状态保持前台级别；
-- `hasResumedActivity(uid)` 保持为 true；
-- 拦截真实 pause / stop；
-- 保持客户端可见；
-- 阻止普通最近任务 / OEM 清理链路强杀。
+4.4.0 没有修改 Bootstrap Hook 注册层。
+
+如果已经安装 4.3.x 并完成过一次 Bootstrap 重启：
+
+- 安装 4.4.0 后无需重启手机；
+- 没有活动小窗时会自动热重载；
+- 或在设置页点击“立即重新加载 System Engine”。
 
 ## 诊断
 
-诊断 ZIP 现在额外记录：
+新增/重点日志：
 
-- `bootstrapVersionCode`
-- `loadedEngineVersionCode`
-- `hotReloadAvailable`
-- `engineGeneration`
-- `engineActiveSessions`
-- `engineReloadMessage`
-- `engine_reload_seq`
-
-关键日志：
-
-- `ENGINE_RELOAD_BEGIN`
-- `ENGINE_RELOAD_SUCCESS`
-- `ENGINE_RELOAD_FAILED`
-- `ENGINE_RELOAD_PENDING`
-- `ENGINE_ROLLBACK_FAILED`
-- `VD_TASK_CAPTURED`
 - `VD_WINDOW_CREATED`
+  - 同时记录 `host=...` 和 `internal=...`
 - `VD_SURFACE_READY`
-- `VD_TASK_MOVED`
-- `VD_FOCUS`
-- `VD_INPUT_DOWN`
+  - 记录 TextureView、内部 buffer、外部 host 尺寸
+- `VD_HOST_RESIZE_ONLY`
+  - 固定内部显示模式下只改变外部窗口
 - `VD_RESIZE_COMMIT`
-- `VD_MINIMIZED`
-- `VD_HIDDEN`
-- `VD_RESTORE`
+  - 动态模式下真正改变 VirtualDisplay
+- `VD_INPUT_DOWN`
+  - 同时记录 host / internal 尺寸
+- `ENGINE_RELOAD_*`
+
+诊断摘要也记录：
+
+- `fixed_internal_display`
+- `internal_display_scale`
+- `outer_min_width_dp`
+- `outer_min_height_dp`
 
 ## 开源架构参考
 
@@ -185,6 +146,6 @@ MiniWindowGuard 保留自己的 system_server 前台保护：
 - FreeformShell
 - Android AOSP DisplayManager / ActivityTaskManager / InputManager
 
-这些项目用于理解公开架构与系统行为。MiniWindowGuard 当前窗口与热重载 Engine 均为本项目重新实现。
+这些项目用于理解公开架构与系统行为。MiniWindowGuard 当前实现为本项目重新实现。
 
 本仓库使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
