@@ -94,6 +94,18 @@ public final class HotReloadEngine {
                 && current.isKnownPackage(packageName);
     }
 
+    public boolean isForceSupportPackage(String packageName) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isForceSupportPackage(packageName);
+    }
+
+    public boolean isForegroundPackage(String packageName) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isForegroundPackage(packageName);
+    }
+
     public boolean isManagedPackage(String packageName) {
         OplusFlexibleWindowController current = controller;
         return current != null
@@ -124,6 +136,31 @@ public final class HotReloadEngine {
         if (current != null) {
             current.onOplusTaskVanished(taskInfo);
         }
+    }
+
+    public void onKeyguardStateChanged(boolean showing) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onKeyguardStateChanged(showing);
+        }
+    }
+
+    public boolean shouldHoldEdgeTask(Object task) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldHoldEdgeTask(task);
+    }
+
+    public boolean isEdgeHungTask(Object task) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isEdgeHungTask(task);
+    }
+
+    public boolean shouldKeepTaskAwake(Object task) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldKeepTaskAwake(task);
     }
 
     public String managedPackageForProcess(String processName) {
