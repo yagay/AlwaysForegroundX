@@ -28,7 +28,7 @@ public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final String SYSTEM_PACKAGE = "system";
     private static final int PROCESS_STATE_TOP = 2;
-    private static final long MODULE_VERSION_CODE = BuildConfig.VERSION_CODE;
+    private static final long MODULE_VERSION_CODE = 64L;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
     private final Set<String> firstHits = ConcurrentHashMap.newKeySet();
