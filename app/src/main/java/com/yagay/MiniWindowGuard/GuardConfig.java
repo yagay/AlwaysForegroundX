@@ -57,10 +57,6 @@ final class GuardConfig {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
-    static boolean nativeFreeformEngine() {
-        return bool(ConfigKeys.NATIVE_FREEFORM_ENGINE);
-    }
-
     static int containerWidth() {
         return ConfigKeys.sanitizePercent(
                 integer(ConfigKeys.CONTAINER_WIDTH),
@@ -71,33 +67,5 @@ final class GuardConfig {
         return ConfigKeys.sanitizePercent(
                 integer(ConfigKeys.CONTAINER_HEIGHT),
                 66);
-    }
-
-    static boolean fixedInternalDisplay() {
-        return bool(ConfigKeys.FIXED_INTERNAL_DISPLAY);
-    }
-
-    static int internalDisplayScale() {
-        return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.INTERNAL_DISPLAY_SCALE),
-                48);
-    }
-
-    static int outerMinWidthDp() {
-        return clamp(
-                integer(ConfigKeys.OUTER_MIN_WIDTH_DP),
-                120,
-                320);
-    }
-
-    static int outerMinHeightDp() {
-        return clamp(
-                integer(ConfigKeys.OUTER_MIN_HEIGHT_DP),
-                160,
-                480);
-    }
-
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
     }
 }
