@@ -702,7 +702,13 @@ final class VirtualDisplayController {
         private void parkWindow(boolean hidden) {
             if (windowParams == null) return;
 
-            if (session.state == ConfigKeys.STATE_WINDOW) {
+            DisplayMetrics metrics =
+                    context.getResources().getDisplayMetrics();
+
+            if (windowParams.x >= 0
+                    && windowParams.x < metrics.widthPixels
+                    && windowParams.y >= 0
+                    && windowParams.y < metrics.heightPixels) {
                 savedWindowX = windowParams.x;
                 savedWindowY = windowParams.y;
             }
