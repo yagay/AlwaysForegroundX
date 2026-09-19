@@ -19,6 +19,7 @@ public final class AlwaysForegroundApp extends Application {
             public void onServiceBind(XposedService service) {
                 xposedService = service;
                 syncPendingMode(service);
+                syncPendingSmallWindow(service);
                 syncPendingDiagnostics(service);
                 Log.i(TAG, "Xposed service connected: " + service.getFrameworkName());
             }
@@ -57,6 +58,50 @@ public final class AlwaysForegroundApp extends Application {
         }
     }
 
+    static int getConfiguredSmallWindowForm() {
+        SharedPreferences local = getInstancePrefs();
+        int form = local.getInt(
+                ModeConfig.KEY_SMALL_WINDOW_FORM,
+                ModeConfig.DEFAULT_SMALL_WINDOW_FORM);
+        return ModeConfig.isValidSmallWindowForm(form)
+                ? form : ModeConfig.DEFAULT_SMALL_WINDOW_FORM;
+    }
+
+    static int getConfiguredSmallWindowWidth() {
+        return ModeConfig.clampPercent(
+                getInstancePrefs().getInt(
+                        ModeConfig.KEY_SMALL_WINDOW_WIDTH,
+                        ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH),
+                ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH);
+    }
+
+    static int getConfiguredSmallWindowHeight() {
+        return ModeConfig.clampPercent(
+                getInstancePrefs().getInt(
+                        ModeConfig.KEY_SMALL_WINDOW_HEIGHT,
+                        ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT),
+                ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT);
+    }
+
+    static boolean setSmallWindowConfig(int form, int width, int height) {
+        int safeForm = ModeConfig.isValidSmallWindowForm(form)
+                ? form : ModeConfig.DEFAULT_SMALL_WINDOW_FORM;
+        int safeWidth = ModeConfig.clampPercent(
+                width, ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH);
+        int safeHeight = ModeConfig.clampPercent(
+                height, ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT);
+
+        getInstancePrefs().edit()
+                .putInt(ModeConfig.KEY_SMALL_WINDOW_FORM, safeForm)
+                .putInt(ModeConfig.KEY_SMALL_WINDOW_WIDTH, safeWidth)
+                .putInt(ModeConfig.KEY_SMALL_WINDOW_HEIGHT, safeHeight)
+                .apply();
+
+        XposedService service = xposedService;
+        if (service == null) return false;
+        return writeSmallWindow(service, safeForm, safeWidth, safeHeight);
+    }
+
     static boolean setDiagnosticsState(boolean active, String target) {
         String safeTarget = target == null ? "" : target;
         getInstancePrefs().edit()
@@ -78,6 +123,33 @@ public final class AlwaysForegroundApp extends Application {
                     .apply();
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync remote preferences", t);
+        }
+    }
+
+    private static void syncPendingSmallWindow(XposedService service) {
+        writeSmallWindow(
+                service,
+                getConfiguredSmallWindowForm(),
+                getConfiguredSmallWindowWidth(),
+                getConfiguredSmallWindowHeight());
+    }
+
+    private static boolean writeSmallWindow(
+            XposedService service,
+            int form,
+            int width,
+            int height
+    ) {
+        try {
+            return service.getRemotePreferences(ModeConfig.REMOTE_GROUP)
+                    .edit()
+                    .putInt(ModeConfig.KEY_SMALL_WINDOW_FORM, form)
+                    .putInt(ModeConfig.KEY_SMALL_WINDOW_WIDTH, width)
+                    .putInt(ModeConfig.KEY_SMALL_WINDOW_HEIGHT, height)
+                    .commit();
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to sync small-window settings", t);
+            return false;
         }
     }
 
