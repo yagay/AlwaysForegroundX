@@ -109,9 +109,9 @@ public final class MainActivity extends Activity {
         LinearLayout card = card(
                 parent,
                 "VirtualDisplay 小窗",
-                "采用 YAMF² 同类架构：创建独立 VirtualDisplay，"
-                        + "把目标 Task 从 display 0 移入独立显示，"
-                        + "再通过系统侧 TextureView Overlay 显示。");
+                "完全重写的 system_server VirtualDisplay 引擎："
+                        + "先建立稳定 SurfaceView，再把目标 Task 从 display 0 "
+                        + "移入独立显示，不使用原开源项目源码。");
 
         Button openApps = button("选择应用并打开小窗");
         openApps.setOnClickListener(v -> {
@@ -134,9 +134,8 @@ public final class MainActivity extends Activity {
 
         card.addView(detailBlock(
                 "窗口操作",
-                "小窗支持拖动、缩放、返回和三点菜单。"
-                        + "菜单包含放大、小窗、图标、隐藏；"
-                        + "图标/隐藏不会把目标 Task 移回主屏。"));
+                "窗口只保留最小控制：拖动、缩放、返回和关闭。"
+                        + "已删除旧三点菜单、图标态、隐藏态和早期 Overlay 状态切换。"));
     }
 
     private void addForegroundCard(LinearLayout parent) {
@@ -170,8 +169,8 @@ public final class MainActivity extends Activity {
         addSwitch(
                 card,
                 "保持 Visible",
-                "图标/隐藏时仍让系统侧 Activity 保持逻辑可见，"
-                        + "只隐藏 VirtualDisplay 的显示层。",
+                "目标 Task 位于 VirtualDisplay 时持续保持逻辑可见，"
+                        + "避免 OEM 因主屏焦点变化把窗口变为不可见。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
 
         addSwitch(
@@ -284,8 +283,8 @@ public final class MainActivity extends Activity {
 
         card.addView(detailBlock(
                 "诊断重点",
-                "• VD_WINDOW_CREATED / VD_TASK_MOVED / VD_SURFACE_READY\n"
-                        + "• VD_RESIZE / VD_SURFACE_HIDDEN / VD_INPUT_ERROR\n"
+                "• VD_WINDOW_CREATED / VD_SURFACE_READY / VD_TASK_MOVED\n"
+                        + "• VD_FOCUS / VD_INPUT_DOWN / VD_INPUT_ERROR / VD_RESIZE\n"
                         + "• Activity pause/visible/resumed 拦截\n"
                         + "• 进程状态、Audio、MediaSession、Window、Task 快照\n"
                         + "• 最近 30000 行 logcat"));
@@ -318,10 +317,11 @@ public final class MainActivity extends Activity {
     private void addAboutCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
-                "架构来源",
-                "VirtualDisplay 小窗架构按 YAMF² / YAMF 的 GPLv3"
-                        + "实现方式重构；MiniWindowGuard 保留自己的"
-                        + "始终前台保护与诊断系统。");
+                "架构说明",
+                "窗口引擎已经完全重写。YAMF/YAMF² 与 FreeformShell"
+                        + "只作为公开架构思路参考，不复制其实现源码；"
+                        + "MiniWindowGuard 使用自己的 VirtualDisplay、输入、"
+                        + "前台保护和诊断实现。");
 
         card.addView(detailBlock(
                 "许可证",
