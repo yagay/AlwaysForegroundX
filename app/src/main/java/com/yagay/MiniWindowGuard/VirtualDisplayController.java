@@ -525,7 +525,7 @@ final class VirtualDisplayController {
             Button minimize = toolbarButton("●");
             minimize.setTextSize(15);
             minimize.setOnClickListener(v ->
-                    applyState(
+                    VirtualDisplayController.this.applyState(
                             session,
                             ConfigKeys.STATE_ICON,
                             "minimize-button"));
@@ -533,7 +533,7 @@ final class VirtualDisplayController {
             Button hide = toolbarButton("隐");
             hide.setTextSize(13);
             hide.setOnClickListener(v ->
-                    applyState(
+                    VirtualDisplayController.this.applyState(
                             session,
                             ConfigKeys.STATE_HIDDEN,
                             "hide-button"));
@@ -751,7 +751,7 @@ final class VirtualDisplayController {
             control.setBackground(bg);
 
             control.setOnClickListener(v ->
-                    applyState(
+                    VirtualDisplayController.this.applyState(
                             session,
                             ConfigKeys.STATE_WINDOW,
                             "restore-control"));
@@ -1249,7 +1249,7 @@ final class VirtualDisplayController {
                     }
 
                     focusRemoteTask("surface-ready");
-                    applyState(session, session.state, "initial");
+                    VirtualDisplayController.this.applyState(session, session.state, "initial");
                 }
             } catch (Throwable t) {
                 log("VD_SURFACE_ERROR",
