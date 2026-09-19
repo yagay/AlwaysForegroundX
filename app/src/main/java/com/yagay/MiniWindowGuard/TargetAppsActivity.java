@@ -291,35 +291,53 @@ public final class TargetAppsActivity extends Activity {
         });
     }
 
-    private void launchSmallWindow(AppItem item, Button button) {
+    private void launchContainer(AppItem item, Button button) {
         button.setEnabled(false);
+
+        if (!selected.contains(item.packageName)) {
+            selected.add(item.packageName);
+            GuardApp.setTargetPackages(new LinkedHashSet<>(selected));
+            refreshCount();
+        }
+
         executor.execute(() -> {
-            boolean ok = false;
             Throwable failure = null;
 
             try {
-                ok = WindowLauncher.launch(this, item.packageName);
+                RootPolicyManager.apply(this, item.packageName);
+
+                Intent launch = getPackageManager()
+                        .getLaunchIntentForPackage(item.packageName);
+                if (launch == null) {
+                    throw new IllegalStateException("No launch intent");
+                }
+
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(launch);
             } catch (Throwable t) {
                 failure = t;
-                CrashStore.record(this,
-                        "TargetAppsActivity.launchSmallWindow:" + item.packageName,
+                CrashStore.record(
+                        this,
+                        "TargetAppsActivity.launchContainer:" + item.packageName,
                         t);
             }
 
-            boolean finalOk = ok;
             Throwable finalFailure = failure;
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
+
                 button.setEnabled(true);
-                Toast.makeText(
-                        this,
-                        finalFailure != null
-                                ? "小窗启动异常："
-                                    + finalFailure.getClass().getSimpleName()
-                                : (finalOk
-                                    ? "已请求系统小窗"
-                                    : "小窗启动失败，请检查 Root/系统支持"),
-                        Toast.LENGTH_SHORT).show();
+                if (finalFailure != null) {
+                    Toast.makeText(
+                            this,
+                            "容器启动失败：" + finalFailure.getClass().getSimpleName(),
+                            Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(
+                            this,
+                            "已启动，system_server 将接管真实 Task",
+                            Toast.LENGTH_SHORT).show();
+                }
             });
         });
     }
@@ -400,7 +418,7 @@ public final class TargetAppsActivity extends Activity {
             });
 
             holder.launch.setOnClickListener(
-                    v -> launchSmallWindow(item, holder.launch));
+                    v -> launchContainer(item, holder.launch));
 
             return convertView;
         }
@@ -431,7 +449,7 @@ public final class TargetAppsActivity extends Activity {
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
             Button launch = new Button(TargetAppsActivity.this);
-            launch.setText("小窗");
+            launch.setText("容器");
             launch.setAllCaps(false);
             row.addView(launch);
 
