@@ -217,20 +217,60 @@ public final class MainActivity extends Activity {
     private void addWindowCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
-                "默认窗口尺寸",
-                "尺寸只控制 VirtualDisplay Overlay，"
-                        + "不再修改主屏 Task 的 bounds/windowing mode。");
+                "小窗显示与兼容性",
+                "内部 VirtualDisplay 和外部可见窗口现在可以独立控制。");
+
+        addSwitch(
+                card,
+                "固定内部显示（推荐）",
+                "开启后，目标 App 始终运行在固定 VirtualDisplay 画布上。"
+                        + "拖动改变的只是外部 TextureView 大小，不再触发播放器 Surface"
+                        + "和 Activity 配置反复重建。关闭后恢复动态 VirtualDisplay resize。",
+                ConfigKeys.FIXED_INTERNAL_DISPLAY);
+
+        int internalScale = ConfigKeys.sanitizePercent(
+                GuardApp.getInt(ConfigKeys.INTERNAL_DISPLAY_SCALE),
+                48);
+        TextView internalScaleLabel =
+                label("内部渲染比例：" + internalScale + "%");
+        card.addView(internalScaleLabel);
+
+        SeekBar internalScaleSeek = percentSeek(internalScale);
+        internalScaleSeek.setOnSeekBarChangeListener(
+                new SimpleSeekListener() {
+                    @Override
+                    public void onProgressChanged(
+                            SeekBar seekBar,
+                            int progress,
+                            boolean fromUser
+                    ) {
+                        int value = Math.min(95, progress + 30);
+                        internalScaleLabel.setText(
+                                "内部渲染比例：" + value + "%");
+                        if (fromUser) {
+                            GuardApp.putInt(
+                                    ConfigKeys.INTERNAL_DISPLAY_SCALE,
+                                    value);
+                        }
+                    }
+                });
+        card.addView(internalScaleSeek);
 
         card.addView(detailBlock(
-                "首次打开提示",
-                "首次创建小窗时，建议把“窗口宽度”和“窗口高度”设置成相同百分比。"
-                        + "如果两者差异较大，部分 OxygenOS 设备可能出现首次无画面。"
-                        + "小窗成功显示以后，可以再自由拖动缩放，长宽不需要保持一致。"));
+                "兼容模式说明",
+                "你当前设备上 48% 的内部画布已经验证可以正常建立视频 Surface。"
+                        + "固定内部显示开启时，这个比例只决定 App 第一次看到的内部显示尺寸；"
+                        + "外部窗口之后可以随意拉宽、拉高或缩小，内部视频画布不会改变。"));
+
+        card.addView(detailBlock(
+                "默认外部窗口",
+                "下面的宽度和高度只决定小窗刚打开时在屏幕上的可见大小，"
+                        + "不再等于固定兼容模式下的内部 VirtualDisplay 尺寸。"));
 
         int width = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH),
                 58);
-        widthLabel = label("窗口宽度：" + width + "%");
+        widthLabel = label("外部窗口宽度：" + width + "%");
         card.addView(widthLabel);
 
         SeekBar widthSeek = percentSeek(width);
@@ -242,10 +282,9 @@ public final class MainActivity extends Activity {
                             int progress,
                             boolean fromUser
                     ) {
-                        int value =
-                                Math.min(95, progress + 30);
+                        int value = Math.min(95, progress + 30);
                         widthLabel.setText(
-                                "窗口宽度：" + value + "%");
+                                "外部窗口宽度：" + value + "%");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.CONTAINER_WIDTH,
@@ -258,7 +297,7 @@ public final class MainActivity extends Activity {
         int height = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT),
                 66);
-        heightLabel = label("窗口高度：" + height + "%");
+        heightLabel = label("外部窗口高度：" + height + "%");
         card.addView(heightLabel);
 
         SeekBar heightSeek = percentSeek(height);
@@ -270,10 +309,9 @@ public final class MainActivity extends Activity {
                             int progress,
                             boolean fromUser
                     ) {
-                        int value =
-                                Math.min(95, progress + 30);
+                        int value = Math.min(95, progress + 30);
                         heightLabel.setText(
-                                "窗口高度：" + value + "%");
+                                "外部窗口高度：" + value + "%");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.CONTAINER_HEIGHT,
@@ -282,6 +320,77 @@ public final class MainActivity extends Activity {
                     }
                 });
         card.addView(heightSeek);
+
+        int minWidth = Math.max(
+                120,
+                Math.min(
+                        320,
+                        GuardApp.getInt(
+                                ConfigKeys.OUTER_MIN_WIDTH_DP)));
+        TextView minWidthLabel =
+                label("最小外部宽度：" + minWidth + "dp");
+        card.addView(minWidthLabel);
+
+        SeekBar minWidthSeek = new SeekBar(this);
+        minWidthSeek.setMax(200);
+        minWidthSeek.setProgress(minWidth - 120);
+        minWidthSeek.setOnSeekBarChangeListener(
+                new SimpleSeekListener() {
+                    @Override
+                    public void onProgressChanged(
+                            SeekBar seekBar,
+                            int progress,
+                            boolean fromUser
+                    ) {
+                        int value = progress + 120;
+                        minWidthLabel.setText(
+                                "最小外部宽度：" + value + "dp");
+                        if (fromUser) {
+                            GuardApp.putInt(
+                                    ConfigKeys.OUTER_MIN_WIDTH_DP,
+                                    value);
+                        }
+                    }
+                });
+        card.addView(minWidthSeek);
+
+        int minHeight = Math.max(
+                160,
+                Math.min(
+                        480,
+                        GuardApp.getInt(
+                                ConfigKeys.OUTER_MIN_HEIGHT_DP)));
+        TextView minHeightLabel =
+                label("最小外部高度：" + minHeight + "dp");
+        card.addView(minHeightLabel);
+
+        SeekBar minHeightSeek = new SeekBar(this);
+        minHeightSeek.setMax(320);
+        minHeightSeek.setProgress(minHeight - 160);
+        minHeightSeek.setOnSeekBarChangeListener(
+                new SimpleSeekListener() {
+                    @Override
+                    public void onProgressChanged(
+                            SeekBar seekBar,
+                            int progress,
+                            boolean fromUser
+                    ) {
+                        int value = progress + 160;
+                        minHeightLabel.setText(
+                                "最小外部高度：" + value + "dp");
+                        if (fromUser) {
+                            GuardApp.putInt(
+                                    ConfigKeys.OUTER_MIN_HEIGHT_DP,
+                                    value);
+                        }
+                    }
+                });
+        card.addView(minHeightSeek);
+
+        card.addView(detailBlock(
+                "触摸映射",
+                "固定内部显示开启时，触摸坐标会自动从当前外部窗口尺寸换算到"
+                        + "内部 VirtualDisplay 坐标，所以把小窗缩得更小以后仍可正常点击和滑动。"));
     }
 
     private void addDiagnosticsCard(LinearLayout parent) {
