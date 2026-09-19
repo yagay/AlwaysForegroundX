@@ -4,7 +4,9 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -25,6 +27,7 @@ public final class MainActivity extends Activity {
 
     private TextView rootStatus;
     private TextView xposedStatus;
+    private TextView overlayStatus;
     private TextView targetCount;
     private TextView diagnosticsStatus;
     private Button diagnosticsStart;
@@ -101,6 +104,24 @@ public final class MainActivity extends Activity {
         xposedStatus = statusLine("LSPosed：检测中…");
         card.addView(xposedStatus);
 
+        overlayStatus = statusLine("悬浮窗：检测中…");
+        card.addView(overlayStatus);
+
+        Button overlayPermission = button("授权悬浮窗控制层");
+        overlayPermission.setOnClickListener(v -> {
+            try {
+                Intent intent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            } catch (Throwable t) {
+                Toast.makeText(this,
+                        "无法打开悬浮窗设置：" + t.getClass().getSimpleName(),
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        card.addView(overlayPermission);
+
         card.addView(statusLine("LSPosed 作用域：android / System Framework"));
         card.addView(statusLine("模块包名：com.yagay.MiniWindowGuard"));
 
@@ -163,80 +184,86 @@ public final class MainActivity extends Activity {
     }
 
     private void addSystemCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "System Framework 虚拟前台",
-                "这些 Hook 只运行在 system_server，不注入受保护 App。");
+        LinearLayout card = card(parent, "System Framework 容器保护",
+                "只在 system_server 管理真实 Task/Activity，不注入目标 App。");
 
         addSwitch(card, "系统进程状态返回 TOP",
-                "ActivityManagerService 对受保护包/UID返回 PROCESS_STATE_TOP。",
+                "ActivityManagerService 对受保护包/UID返回前台级进程状态。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(card, "系统视为存在 Resumed Activity",
                 "ActivityTaskManagerService.hasResumedActivity(uid) 返回 true。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
-        addSwitch(card, "Mini/隐藏态保持 Resumed",
-                "仅当前 OPlus Zoom/Mini 任务属于受保护 App 时阻止系统发送 pause。",
-                ConfigKeys.SYSTEM_KEEP_MINI_RESUMED);
+        addSwitch(card, "容器任务保持 Resumed",
+                "被 TaskSurface 容器接管后阻止 Activity 因窗口态/图标态/隐藏态被 pause。",
+                ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
 
-        addSwitch(card, "强制 OPlus Multi-Resume",
-                "OPlus Compact/Zoom Window 对受保护 App统一允许 Multi-Resume。",
-                ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME);
-
-        addSwitch(card, "强制允许 OPlus 小窗",
-                "厂商小窗支持检查包含受保护包时返回支持。",
-                ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT);
-
-        addSwitch(card, "受保护 App 启动自动进入系统小窗",
-                "Activity 在 system_server 进入 RESUMED 后，直接把现有 task 切成 OPlus Flexible Window；不需要 App 内 Hook，也不需要手动点“小窗”。",
-                ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW);
+        addSwitch(card, "容器任务保持 Visible",
+                "system_server 可见性判断对已接管 Activity 保持 true，避免隐藏 Surface 时任务被停止。",
+                ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
     }
 
     private void addWindowCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "系统小窗形态",
-                "受保护 App 正常启动后会由 system_server 自动切成系统小窗；这里决定进入自由小窗、Mini 图标或隐藏形态。");
+        LinearLayout card = card(parent, "自有 TaskSurface 小窗",
+                "目标 App 仍是 display 0 上的真实 Task。MiniWindowGuard 直接控制 Task bounds/focus/Surface，不再调用 OPlus 小窗 API。");
 
-        addSwitch(card, "AOSP Freeform 兜底",
-                "OPlus 小窗 API 不可用时尝试 Android Freeform。",
-                ConfigKeys.AOSP_FREEFORM_FALLBACK);
+        addSwitch(card, "自动接管受保护 App",
+                "受保护 App 进入 RESUMED 后自动交给 TaskSurfaceController。",
+                ConfigKeys.AUTO_CONTAINER);
+
+        addSwitch(card, "窗口态置顶",
+                "窗口态尝试设置 Task always-on-top。",
+                ConfigKeys.CONTAINER_ALWAYS_ON_TOP);
 
         RadioGroup forms = new RadioGroup(this);
         forms.setOrientation(RadioGroup.VERTICAL);
-        addForm(forms, ConfigKeys.FORM_WINDOW, "自由小窗", "保持普通系统小窗。");
-        addForm(forms, ConfigKeys.FORM_ICON, "图标", "启动后缩成 Mini Zoom 图标。");
-        addForm(forms, ConfigKeys.FORM_HIDDEN, "隐藏", "启动后进入 Mini，再隐藏图标。");
-        forms.check(300 + ConfigKeys.sanitizeForm(
-                GuardApp.getInt(ConfigKeys.SMALL_WINDOW_FORM)));
-        forms.setOnCheckedChangeListener((group, checkedId) ->
-                GuardApp.putInt(ConfigKeys.SMALL_WINDOW_FORM,
-                        ConfigKeys.sanitizeForm(checkedId - 300)));
+        addForm(forms, ConfigKeys.STATE_WINDOW,
+                "窗口", "真实 Task 缩放到自有窗口区域，触摸仍直接属于目标 App。");
+        addForm(forms, ConfigKeys.STATE_ICON,
+                "图标", "Task 保持运行，Surface 透明并移出屏幕，显示 MiniWindowGuard 图标。");
+        addForm(forms, ConfigKeys.STATE_HIDDEN,
+                "完全隐藏", "Task 保持运行但不显示任何图标，可从常驻通知恢复。");
+
+        int currentState = ConfigKeys.sanitizeState(
+                GuardApp.getInt(ConfigKeys.CONTAINER_DEFAULT_STATE));
+        if (currentState == ConfigKeys.STATE_RELEASED) {
+            currentState = ConfigKeys.STATE_WINDOW;
+        }
+        forms.check(300 + currentState);
+        forms.setOnCheckedChangeListener((group, checkedId) -> {
+            int state = ConfigKeys.sanitizeState(checkedId - 300);
+            if (state == ConfigKeys.STATE_RELEASED) state = ConfigKeys.STATE_WINDOW;
+            GuardApp.putInt(ConfigKeys.CONTAINER_DEFAULT_STATE, state);
+        });
         card.addView(forms);
 
         int width = ConfigKeys.sanitizePercent(
-                GuardApp.getInt(ConfigKeys.SMALL_WINDOW_WIDTH), 58);
-        widthLabel = label("默认宽度：" + width + "%");
+                GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH), 58);
+        widthLabel = label("窗口宽度：" + width + "%");
         card.addView(widthLabel);
         SeekBar widthSeek = percentSeek(width);
         widthSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int value = progress + 30;
-                widthLabel.setText("默认宽度：" + value + "%");
-                if (fromUser) GuardApp.putInt(ConfigKeys.SMALL_WINDOW_WIDTH, value);
+                int value = Math.min(95, progress + 30);
+                widthLabel.setText("窗口宽度：" + value + "%");
+                if (fromUser) GuardApp.putInt(ConfigKeys.CONTAINER_WIDTH, value);
             }
         });
         card.addView(widthSeek);
 
         int height = ConfigKeys.sanitizePercent(
-                GuardApp.getInt(ConfigKeys.SMALL_WINDOW_HEIGHT), 66);
-        heightLabel = label("默认高度：" + height + "%");
+                GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT), 66);
+        heightLabel = label("窗口高度：" + height + "%");
         card.addView(heightLabel);
         SeekBar heightSeek = percentSeek(height);
         heightSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                int value = progress + 30;
-                heightLabel.setText("默认高度：" + value + "%");
-                if (fromUser) GuardApp.putInt(ConfigKeys.SMALL_WINDOW_HEIGHT, value);
+                int value = Math.min(95, progress + 30);
+                heightLabel.setText("窗口高度：" + value + "%");
+                if (fromUser) GuardApp.putInt(ConfigKeys.CONTAINER_HEIGHT, value);
             }
         });
         card.addView(heightSeek);
@@ -251,8 +278,8 @@ public final class MainActivity extends Activity {
 
         card.addView(detailBlock("诊断内容",
                 "• system_server Hook 安装/命中和每次强制结果。\n"
-                        + "• OPlus Zoom/Mini：zoomPkg、windowType、windowShown、zoomRect、组件和退出原因。\n"
-                        + "• ActivityRecord.shouldPauseActivity 决策和关键调用栈。\n"
+                        + "• TaskSurface：taskId、bounds、windowing mode、容器状态、Surface alpha。\n"
+                        + "• ActivityRecord pause/visible 决策和关键调用栈。\n"
                         + "• Root 策略命令及返回值。\n"
                         + "• Activity/Task/进程/OOM/Window/Doze/NetPolicy/Power/Audio/MediaSession 快照。\n"
                         + "• 每个受保护 App 的 package、AppOps、standby bucket、meminfo。\n"
@@ -341,25 +368,26 @@ public final class MainActivity extends Activity {
 
     private void addPermissionDetails(LinearLayout parent) {
         LinearLayout card = card(parent, "权限使用详情",
-                "新架构不再维护推荐 Hook App 列表。");
+                "核心不依赖厂商小窗，也不 Hook 单独 App。");
 
         card.addView(detailBlock("LSPosed",
                 "• 作用域只选 Android/System Framework (android)。\n"
-                        + "• 不勾红果、视频 App、浏览器或其他目标 App。\n"
-                        + "• Hook 位于 ActivityManagerService、ActivityTaskManagerService、"
-                        + "ActivityRecord 和 OPlus 小窗系统服务。\n"
-                        + "• 目标 App 选择只在小窗守护内部保存。"));
+                        + "• system_server 直接管理 ActivityRecord、Task 和 SurfaceControl。\n"
+                        + "• 不需要给红果、视频 App、浏览器等目标 App勾 LSPosed。"));
 
         card.addView(detailBlock("Root",
-                "• Root 只授予小窗守护。\n"
-                        + "• 根据内部受保护列表统一配置 Doze、待机桶、AppOps、网络和 WakeLock。\n"
-                        + "• 不修改目标 APK，不给目标 App su 权限，不修改 /system。"));
+                "• Root 只授予 MiniWindowGuard。\n"
+                        + "• 只用于 Doze、待机桶、后台 AppOps、网络和 WakeLock 保活策略。\n"
+                        + "• Task/Surface 容器本身由 system_server LSPosed 完成。"));
 
-        card.addView(detailBlock("与旧架构的区别",
-                "• 删除 App 内 MediaPlayer/ExoPlayer/TTVideoEngine 等播放器 Hook。\n"
-                        + "• 删除针对单独 App 的 Activity/Fragment Hook。\n"
-                        + "• 不再需要“推荐 Hook 列表”。\n"
-                        + "• Mini 图标继续运行依靠 system_server 保持窗口任务 Resumed/Multi-Resume。"));
+        card.addView(detailBlock("悬浮窗权限",
+                "• 只用于 MiniWindowGuard 自己的标题栏和图标。\n"
+                        + "• 目标 App 的画面不是截图，也不是 Overlay View，而是真实 Task Surface。"));
+
+        card.addView(detailBlock("容器状态",
+                "• 窗口：真实 Task 在屏幕内，直接接收触摸。\n"
+                        + "• 图标/隐藏：Task 保持同样尺寸，移出屏幕并把 Surface alpha 设为 0。\n"
+                        + "• 释放：恢复接管前的 bounds 和 windowing mode。"));
     }
 
     private void addMaintenanceCard(LinearLayout parent) {
@@ -386,6 +414,14 @@ public final class MainActivity extends Activity {
             targetCount.setText("当前受保护：" + GuardApp.getTargetPackages().size() + " 个 App");
         }
         refreshDiagnosticsStatus();
+
+        if (overlayStatus != null) {
+            boolean allowed = Settings.canDrawOverlays(this);
+            overlayStatus.setText(allowed
+                    ? "悬浮窗：已授权"
+                    : "悬浮窗：未授权（仍可通过通知控制隐藏态）");
+            overlayStatus.setTextColor(allowed ? 0xFF16794A : 0xFFB3261E);
+        }
 
         if (xposedStatus != null) {
             boolean connected = GuardApp.isXposedServiceConnected();
