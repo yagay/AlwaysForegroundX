@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Application;
 import android.app.Instrumentation;
+import android.app.KeyguardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -18,6 +19,7 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
@@ -42,7 +44,6 @@ import io.github.libxposed.api.XposedModuleInterface;
 public final class AlwaysForegroundModule extends XposedModule {
     private static final String TAG = "AlwaysForeground";
     private static final String MODULE_PACKAGE = "com.jieei.alwaysforeground";
-    private static final String HONGGUO_PACKAGE = "com.phoenix.read";
 
     private static final long BACKGROUND_CONFIRM_MS = 450L;
     // Give onStop/native player handoff enough time to run before generic fallback resumes.
@@ -89,6 +90,7 @@ public final class AlwaysForegroundModule extends XposedModule {
     private volatile String activePackage;
     private volatile Handler mainHandler;
     private volatile boolean appInBackground;
+    private volatile boolean rootVirtualForegroundRequested;
     private volatile long lastLifecyclePauseElapsed;
 
     private static final class PendingResume {
@@ -133,17 +135,13 @@ public final class AlwaysForegroundModule extends XposedModule {
                 + ", mode=" + TargetConfig.getMode());
 
         installRestrictionCompatibilityHooks();
+        installVirtualForegroundQueryHooks();
         installLifecycleCauseEngine();
         installBackgroundActivityVirtualization();
         installLifecycleDiagnostics();
 
-        // Intentionally removed from the generic path:
-        // PowerManager.isInteractive/isScreenOn spoofing,
-        // Keyguard spoofing,
-        // ActivityManager process-importance spoofing,
-        // Activity.hasWindowFocus spoofing.
-        // Those APIs describe real UI/process foreground state and cause app-specific side effects.
-        log(Log.INFO, TAG, "GENERIC_UI_STATE real package=" + activePackage);
+        log(Log.INFO, TAG, "VIRTUAL_FOREGROUND generic framework hooks ready"
+                + " package=" + activePackage);
     }
 
     @Override
@@ -151,12 +149,9 @@ public final class AlwaysForegroundModule extends XposedModule {
         if (!param.isFirstPackage()) return;
         if (MODULE_PACKAGE.equals(param.getPackageName())) return;
 
+        installProcessLifecycleVirtualization(param.getClassLoader());
         installGenericMediaContinuity(param.getClassLoader());
         installDestructivePlaybackDiagnostics(param.getClassLoader());
-
-        if (HONGGUO_PACKAGE.equals(param.getPackageName())) {
-            installHongguoFragmentDiagnostics(param.getClassLoader());
-        }
     }
 
     /**
@@ -197,6 +192,258 @@ public final class AlwaysForegroundModule extends XposedModule {
             logInstalled(label);
         } catch (Throwable t) {
             logSkipped(label, t);
+        }
+    }
+
+    /**
+     * Generic virtual-foreground query layer.
+     *
+     * Android's real Activity lifecycle still runs. Only foreground/status queries made inside the
+     * target process are virtualized while the app is actually backgrounded in strong mode.
+     */
+    private void installVirtualForegroundQueryHooks() {
+        hookVirtualBoolean(Activity.class, "hasWindowFocus", true);
+        hookVirtualBoolean(PowerManager.class, "isInteractive", true);
+        hookVirtualBoolean(PowerManager.class, "isScreenOn", true);
+        hookVirtualBoolean(KeyguardManager.class, "isKeyguardLocked", false);
+        hookVirtualBoolean(KeyguardManager.class, "isDeviceLocked", false);
+
+        hookMyMemoryStateVirtualization();
+        hookRunningProcessesVirtualization();
+        hookUidImportanceVirtualization();
+        hookPackageImportanceVirtualization();
+    }
+
+    private boolean isVirtualForegroundActive() {
+        return TargetConfig.getMode() >= ModeConfig.MODE_STRONG && appInBackground;
+    }
+
+    private void hookVirtualBoolean(
+            Class<?> clazz,
+            String methodName,
+            boolean value
+    ) {
+        final String label = "VIRTUAL_FOREGROUND "
+                + clazz.getSimpleName() + "." + methodName;
+        try {
+            Method method = clazz.getDeclaredMethod(methodName);
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                if (isVirtualForegroundActive()) {
+                    logFirstHit(label);
+                    return value;
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    private void hookMyMemoryStateVirtualization() {
+        final String label = "VIRTUAL_FOREGROUND ActivityManager.getMyMemoryState";
+        try {
+            Method method = ActivityManager.class.getDeclaredMethod(
+                    "getMyMemoryState",
+                    ActivityManager.RunningAppProcessInfo.class);
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                Object result = chain.proceed();
+                if (!isVirtualForegroundActive()) return result;
+
+                List<Object> args = chain.getArgs();
+                if (!args.isEmpty()
+                        && args.get(0) instanceof ActivityManager.RunningAppProcessInfo info) {
+                    markProcessForeground(info);
+                    logFirstHit(label);
+                }
+                return result;
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void hookRunningProcessesVirtualization() {
+        final String label = "VIRTUAL_FOREGROUND ActivityManager.getRunningAppProcesses";
+        try {
+            Method method = ActivityManager.class.getDeclaredMethod(
+                    "getRunningAppProcesses");
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                Object result = chain.proceed();
+                if (!isVirtualForegroundActive() || !(result instanceof List<?> list)) {
+                    return result;
+                }
+
+                int pid = android.os.Process.myPid();
+                for (Object entry : list) {
+                    if (entry instanceof ActivityManager.RunningAppProcessInfo info
+                            && info.pid == pid) {
+                        markProcessForeground(info);
+                        logFirstHit(label);
+                        break;
+                    }
+                }
+                return result;
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    private void hookUidImportanceVirtualization() {
+        final String label = "VIRTUAL_FOREGROUND ActivityManager.getUidImportance";
+        try {
+            Method method = ActivityManager.class.getDeclaredMethod(
+                    "getUidImportance", int.class);
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                List<Object> args = chain.getArgs();
+                if (isVirtualForegroundActive()
+                        && !args.isEmpty()
+                        && args.get(0) instanceof Integer uid
+                        && uid == android.os.Process.myUid()) {
+                    logFirstHit(label);
+                    return ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    private void hookPackageImportanceVirtualization() {
+        final String label = "VIRTUAL_FOREGROUND ActivityManager.getPackageImportance";
+        try {
+            Method method = ActivityManager.class.getDeclaredMethod(
+                    "getPackageImportance", String.class);
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                List<Object> args = chain.getArgs();
+                if (isVirtualForegroundActive()
+                        && !args.isEmpty()
+                        && activePackage.equals(args.get(0))) {
+                    logFirstHit(label);
+                    return ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+                }
+                return chain.proceed();
+            });
+            logInstalled(label);
+        } catch (Throwable t) {
+            logSkipped(label, t);
+        }
+    }
+
+    private static void markProcessForeground(
+            ActivityManager.RunningAppProcessInfo info
+    ) {
+        info.importance = ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
+        info.importanceReasonCode = ActivityManager.RunningAppProcessInfo.REASON_UNKNOWN;
+    }
+
+    private void installProcessLifecycleVirtualization(ClassLoader classLoader) {
+        for (String className : new String[] {
+                "androidx.lifecycle.LifecycleRegistry",
+                "android.arch.lifecycle.LifecycleRegistry"
+        }) {
+            try {
+                Class<?> registry = classLoader.loadClass(className);
+                Method method = registry.getDeclaredMethod("getCurrentState");
+                method.setAccessible(true);
+                hook(method).intercept(chain -> {
+                    if (!isVirtualForegroundActive()
+                            || !isProcessLifecycleRegistry(chain.getThisObject())) {
+                        return chain.proceed();
+                    }
+
+                    Object resumed = findEnumConstant(
+                            method.getReturnType(), "RESUMED");
+                    if (resumed != null) {
+                        logFirstHit("VIRTUAL_FOREGROUND " + className
+                                + ".getCurrentState=RESUMED");
+                        return resumed;
+                    }
+                    return chain.proceed();
+                });
+                logInstalled("VIRTUAL_FOREGROUND " + className + ".getCurrentState");
+            } catch (ClassNotFoundException ignored) {
+            } catch (Throwable t) {
+                logSkipped("VIRTUAL_FOREGROUND " + className + ".getCurrentState", t);
+            }
+        }
+    }
+
+    private static boolean isProcessLifecycleRegistry(Object registry) {
+        if (registry == null) return false;
+        Class<?> type = registry.getClass();
+
+        while (type != null) {
+            for (Field field : type.getDeclaredFields()) {
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(registry);
+                    if (value instanceof WeakReference<?> ref) {
+                        value = ref.get();
+                    }
+                    if (value != null
+                            && value.getClass().getName().contains("ProcessLifecycleOwner")) {
+                        return true;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            type = type.getSuperclass();
+        }
+        return false;
+    }
+
+    private static Object findEnumConstant(Class<?> type, String name) {
+        if (type == null || !type.isEnum()) return null;
+        Object[] constants = type.getEnumConstants();
+        if (constants == null) return null;
+        for (Object constant : constants) {
+            if (constant instanceof Enum<?> e && name.equals(e.name())) {
+                return constant;
+            }
+        }
+        return null;
+    }
+
+    private void requestRootVirtualForeground(Context context) {
+        if (rootVirtualForegroundRequested
+                || context == null
+                || TargetConfig.getMode() < ModeConfig.MODE_STRONG) {
+            return;
+        }
+
+        String token = TargetConfig.getRootBridgeToken();
+        if (token == null || token.isEmpty()) return;
+
+        try {
+            Intent request = new Intent(RootForegroundReceiver.ACTION);
+            request.setClassName(
+                    MODULE_PACKAGE,
+                    "com.jieei.alwaysforeground.RootForegroundReceiver");
+            request.putExtra(RootForegroundReceiver.EXTRA_TOKEN, token);
+            request.putExtra(RootForegroundReceiver.EXTRA_PACKAGE, activePackage);
+            request.putExtra(
+                    RootForegroundReceiver.EXTRA_UID,
+                    context.getApplicationInfo().uid);
+            context.sendBroadcast(request);
+            rootVirtualForegroundRequested = true;
+            log(Log.INFO, TAG, "VIRTUAL_FOREGROUND root policy requested"
+                    + " package=" + activePackage
+                    + " uid=" + context.getApplicationInfo().uid);
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "VIRTUAL_FOREGROUND root policy request failed"
+                    + " package=" + activePackage, t);
         }
     }
 
@@ -442,6 +689,8 @@ public final class AlwaysForegroundModule extends XposedModule {
 
                     int serial = transitionSerial.incrementAndGet();
                     if (id != 0) resumedActivities.add(id);
+                    requestRootVirtualForeground(
+                            activity == null ? null : activity.getApplicationContext());
                     appInBackground = false;
                     continuityLeaseUntil.clear();
                     clearPendingResumes("activity-resumed", false);
@@ -499,6 +748,7 @@ public final class AlwaysForegroundModule extends XposedModule {
             appInBackground = true;
             logTransitionOnce("GENERIC_BACKGROUND confirmed serial=" + serial
                     + " package=" + activePackage);
+            log(Log.INFO, TAG, "VIRTUAL_FOREGROUND active package=" + activePackage);
         }, BACKGROUND_CONFIRM_MS);
     }
 
@@ -1130,7 +1380,6 @@ public final class AlwaysForegroundModule extends XposedModule {
     private int scoreFrame(String frame) {
         if (frame == null) return 0;
         if (activePackage != null && frame.startsWith(activePackage + ".")) return 110;
-        if (frame.startsWith("com.dragon.read.") || frame.startsWith("com.phoenix.")) return 100;
         if (frame.startsWith("com.ss.ttvideoengine.")
                 || frame.startsWith("com.google.android.exoplayer2.")
                 || frame.startsWith("androidx.media3.")) return 35;
@@ -1163,38 +1412,6 @@ public final class AlwaysForegroundModule extends XposedModule {
         }
         if (args.size() > 4) out.append(",...");
         return out.append(']').toString();
-    }
-
-    private void installHongguoFragmentDiagnostics(ClassLoader classLoader) {
-        try {
-            Class<?> fragmentClass = classLoader.loadClass("androidx.fragment.app.Fragment");
-            hookFragmentLifecycle(fragmentClass, "performResume");
-            hookFragmentLifecycle(fragmentClass, "performPause");
-            hookFragmentLifecycle(fragmentClass, "performStop");
-        } catch (Throwable t) {
-            logSkipped("Hongguo Fragment diagnostics", t);
-        }
-    }
-
-    private void hookFragmentLifecycle(Class<?> fragmentClass, String methodName) {
-        final String label = "Hongguo Fragment." + methodName;
-        try {
-            Method method = fragmentClass.getDeclaredMethod(methodName);
-            method.setAccessible(true);
-            hook(method).intercept(chain -> {
-                if (TargetConfig.isDiagnosticsActiveFor(activePackage)) {
-                    Object fragment = chain.getThisObject();
-                    if (fragment != null) {
-                        log(Log.INFO, TAG, "FRAGMENT " + methodName
-                                + " class=" + fragment.getClass().getName());
-                    }
-                }
-                return chain.proceed();
-            });
-            logInstalled(label);
-        } catch (Throwable t) {
-            logSkipped(label, t);
-        }
     }
 
     private void installLifecycleDiagnostics() {
