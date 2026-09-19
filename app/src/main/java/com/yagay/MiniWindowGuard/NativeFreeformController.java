@@ -7,6 +7,7 @@ import android.graphics.Rect;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.view.KeyEvent;
 import android.util.DisplayMetrics;
 
 import java.lang.reflect.Field;
@@ -35,6 +36,7 @@ final class NativeFreeformController {
 
     private volatile Context systemUiContext;
     private volatile Object activityTaskManager;
+    private volatile Object inputManager;
     private volatile VirtualDisplayController fallback;
 
     private volatile int lastCommandSeq = Integer.MIN_VALUE;
@@ -451,7 +453,7 @@ final class NativeFreeformController {
 
         Rect bounds = defaultBounds();
 
-        if (!applyFreeform(
+        if (!applyNativeWindow(
                 session,
                 bounds,
                 "initial")) {
@@ -464,12 +466,19 @@ final class NativeFreeformController {
                     session.activityRecord,
                     session.packageName,
                     session.state,
-                    "native-freeform-apply-failed");
+                    "native-bounds-apply-failed");
             return;
         }
 
+        Rect actual = taskBounds(
+                session.taskObject);
+
         session.freeformBounds =
-                new Rect(bounds);
+                actual == null || actual.isEmpty()
+                        ? new Rect(bounds)
+                        : new Rect(actual);
+
+        createOverlay(session);
 
         if (session.state
                 == ConfigKeys.STATE_ICON
@@ -478,6 +487,12 @@ final class NativeFreeformController {
             moveToBack(
                     session,
                     "initial-state");
+
+            if (session.overlay != null) {
+                session.overlay.park(
+                        session.state
+                                == ConfigKeys.STATE_HIDDEN);
+            }
         }
 
         log("NATIVE_WINDOW_READY",
@@ -491,10 +506,12 @@ final class NativeFreeformController {
                                 session.taskObject)
                         + " bounds="
                         + taskBounds(
-                                session.taskObject));
+                                session.taskObject)
+                        + " backend="
+                        + session.nativeBackend);
     }
 
-    private boolean applyFreeform(
+    private boolean applyNativeWindow(
             Session session,
             Rect bounds,
             String reason
@@ -569,13 +586,36 @@ final class NativeFreeformController {
                         bounds,
                         dp(10));
 
+        boolean sameDisplay =
+                taskDisplayId(task)
+                        == session.originalDisplayId;
+
+        boolean freeformAccepted =
+                mode == WINDOWING_MODE_FREEFORM
+                        || multiWindow;
+
+        // OxygenOS 16 accepts real task bounds on display 0 while keeping
+        // windowingMode=fullscreen. This is still a valid native window:
+        // the app, SurfaceView, MediaCodec and input remain in the original
+        // task/surface tree. Do not reject it merely because OEM code refuses
+        // the AOSP FREEFORM mode constant.
+        boolean boundedFullscreenAccepted =
+                sameDisplay && boundsChanged;
+
         boolean success =
-                (mode == WINDOWING_MODE_FREEFORM
-                        || multiWindow)
-                        && boundsChanged;
+                boundsChanged
+                        && (freeformAccepted
+                        || boundedFullscreenAccepted);
+
+        session.nativeBackend =
+                freeformAccepted
+                        ? "freeform"
+                        : boundedFullscreenAccepted
+                        ? "bounded-fullscreen"
+                        : "none";
 
         log(success
-                        ? "NATIVE_FREEFORM_APPLIED"
+                        ? "NATIVE_BOUNDS_APPLIED"
                         : "NATIVE_FREEFORM_FAILED",
                 "pkg=" + session.packageName
                         + " taskId=" + session.taskId
@@ -587,6 +627,10 @@ final class NativeFreeformController {
                         + " actualMode=" + mode
                         + " multiWindow="
                         + multiWindow
+                        + " sameDisplay="
+                        + sameDisplay
+                        + " backend="
+                        + session.nativeBackend
                         + " requestedBounds="
                         + bounds
                         + " actualBounds="
@@ -627,7 +671,7 @@ final class NativeFreeformController {
                 bounds = defaultBounds();
             }
 
-            applyFreeform(
+            applyNativeWindow(
                     session,
                     new Rect(bounds),
                     "restore-" + reason);
@@ -635,10 +679,21 @@ final class NativeFreeformController {
             focusTask(
                     session,
                     "restore-" + reason);
+
+            if (session.overlay != null) {
+                session.overlay.show();
+                session.overlay.updateBounds(
+                        session.freeformBounds);
+            }
         } else {
             moveToBack(
                     session,
                     reason);
+
+            if (session.overlay != null) {
+                session.overlay.park(
+                        safe == ConfigKeys.STATE_HIDDEN);
+            }
         }
 
         log("NATIVE_STATE",
@@ -662,6 +717,11 @@ final class NativeFreeformController {
 
         Object task =
                 session.taskObject;
+
+        if (session.overlay != null) {
+            session.overlay.destroy();
+            session.overlay = null;
+        }
 
         invokeVoidLike(
                 task,
@@ -831,6 +891,408 @@ final class NativeFreeformController {
                         + focusedRoot
                         + " movedFront="
                         + movedFront);
+    }
+
+    private void createOverlay(
+            Session session
+    ) {
+        if (session == null
+                || !session.active
+                || systemUiContext == null
+                || session.freeformBounds == null
+                || session.freeformBounds.isEmpty()) {
+            return;
+        }
+
+        if (session.overlay != null) {
+            session.overlay.destroy();
+        }
+
+        NativeTaskOverlay overlay =
+                new NativeTaskOverlay(
+                        systemUiContext,
+                        new NativeTaskOverlay.Delegate() {
+                            @Override
+                            public void onMoveBy(
+                                    int dx,
+                                    int dy
+                            ) {
+                                moveBoundsBy(
+                                        session,
+                                        dx,
+                                        dy);
+                            }
+
+                            @Override
+                            public void onResizeTo(
+                                    int width,
+                                    int height
+                            ) {
+                                resizeBoundsTo(
+                                        session,
+                                        width,
+                                        height);
+                            }
+
+                            @Override
+                            public void onBack() {
+                                injectBack();
+                            }
+
+                            @Override
+                            public void onMinimize() {
+                                applyState(
+                                        session,
+                                        ConfigKeys.STATE_ICON,
+                                        "overlay-minimize");
+                            }
+
+                            @Override
+                            public void onHide() {
+                                applyState(
+                                        session,
+                                        ConfigKeys.STATE_HIDDEN,
+                                        "overlay-hide");
+                            }
+
+                            @Override
+                            public void onClose() {
+                                restoreSession(
+                                        session,
+                                        "overlay-close");
+                            }
+
+                            @Override
+                            public void onRestore() {
+                                applyState(
+                                        session,
+                                        ConfigKeys.STATE_WINDOW,
+                                        "overlay-restore");
+                            }
+                        });
+
+        if (overlay.create(
+                session.packageName,
+                session.freeformBounds)) {
+            session.overlay = overlay;
+
+            log("NATIVE_OVERLAY_READY",
+                    "pkg=" + session.packageName
+                            + " taskId="
+                            + session.taskId
+                            + " bounds="
+                            + session.freeformBounds);
+        } else {
+            log("NATIVE_OVERLAY_FAILED",
+                    "pkg=" + session.packageName
+                            + " taskId="
+                            + session.taskId);
+        }
+    }
+
+    private void moveBoundsBy(
+            Session session,
+            int dx,
+            int dy
+    ) {
+        if (session == null
+                || !session.active
+                || session.freeformBounds == null) {
+            return;
+        }
+
+        Rect next =
+                new Rect(
+                        session.freeformBounds);
+
+        next.offset(dx, dy);
+        clampBoundsToDisplay(next);
+
+        updateNativeBounds(
+                session,
+                next,
+                "drag");
+    }
+
+    private void resizeBoundsTo(
+            Session session,
+            int width,
+            int height
+    ) {
+        if (session == null
+                || !session.active
+                || session.freeformBounds == null) {
+            return;
+        }
+
+        DisplayMetrics metrics =
+                systemUiContext
+                        .getResources()
+                        .getDisplayMetrics();
+
+        int minWidth =
+                dp(GuardConfig.outerMinWidthDp());
+
+        int minHeight =
+                dp(GuardConfig.outerMinHeightDp());
+
+        int maxWidth =
+                Math.max(
+                        minWidth,
+                        metrics.widthPixels
+                                - session.freeformBounds.left
+                                - dp(8));
+
+        int maxHeight =
+                Math.max(
+                        minHeight,
+                        metrics.heightPixels
+                                - session.freeformBounds.top
+                                - dp(60));
+
+        int safeWidth =
+                clamp(
+                        width,
+                        minWidth,
+                        maxWidth);
+
+        int safeHeight =
+                clamp(
+                        height,
+                        minHeight,
+                        maxHeight);
+
+        Rect next =
+                new Rect(
+                        session.freeformBounds.left,
+                        session.freeformBounds.top,
+                        session.freeformBounds.left
+                                + safeWidth,
+                        session.freeformBounds.top
+                                + safeHeight);
+
+        updateNativeBounds(
+                session,
+                next,
+                "resize");
+    }
+
+    private void clampBoundsToDisplay(
+            Rect rect
+    ) {
+        if (rect == null
+                || rect.isEmpty()
+                || systemUiContext == null) {
+            return;
+        }
+
+        DisplayMetrics metrics =
+                systemUiContext
+                        .getResources()
+                        .getDisplayMetrics();
+
+        int minLeft = dp(8);
+        int maxLeft =
+                Math.max(
+                        minLeft,
+                        metrics.widthPixels
+                                - rect.width()
+                                - dp(8));
+
+        int minTop = dp(52);
+        int maxTop =
+                Math.max(
+                        minTop,
+                        metrics.heightPixels
+                                - rect.height()
+                                - dp(60));
+
+        int left =
+                clamp(
+                        rect.left,
+                        minLeft,
+                        maxLeft);
+
+        int top =
+                clamp(
+                        rect.top,
+                        minTop,
+                        maxTop);
+
+        rect.offsetTo(left, top);
+    }
+
+    private boolean updateNativeBounds(
+            Session session,
+            Rect bounds,
+            String reason
+    ) {
+        if (session == null
+                || !session.active
+                || bounds == null
+                || bounds.isEmpty()) {
+            return false;
+        }
+
+        Object task =
+                session.taskObject;
+
+        Object atm =
+                activityTaskManager();
+
+        boolean requested =
+                invokeVoidLike(
+                        task,
+                        "setBounds",
+                        new Rect(bounds));
+
+        if (atm != null) {
+            requested |=
+                    invokeVoidLike(
+                            atm,
+                            "resizeTask",
+                            session.taskId,
+                            new Rect(bounds),
+                            0);
+        }
+
+        Rect actual =
+                taskBounds(task);
+
+        boolean success =
+                actual != null
+                        && !actual.isEmpty()
+                        && closeEnough(
+                        actual,
+                        bounds,
+                        dp(10));
+
+        if (success) {
+            session.freeformBounds =
+                    new Rect(actual);
+
+            if (session.overlay != null) {
+                session.overlay.updateBounds(
+                        session.freeformBounds);
+            }
+        }
+
+        log(success
+                        ? "NATIVE_BOUNDS_CHANGED"
+                        : "NATIVE_BOUNDS_CHANGE_FAILED",
+                "pkg=" + session.packageName
+                        + " taskId="
+                        + session.taskId
+                        + " reason=" + reason
+                        + " requested="
+                        + requested
+                        + " requestedBounds="
+                        + bounds
+                        + " actualBounds="
+                        + actual);
+
+        return success;
+    }
+
+    private void injectBack() {
+        Object im = inputManager();
+
+        if (im == null) {
+            log("NATIVE_BACK_FAILED",
+                    "reason=no-input-manager");
+            return;
+        }
+
+        long now =
+                SystemClock.uptimeMillis();
+
+        KeyEvent down =
+                new KeyEvent(
+                        now,
+                        now,
+                        KeyEvent.ACTION_DOWN,
+                        KeyEvent.KEYCODE_BACK,
+                        0);
+
+        KeyEvent up =
+                new KeyEvent(
+                        now,
+                        now,
+                        KeyEvent.ACTION_UP,
+                        KeyEvent.KEYCODE_BACK,
+                        0);
+
+        invokeForBoolean(
+                im,
+                "injectInputEvent",
+                down,
+                0);
+
+        invokeForBoolean(
+                im,
+                "injectInputEvent",
+                up,
+                0);
+
+        log("NATIVE_BACK",
+                "displayId=0");
+    }
+
+    private Object inputManager() {
+        Object cached =
+                inputManager;
+
+        if (cached != null) {
+            return cached;
+        }
+
+        synchronized (this) {
+            if (inputManager == null) {
+                inputManager =
+                        resolveBinderInterface(
+                                "input",
+                                "android.hardware.input.IInputManager$Stub");
+
+                if (inputManager == null) {
+                    inputManager =
+                            resolveBinderInterface(
+                                    "input",
+                                    "android.view.IInputManager$Stub");
+                }
+            }
+
+            return inputManager;
+        }
+    }
+
+    private static Boolean invokeForBoolean(
+            Object receiver,
+            String methodName,
+            Object... args
+    ) {
+        if (receiver == null) return null;
+
+        Method method =
+                findCompatibleMethod(
+                        receiver.getClass(),
+                        methodName,
+                        args);
+
+        if (method == null) return null;
+
+        try {
+            method.setAccessible(true);
+            Object result =
+                    method.invoke(
+                            receiver,
+                            args);
+
+            return result instanceof Boolean
+                    ? (Boolean) result
+                    : true;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private void fallback(
@@ -1448,6 +1910,8 @@ final class NativeFreeformController {
 
         volatile Object activityRecord;
         volatile Rect freeformBounds;
+        volatile NativeTaskOverlay overlay;
+        volatile String nativeBackend = "none";
         volatile boolean active = true;
         volatile int state;
         volatile long lastSeenElapsed =
