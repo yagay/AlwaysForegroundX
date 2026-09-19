@@ -713,9 +713,6 @@ final class VirtualDisplayController {
                 savedWindowY = windowParams.y;
             }
 
-            DisplayMetrics metrics =
-                    context.getResources().getDisplayMetrics();
-
             windowParams.flags |=
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
 
