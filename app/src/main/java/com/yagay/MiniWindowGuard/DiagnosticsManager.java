@@ -215,8 +215,12 @@ final class DiagnosticsManager {
                 .append(GuardApp.getExpectedVersionCode()).append('\n');
         out.append("loadedEngineVersionCode=")
                 .append(GuardApp.getLoadedEngineVersionCode()).append('\n');
+        out.append("systemEngineActive=")
+                .append(GuardApp.isSystemEngineActive()).append('\n');
         out.append("systemEngineCurrent=")
                 .append(GuardApp.isSystemEngineCurrent()).append('\n');
+        out.append("engineUpdatePending=")
+                .append(GuardApp.isEngineUpdatePending()).append('\n');
         out.append("engineStartedAt=")
                 .append(GuardApp.getEngineStartedAt()).append('\n');
         out.append("enginePid=")

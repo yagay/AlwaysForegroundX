@@ -2,6 +2,7 @@ package com.yagay.MiniWindowGuard;
 
 import android.app.Application;
 import android.content.SharedPreferences;
+import android.os.UserManager;
 import android.util.Log;
 
 import java.util.Arrays;
@@ -58,7 +59,12 @@ public final class GuardApp extends Application {
         super.onCreate();
         installCrashHandler();
 
-        commandSeq.set(localPrefs().getInt(ConfigKeys.CONTAINER_COMMAND_SEQ, 0));
+        if (isUserUnlocked()) {
+            commandSeq.set(localPrefs().getInt(
+                    ConfigKeys.CONTAINER_COMMAND_SEQ, 0));
+        } else {
+            commandSeq.set(0);
+        }
 
         XposedServiceHelper.registerListener(new XposedServiceHelper.OnServiceListener() {
             @Override
@@ -69,7 +75,9 @@ public final class GuardApp extends Application {
                 } catch (Throwable ignored) {
                     frameworkName = "LSPosed";
                 }
-                syncAll();
+                if (isUserUnlocked()) {
+                    syncAll();
+                }
                 Log.i(TAG, "LSPosed service connected: " + frameworkName);
             }
 
@@ -97,6 +105,17 @@ public final class GuardApp extends Application {
 
     static boolean isXposedServiceConnected() {
         return service != null;
+    }
+
+    static boolean isUserUnlocked() {
+        GuardApp app = instance;
+        if (app == null) return false;
+        try {
+            UserManager manager = app.getSystemService(UserManager.class);
+            return manager == null || manager.isUserUnlocked();
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     static long getExpectedVersionCode() {
@@ -148,14 +167,26 @@ public final class GuardApp extends Application {
         return getEngineStatus().hookCount;
     }
 
-    static boolean isSystemEngineCurrent() {
-        long expected = getExpectedVersionCode();
+    static boolean isSystemEngineActive() {
         EngineStatusProvider.Status status = getEngineStatus();
         return service != null
                 && hasSystemScope()
-                && expected > 0
-                && status.versionCode == expected
+                && status.versionCode > 0
+                && status.pid > 0
+                && status.hookCount > 0
                 && status.isFromCurrentBoot();
+    }
+
+    static boolean isSystemEngineCurrent() {
+        long expected = getExpectedVersionCode();
+        EngineStatusProvider.Status status = getEngineStatus();
+        return isSystemEngineActive()
+                && expected > 0
+                && status.versionCode == expected;
+    }
+
+    static boolean isEngineUpdatePending() {
+        return isSystemEngineActive() && !isSystemEngineCurrent();
     }
 
     static String getFrameworkName() {
@@ -225,6 +256,11 @@ public final class GuardApp extends Application {
 
     static void sendContainerCommand(String packageName, int state) {
         int safeState = ConfigKeys.sanitizeState(state);
+        if (isUserUnlocked()) {
+            commandSeq.accumulateAndGet(
+                    getInt(ConfigKeys.CONTAINER_COMMAND_SEQ),
+                    Math::max);
+        }
         int seq = commandSeq.incrementAndGet();
 
         localPrefs().edit()
@@ -244,7 +280,7 @@ public final class GuardApp extends Application {
 
     static synchronized boolean syncAll() {
         XposedService current = service;
-        if (current == null) return false;
+        if (current == null || !isUserUnlocked()) return false;
 
         try {
             SharedPreferences.Editor editor =
