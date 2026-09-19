@@ -69,17 +69,20 @@ final class GuardConfig {
                 && targetPackages().contains(packageName);
     }
 
-    static int windowForm() {
-        return ConfigKeys.sanitizeForm(integer(ConfigKeys.SMALL_WINDOW_FORM));
+    static int defaultContainerState() {
+        int state = ConfigKeys.sanitizeState(
+                integer(ConfigKeys.CONTAINER_DEFAULT_STATE));
+        return state == ConfigKeys.STATE_RELEASED
+                ? ConfigKeys.STATE_WINDOW : state;
     }
 
-    static int windowWidth() {
+    static int containerWidth() {
         return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.SMALL_WINDOW_WIDTH), 58);
+                integer(ConfigKeys.CONTAINER_WIDTH), 58);
     }
 
-    static int windowHeight() {
+    static int containerHeight() {
         return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.SMALL_WINDOW_HEIGHT), 66);
+                integer(ConfigKeys.CONTAINER_HEIGHT), 66);
     }
 }
