@@ -100,6 +100,38 @@ public final class MainActivity extends Activity {
                 "关闭后不创建 VirtualDisplay，也不应用始终前台保护。",
                 ConfigKeys.MASTER_ENABLED);
 
+        addSwitch(
+                card,
+                "自动热重载",
+                "安装新版 APK 后，如果当前没有活动小窗，system_server 会自动加载新版 Engine，不需要重启手机。",
+                ConfigKeys.ENGINE_AUTO_RELOAD);
+
+        Button reload = button("立即重新加载 System Engine");
+        reload.setOnClickListener(v -> {
+            if (!GuardApp.isHotReloadAvailable()) {
+                Toast.makeText(
+                        this,
+                        "当前 system_server 还是旧 Bootstrap。安装这一版后需要最后重启一次，之后才能热重载。",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            boolean sent = GuardApp.requestEngineReload();
+            Toast.makeText(
+                    this,
+                    sent
+                            ? "已请求重新加载 Engine。当前小窗会关闭并恢复到原屏幕。"
+                            : "热重载请求同步失败，请重新检测 LSPosed 连接。",
+                    Toast.LENGTH_LONG).show();
+
+            if (engineStatus != null) {
+                engineStatus.postDelayed(
+                        this::refreshStatus,
+                        2500L);
+            }
+        });
+        card.addView(reload);
+
         Button refresh = button("重新检测");
         refresh.setOnClickListener(v -> refreshStatus());
         card.addView(refresh);
@@ -411,21 +443,46 @@ public final class MainActivity extends Activity {
                                 + GuardApp.getFrameworkScope());
                 engineStatus.setTextColor(0xFFB3261E);
             } else if (current) {
-                engineStatus.setText(
-                        "System 引擎：已激活当前版本 · code "
-                                + loaded
-                                + " · pid "
-                                + GuardApp.getEnginePid()
-                                + " · hooks "
-                                + GuardApp.getEngineHookCount());
+                if (GuardApp.isHotReloadAvailable()) {
+                    engineStatus.setText(
+                            "System Engine：code "
+                                    + loaded
+                                    + " · Bootstrap "
+                                    + GuardApp.getBootstrapVersionCode()
+                                    + " · 热重载可用"
+                                    + " · gen "
+                                    + GuardApp.getEngineGeneration()
+                                    + " · 活动小窗 "
+                                    + GuardApp.getEngineActiveSessions()
+                                    + "\n"
+                                    + GuardApp.getEngineReloadMessage());
+                } else {
+                    engineStatus.setText(
+                            "System 引擎：已激活当前版本 · code "
+                                    + loaded
+                                    + " · 当前 Bootstrap 不支持热重载");
+                }
                 engineStatus.setTextColor(0xFF16794A);
             } else if (active) {
-                engineStatus.setText(
-                        "System 引擎：旧版本 · system="
-                                + loaded
-                                + " / App="
-                                + expected
-                                + " · 请重启手机");
+                if (GuardApp.isHotReloadAvailable()) {
+                    engineStatus.setText(
+                            "System Engine：旧 Engine "
+                                    + loaded
+                                    + " / 已安装 APK "
+                                    + expected
+                                    + " · 热重载可用"
+                                    + " · 活动小窗 "
+                                    + GuardApp.getEngineActiveSessions()
+                                    + "\n"
+                                    + "无活动小窗时会自动更新，也可以点击“立即重新加载”。");
+                } else {
+                    engineStatus.setText(
+                            "System 引擎：当前仍是旧 Bootstrap · system="
+                                    + loaded
+                                    + " / App="
+                                    + expected
+                                    + "\n安装这一版后需要最后重启一次；以后更新 APK 不再需要重启手机。");
+                }
                 engineStatus.setTextColor(0xFF9A6700);
             } else {
                 engineStatus.setText(
