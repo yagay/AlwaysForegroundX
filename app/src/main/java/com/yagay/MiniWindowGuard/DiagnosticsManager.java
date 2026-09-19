@@ -116,6 +116,12 @@ final class DiagnosticsManager {
                     "dumpsys media_session", 1_500_000);
             writeCommand(workDir, "22-notification.txt",
                     "dumpsys notification --noredact", 1_500_000);
+            writeCommand(workDir, "23-lsposed-files.txt",
+                    "find /data/adb/lspd -maxdepth 4 -type f 2>/dev/null | sort | head -300",
+                    512_000);
+            writeCommand(workDir, "24-lsposed-recent-logs.txt",
+                    "for f in $(find /data/adb/lspd -maxdepth 4 -type f -name '*.log' 2>/dev/null | head -20); do echo =====$f=====; tail -n 350 $f; done",
+                    2_500_000);
 
             String fullLog = RootManager.capture(
                     "logcat -b all -d -v threadtime -t 30000",
@@ -203,6 +209,8 @@ final class DiagnosticsManager {
         out.append("lsposedConnected=")
                 .append(GuardApp.isXposedServiceConnected()).append('\n');
         out.append("framework=").append(GuardApp.getFrameworkName()).append('\n');
+        out.append("frameworkScope=").append(GuardApp.getFrameworkScope()).append('\n');
+        out.append("hasSystemScope=").append(GuardApp.hasSystemScope()).append('\n');
         out.append("expectedEngineVersionCode=")
                 .append(GuardApp.getExpectedVersionCode()).append('\n');
         out.append("loadedEngineVersionCode=")
@@ -211,6 +219,12 @@ final class DiagnosticsManager {
                 .append(GuardApp.isSystemEngineCurrent()).append('\n');
         out.append("engineStartedAt=")
                 .append(GuardApp.getEngineStartedAt()).append('\n');
+        out.append("enginePid=")
+                .append(GuardApp.getEnginePid()).append('\n');
+        out.append("engineHookCount=")
+                .append(GuardApp.getEngineHookCount()).append('\n');
+        out.append("engineHeartbeatCurrentBoot=")
+                .append(GuardApp.getEngineStatus().isFromCurrentBoot()).append('\n');
         out.append("diagnosticsActive=")
                 .append(GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE)).append('\n');
         out.append("diagnosticsStartedAt=")
@@ -238,7 +252,7 @@ final class DiagnosticsManager {
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
         out.append("31-logcat-filtered.txt: module/TaskSurface/ActivityTaskManager/target-focused view\n");
-        out.append("11-22: system state snapshots\n");
+        out.append("11-24: system state snapshots + LSPosed file/log capture\n");
         out.append("targets/: package/appops/standby/meminfo per protected app\n");
 
         return out.toString();
