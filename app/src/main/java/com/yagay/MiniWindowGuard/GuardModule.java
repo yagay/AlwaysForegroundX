@@ -292,47 +292,6 @@ public final class GuardModule extends XposedModule {
                 continue;
             }
 
-            if (("shouldBeVisible".equals(name)
-                    || "shouldBeVisibleUnchecked".equals(name)
-                    || "isVisibleRequested".equals(name))
-                    && method.getReturnType() == boolean.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-
-                    hook(method).intercept(chain -> {
-                        VirtualDisplayController current = container;
-                        if (!enabled()
-                                || current == null
-                                || !GuardConfig.bool(
-                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
-                                || !current.isManagedTopActivityRecord(
-                                        chain.getThisObject())) {
-                            return chain.proceed();
-                        }
-
-                        String pkg = activityPackage(chain.getThisObject());
-                        int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_RELEASED) {
-                            diag("ACTIVITY_KEEP_VISIBLE",
-                                    "pkg=" + pkg
-                                            + " state=" + state
-                                            + " method=" + name);
-                            return true;
-                        }
-                        return chain.proceed();
-                    });
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE installed ActivityRecord." + name);
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE skipped ActivityRecord."
-                                    + name + " error=" + t);
-                }
-                continue;
-            }
-
             if ("makeInvisible".equals(name)
                     && method.getReturnType() == void.class
                     && method.getParameterCount() == 0) {
@@ -580,91 +539,6 @@ public final class GuardModule extends XposedModule {
                 continue;
             }
 
-            if ("getVisibility".equals(name)
-                    && method.getReturnType() == int.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-
-                    hook(method).intercept(chain -> {
-                        VirtualDisplayController current = container;
-                        if (!enabled()
-                                || current == null
-                                || !GuardConfig.bool(
-                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)) {
-                            return chain.proceed();
-                        }
-
-                        Object resumed = fieldValue(
-                                chain.getThisObject(),
-                                "mResumedActivity");
-                        if (!current.isManagedTopActivityRecord(resumed)) {
-                            return chain.proceed();
-                        }
-
-                        String pkg = activityPackage(resumed);
-                        int state = current.stateForPackage(pkg);
-                        if (state == ConfigKeys.STATE_RELEASED) {
-                            return chain.proceed();
-                        }
-
-                        diag("TASK_VISIBILITY_KEEP",
-                                "pkg=" + pkg
-                                        + " state=" + state
-                                        + " method=getVisibility");
-                        return 0;
-                    });
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE installed TaskFragment.getVisibility");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE skipped TaskFragment.getVisibility error=" + t);
-                }
-                continue;
-            }
-
-            if ("shouldBeVisible".equals(name)
-                    && method.getReturnType() == boolean.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-
-                    hook(method).intercept(chain -> {
-                        VirtualDisplayController current = container;
-                        if (!enabled()
-                                || current == null
-                                || !GuardConfig.bool(
-                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)) {
-                            return chain.proceed();
-                        }
-
-                        Object resumed = fieldValue(
-                                chain.getThisObject(),
-                                "mResumedActivity");
-                        if (!current.isManagedTopActivityRecord(resumed)) {
-                            return chain.proceed();
-                        }
-
-                        String pkg = activityPackage(resumed);
-                        int state = current.stateForPackage(pkg);
-                        if (state == ConfigKeys.STATE_RELEASED) {
-                            return chain.proceed();
-                        }
-
-                        diag("TASK_SHOULD_VISIBLE_KEEP",
-                                "pkg=" + pkg
-                                        + " state=" + state);
-                        return true;
-                    });
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE installed TaskFragment.shouldBeVisible");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE skipped TaskFragment.shouldBeVisible error=" + t);
-                }
-            }
         }
     }
 
