@@ -889,15 +889,10 @@ public final class GuardModule extends XposedModule {
     }
 
     private String targetPackageForProcess(String processName) {
-        if (processName == null || processName.isBlank()) return null;
-
-        for (String pkg : GuardConfig.targetPackages()) {
-            if (processName.equals(pkg)
-                    || processName.startsWith(pkg + ":")) {
-                return pkg;
-            }
-        }
-        return null;
+        TaskSurfaceController current = container;
+        return current == null
+                ? null
+                : current.managedPackageForProcess(processName);
     }
 
     private static String readProcessName(int pid) {
