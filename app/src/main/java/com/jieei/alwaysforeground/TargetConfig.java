@@ -22,6 +22,48 @@ final class TargetConfig {
         }
     }
 
+    static int getSmallWindowForm() {
+        SharedPreferences prefs = remotePreferences;
+        if (prefs == null) return ModeConfig.DEFAULT_SMALL_WINDOW_FORM;
+        try {
+            int form = prefs.getInt(
+                    ModeConfig.KEY_SMALL_WINDOW_FORM,
+                    ModeConfig.DEFAULT_SMALL_WINDOW_FORM);
+            return ModeConfig.isValidSmallWindowForm(form)
+                    ? form : ModeConfig.DEFAULT_SMALL_WINDOW_FORM;
+        } catch (Throwable ignored) {
+            return ModeConfig.DEFAULT_SMALL_WINDOW_FORM;
+        }
+    }
+
+    static int getSmallWindowWidthPercent() {
+        SharedPreferences prefs = remotePreferences;
+        if (prefs == null) return ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH;
+        try {
+            return ModeConfig.clampPercent(
+                    prefs.getInt(
+                            ModeConfig.KEY_SMALL_WINDOW_WIDTH,
+                            ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH),
+                    ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH);
+        } catch (Throwable ignored) {
+            return ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH;
+        }
+    }
+
+    static int getSmallWindowHeightPercent() {
+        SharedPreferences prefs = remotePreferences;
+        if (prefs == null) return ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT;
+        try {
+            return ModeConfig.clampPercent(
+                    prefs.getInt(
+                            ModeConfig.KEY_SMALL_WINDOW_HEIGHT,
+                            ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT),
+                    ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT);
+        } catch (Throwable ignored) {
+            return ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT;
+        }
+    }
+
     static boolean isDiagnosticsActiveFor(String packageName) {
         SharedPreferences prefs = remotePreferences;
         if (prefs == null) return false;
