@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -56,13 +57,15 @@ final class DiagnosticsManager {
 
         Log.i(TAG, "DIAG_SESSION START"
                 + " epochMs=" + started
-                + " targets=" + GuardApp.getTargetPackages());
+                + " package=" + GuardApp.getString(
+                        ConfigKeys.CONTAINER_COMMAND_PACKAGE));
     }
 
     static void stopSession() {
         Log.i(TAG, "DIAG_SESSION STOP"
                 + " epochMs=" + System.currentTimeMillis()
-                + " targets=" + GuardApp.getTargetPackages());
+                + " package=" + GuardApp.getString(
+                        ConfigKeys.CONTAINER_COMMAND_PACKAGE));
         GuardApp.putBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE, false);
     }
 
@@ -77,7 +80,7 @@ final class DiagnosticsManager {
                 return new ExportResult(null, fileName, "cannot-create-work-dir");
             }
 
-            Set<String> targets = GuardApp.getTargetPackages();
+            Set<String> targets = diagnosticPackages();
 
             writeText(new File(workDir, "00-summary.txt"),
                     buildSummary(context, targets));
@@ -87,7 +90,7 @@ final class DiagnosticsManager {
                 copyFile(crash, new File(workDir, "00-last-crash.txt"));
             }
 
-            writeText(new File(workDir, "01-root-status.txt"),
+            writeText(new File(workDir, "01-shell-status.txt"),
                     RootManager.capture("id", 16_384));
 
             writeCommand(workDir, "10-build-properties.txt",
@@ -233,7 +236,9 @@ final class DiagnosticsManager {
                 .append(GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE)).append('\n');
         out.append("diagnosticsStartedAt=")
                 .append(GuardApp.getString(ConfigKeys.DIAGNOSTICS_STARTED_AT)).append('\n');
-        out.append("targets=").append(targets).append("\n\n");
+        out.append("diagnosticPackages=")
+                .append(targets)
+                .append("\n\n");
 
         out.append("[settings]\n");
         for (String key : booleanKeys()) {
@@ -255,9 +260,9 @@ final class DiagnosticsManager {
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
-        out.append("31-logcat-filtered.txt: module/WCT/kill-guard/TaskSurface/ActivityTaskManager/target-focused view\n");
+        out.append("31-logcat-filtered.txt: VirtualDisplay/foreground/lifecycle/audio focused view\n");
         out.append("11-24: system state snapshots + LSPosed file/log capture\n");
-        out.append("targets/: package/appops/standby/meminfo per protected app\n");
+        out.append("targets/: package/appops/standby/meminfo for the last window package\n");
 
         return out.toString();
     }
@@ -265,19 +270,12 @@ final class DiagnosticsManager {
     private static List<String> booleanKeys() {
         ArrayList<String> keys = new ArrayList<>();
         keys.add(ConfigKeys.MASTER_ENABLED);
-        keys.add(ConfigKeys.ROOT_KEEP_ALIVE);
-        keys.add(ConfigKeys.ROOT_DOZE_WHITELIST);
-        keys.add(ConfigKeys.ROOT_STANDBY_ACTIVE);
-        keys.add(ConfigKeys.ROOT_BACKGROUND_APPOPS);
-        keys.add(ConfigKeys.ROOT_NETWORK_WHITELIST);
-        keys.add(ConfigKeys.ROOT_WAKELOCK);
         keys.add(ConfigKeys.SYSTEM_IMPORTANCE_TOP);
         keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
         keys.add(ConfigKeys.AUTO_CONTAINER);
-        keys.add(ConfigKeys.CONTAINER_ALWAYS_ON_TOP);
         return keys;
     }
 
@@ -290,6 +288,9 @@ final class DiagnosticsManager {
                 "WindowManager",
                 "MiniWindowGuard",
                 "CONTAINER",
+                "VirtualDisplay",
+                "VD_",
+                "DisplayManager",
                 "TaskSurface",
                 "SurfaceControl",
                 "OplusHans",
@@ -329,6 +330,16 @@ final class DiagnosticsManager {
         }
 
         return filtered.toString();
+    }
+
+    private static Set<String> diagnosticPackages() {
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        String pkg = GuardApp.getString(
+                ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+        if (pkg != null && !pkg.isBlank()) {
+            result.add(pkg.trim());
+        }
+        return result;
     }
 
     private static void writeCommand(
