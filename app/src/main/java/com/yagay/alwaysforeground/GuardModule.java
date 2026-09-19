@@ -1,6 +1,5 @@
 package com.yagay.alwaysforeground;
 
-import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.SharedPreferences;
 import android.util.Log;
@@ -23,6 +22,8 @@ import io.github.libxposed.api.XposedModuleInterface;
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final String SYSTEM_PACKAGE = "android";
+    // android.app.PROCESS_STATE_TOP is hidden from the public SDK.
+    private static final int PROCESS_STATE_TOP = 2;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
     private final Set<String> firstHits = ConcurrentHashMap.newKeySet();
@@ -136,7 +137,7 @@ public final class GuardModule extends XposedModule {
                                 && args.get(0) instanceof String pkg
                                 && isTargetPackage(pkg)) {
                             hit("AMS.getPackageProcessState TOP " + pkg);
-                            return ActivityManager.PROCESS_STATE_TOP;
+                            return PROCESS_STATE_TOP;
                         }
                         return chain.proceed();
                     });
@@ -160,7 +161,7 @@ public final class GuardModule extends XposedModule {
                                 && args.get(0) instanceof Integer uid
                                 && isTargetUid(uid)) {
                             hit("AMS.getUidProcessState TOP uid=" + uid);
-                            return ActivityManager.PROCESS_STATE_TOP;
+                            return PROCESS_STATE_TOP;
                         }
                         return chain.proceed();
                     });
