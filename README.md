@@ -1,5 +1,25 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.8 — 从真实 Task 身份建立后台 Session
+
+5.3.7 后的新诊断确认，抖音在普通后台切换时 `startPausing()` 已拿到真实
+`Task{#17283 A=10418:com.ss.android.ugc.aweme}`，系统 Task 快照也明确包含
+`mActivityComponent=com.ss.android.ugc.aweme/.main.MainActivity`。但 Controller 的
+`taskPackage()` 仍只查询 top Activity 与 `realActivity`，在 Recents 动画期间这些值可能为空，
+导致 `sessionForTask()` 无法为后台-only App 建立 Session。
+
+5.3.8 增加稳定回退：
+
+- top Activity 取不到包名时，直接对真实 Task 调用统一后的 `objectPackage(task)`；
+- 可从 Task 的 `mActivityComponent / intent / baseIntent / mPackageName` 等身份字段解析；
+- 再增加 `mLastPausedActivity` 回退，覆盖 Recents 动画已经开始暂停的瞬间；
+- 成功解析后直接由 `sessionForTask()` 建立后台 Session，不再依赖此前是否收到 RESUMED 捕获或有效 OPlus TaskInfo 包名。
+
+目标链路：
+`startPausing(Task) → taskPackage → BACKGROUND_PROTECTED → BACKGROUND_PAUSE_BLOCK → BACKGROUND_NOTIFICATION_SHOW`。
+
+Bootstrap API 仍为 4，只修改 HotReload Engine，可直接热重载。
+
 ## 5.3.7 — 修复后台-only App 的 TaskInfo 包名识别
 
 5.3.6 已允许后台播放名单建立 OPlus Task Session，但新诊断确认 Controller 自己的
