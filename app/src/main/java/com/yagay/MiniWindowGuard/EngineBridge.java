@@ -259,24 +259,13 @@ final class EngineBridge {
         return value instanceof Boolean && (Boolean) value;
     }
 
-    boolean isManagedTopActivityRecord(Object activityRecord) {
+    boolean isKnownPackage(String packageName) {
         Object value = safeInvoke(
                 currentEngine(),
-                "isManagedTopActivityRecord",
-                new Class<?>[]{Object.class},
-                activityRecord);
-        return value instanceof Boolean && (Boolean) value;
-    }
-
-    int stateForPackage(String packageName) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "stateForPackage",
+                "isKnownPackage",
                 new Class<?>[]{String.class},
                 packageName);
-        return value instanceof Number
-                ? ((Number) value).intValue()
-                : 4;
+        return value instanceof Boolean && (Boolean) value;
     }
 
     boolean wantsPackage(String packageName) {
@@ -298,6 +287,22 @@ final class EngineBridge {
                 },
                 activityRecord,
                 packageName);
+    }
+
+    void onOplusTaskInfoChanged(Object taskInfo) {
+        safeInvoke(
+                currentEngine(),
+                "onOplusTaskInfoChanged",
+                new Class<?>[]{Object.class},
+                taskInfo);
+    }
+
+    void onOplusTaskVanished(Object taskInfo) {
+        safeInvoke(
+                currentEngine(),
+                "onOplusTaskVanished",
+                new Class<?>[]{Object.class},
+                taskInfo);
     }
 
     String managedPackageForProcess(String processName) {
