@@ -846,21 +846,122 @@ public final class GuardModule extends XposedModule {
 
     private void scheduleEngineHeartbeat(Handler handler) {
         handler.postDelayed(new Runnable() {
-            private int attempts;
+            private int lastReloadSeq = Integer.MIN_VALUE;
+            private long lastAutoAttemptVersion = Long.MIN_VALUE;
+            private long lastAutoAttemptElapsed;
 
             @Override
             public void run() {
-                attempts++;
+                EngineBridge current = engine;
 
-                Context context = resolveSystemContext(systemClassLoader);
-                boolean ok = false;
+                try {
+                    if (current != null) {
+                        int seq = current.reloadSequence();
+
+                        if (lastReloadSeq == Integer.MIN_VALUE) {
+                            lastReloadSeq = seq;
+                        } else if (seq != lastReloadSeq) {
+                            lastReloadSeq = seq;
+                            diag("ENGINE_RELOAD_BEGIN",
+                                    "reason=manual"
+                                            + " seq=" + seq
+                                            + " oldVersion="
+                                            + current.versionCode());
+
+                            boolean reloaded =
+                                    current.reload(
+                                            "manual-seq-" + seq);
+
+                            diag(reloaded
+                                            ? "ENGINE_RELOAD_SUCCESS"
+                                            : "ENGINE_RELOAD_FAILED",
+                                    current.lastReloadMessage());
+                        }
+
+                        long installed =
+                                current.installedVersionCode();
+                        long loaded =
+                                current.versionCode();
+
+                        if (current.shouldAutoReload()
+                                && installed > 0
+                                && installed != loaded) {
+                            int active =
+                                    current.activeSessionCount();
+
+                            long now =
+                                    android.os.SystemClock.elapsedRealtime();
+
+                            if (active == 0
+                                    && (installed
+                                    != lastAutoAttemptVersion
+                                    || now - lastAutoAttemptElapsed
+                                    > 30_000L)) {
+                                lastAutoAttemptVersion = installed;
+                                lastAutoAttemptElapsed = now;
+
+                                diag("ENGINE_RELOAD_BEGIN",
+                                        "reason=auto-apk-update"
+                                                + " installed=" + installed
+                                                + " loaded=" + loaded);
+
+                                boolean reloaded =
+                                        current.reload(
+                                                "auto-apk-update");
+
+                                diag(reloaded
+                                                ? "ENGINE_RELOAD_SUCCESS"
+                                                : "ENGINE_RELOAD_FAILED",
+                                        current.lastReloadMessage());
+                            } else if (active > 0) {
+                                logOnce(
+                                        "engine-reload-pending-" + installed,
+                                        "ENGINE_RELOAD_PENDING"
+                                                + " installed=" + installed
+                                                + " loaded=" + loaded
+                                                + " activeSessions=" + active);
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    log(Log.WARN, TAG,
+                            "ENGINE_RELOAD_WATCH error=" + t);
+                }
+
+                Context context =
+                        resolveSystemContext(systemClassLoader);
 
                 if (context != null) {
                     try {
+                        EngineBridge currentEngine = engine;
+
                         Bundle extras = new Bundle();
                         extras.putLong(
                                 EngineStatusProvider.KEY_VERSION,
+                                currentEngine == null
+                                        ? -1L
+                                        : currentEngine.versionCode());
+                        extras.putLong(
+                                EngineStatusProvider.KEY_BOOTSTRAP_VERSION,
                                 MODULE_VERSION_CODE);
+                        extras.putBoolean(
+                                EngineStatusProvider.KEY_HOT_RELOAD,
+                                true);
+                        extras.putLong(
+                                EngineStatusProvider.KEY_GENERATION,
+                                currentEngine == null
+                                        ? 0L
+                                        : currentEngine.generation());
+                        extras.putString(
+                                EngineStatusProvider.KEY_RELOAD_MESSAGE,
+                                currentEngine == null
+                                        ? "engine unavailable"
+                                        : currentEngine.lastReloadMessage());
+                        extras.putInt(
+                                EngineStatusProvider.KEY_ACTIVE_SESSIONS,
+                                currentEngine == null
+                                        ? -1
+                                        : currentEngine.activeSessionCount());
                         extras.putInt(
                                 EngineStatusProvider.KEY_PID,
                                 Process.myPid());
@@ -868,35 +969,18 @@ public final class GuardModule extends XposedModule {
                                 EngineStatusProvider.KEY_HOOKS,
                                 installedHooks.size());
 
-                        Bundle result = context.getContentResolver().call(
+                        context.getContentResolver().call(
                                 EngineStatusProvider.URI,
                                 EngineStatusProvider.METHOD_MARK,
                                 null,
                                 extras);
-                        ok = result != null && result.getBoolean("ok", false);
                     } catch (Throwable t) {
                         log(Log.WARN, TAG,
-                                "SYSTEM_SCOPE heartbeat failed attempt="
-                                        + attempts + " error=" + t);
+                                "SYSTEM_SCOPE heartbeat failed error=" + t);
                     }
                 }
 
-                if (ok) {
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE heartbeat delivered"
-                                    + " version=" + MODULE_VERSION_CODE
-                                    + " pid=" + Process.myPid()
-                                    + " hooks=" + installedHooks.size());
-                    return;
-                }
-
-                if (attempts < 24) {
-                    handler.postDelayed(this, 5_000L);
-                } else {
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE heartbeat abandoned after "
-                                    + attempts + " attempts");
-                }
+                handler.postDelayed(this, 2_000L);
             }
         }, 2_000L);
     }
