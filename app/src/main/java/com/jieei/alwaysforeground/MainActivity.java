@@ -3,6 +3,7 @@ package com.jieei.alwaysforeground;
 import android.app.Activity;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.text.InputType;
 import android.text.SpannableStringBuilder;
 import android.text.style.StyleSpan;
 import android.view.Gravity;
@@ -82,6 +83,80 @@ public final class MainActivity extends Activity {
                     Toast.LENGTH_SHORT).show();
         });
         root.addView(modes, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView windowHeading = new TextView(this);
+        windowHeading.setText("Root + LSPosed 小窗容器");
+        windowHeading.setTextSize(19);
+        windowHeading.setTextColor(0xFF111111);
+        windowHeading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        windowHeading.setPadding(0, dp(26), 0, dp(8));
+        root.addView(windowHeading);
+
+        TextView windowHelp = new TextView(this);
+        windowHelp.setText("强力模式下，后台应用自己启动本包页面时，优先通过 Root 调用系统/OPlus 小窗 API。三种形态都保留真实 Activity 生命周期，不伪装窗口焦点。");
+        windowHelp.setTextSize(14);
+        windowHelp.setTextColor(0xFF555555);
+        windowHelp.setLineSpacing(0, 1.15f);
+        root.addView(windowHelp);
+
+        int selectedForm = AlwaysForegroundApp.getConfiguredSmallWindowForm();
+        RadioGroup windowForms = new RadioGroup(this);
+        windowForms.setOrientation(RadioGroup.VERTICAL);
+        addSmallWindowForm(windowForms, ModeConfig.SMALL_WINDOW_FORM_WINDOW,
+                "自由小窗", "按下面设置的宽高比例打开系统小窗。", selectedForm);
+        addSmallWindowForm(windowForms, ModeConfig.SMALL_WINDOW_FORM_ICON,
+                "图标", "先进入系统小窗，再自动缩成 Mini Zoom/悬浮图标。", selectedForm);
+        addSmallWindowForm(windowForms, ModeConfig.SMALL_WINDOW_FORM_HIDDEN,
+                "最小化隐藏", "保持任务活动，但隐藏小窗和图标。", selectedForm);
+        root.addView(windowForms, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout sizeRow = new LinearLayout(this);
+        sizeRow.setOrientation(LinearLayout.HORIZONTAL);
+        sizeRow.setPadding(0, dp(6), 0, dp(6));
+
+        EditText widthInput = new EditText(this);
+        widthInput.setSingleLine(true);
+        widthInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        widthInput.setHint("宽度 %");
+        widthInput.setText(String.valueOf(
+                AlwaysForegroundApp.getConfiguredSmallWindowWidth()));
+        sizeRow.addView(widthInput, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        EditText heightInput = new EditText(this);
+        heightInput.setSingleLine(true);
+        heightInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        heightInput.setHint("高度 %");
+        heightInput.setText(String.valueOf(
+                AlwaysForegroundApp.getConfiguredSmallWindowHeight()));
+        sizeRow.addView(heightInput, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        root.addView(sizeRow);
+
+        Button saveWindow = new Button(this);
+        saveWindow.setText("保存小窗设置");
+        saveWindow.setOnClickListener(v -> {
+            int form = windowForms.getCheckedRadioButtonId() - 100;
+            int width = parsePercent(
+                    widthInput.getText().toString(),
+                    ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH);
+            int height = parsePercent(
+                    heightInput.getText().toString(),
+                    ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT);
+            boolean synced = AlwaysForegroundApp.setSmallWindowConfig(
+                    form, width, height);
+            widthInput.setText(String.valueOf(
+                    ModeConfig.clampPercent(width, ModeConfig.DEFAULT_SMALL_WINDOW_WIDTH)));
+            heightInput.setText(String.valueOf(
+                    ModeConfig.clampPercent(height, ModeConfig.DEFAULT_SMALL_WINDOW_HEIGHT)));
+            Toast.makeText(this,
+                    synced ? "小窗设置已同步" : "小窗设置已保存，等待 LSPosed 服务连接",
+                    Toast.LENGTH_SHORT).show();
+        });
+        root.addView(saveWindow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView diagHeading = new TextView(this);
@@ -175,6 +250,34 @@ public final class MainActivity extends Activity {
             status.setText("未开始自动定位");
             status.setTextColor(0xFF666666);
             button.setText("开始自动定位 Hook 点");
+        }
+    }
+
+    private void addSmallWindowForm(
+            RadioGroup group,
+            int form,
+            String title,
+            String description,
+            int selectedForm
+    ) {
+        RadioButton radio = new RadioButton(this);
+        radio.setId(100 + form);
+        radio.setText(title + "\n" + description);
+        radio.setTextSize(15);
+        radio.setTextColor(0xFF111111);
+        radio.setGravity(Gravity.TOP);
+        radio.setPadding(0, dp(5), 0, dp(8));
+        radio.setLineSpacing(0, 1.12f);
+        radio.setChecked(form == selectedForm);
+        group.addView(radio, new RadioGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private static int parsePercent(String text, int fallback) {
+        try {
+            return ModeConfig.clampPercent(Integer.parseInt(text.trim()), fallback);
+        } catch (Throwable ignored) {
+            return fallback;
         }
     }
 
