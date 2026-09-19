@@ -4,8 +4,9 @@ import android.app.Application;
 import android.content.SharedPreferences;
 import android.util.Log;
 
-import java.security.SecureRandom;
-import java.util.UUID;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -21,27 +22,18 @@ public final class GuardApp extends Application {
             ConfigKeys.ROOT_BACKGROUND_APPOPS,
             ConfigKeys.ROOT_NETWORK_WHITELIST,
             ConfigKeys.ROOT_WAKELOCK,
-            ConfigKeys.SPOOF_PROCESS_IMPORTANCE,
-            ConfigKeys.SPOOF_PROCESS_LIFECYCLE,
-            ConfigKeys.SPOOF_WINDOW_FOCUS,
-            ConfigKeys.SPOOF_SCREEN_INTERACTIVE,
-            ConfigKeys.SPOOF_KEYGUARD,
-            ConfigKeys.SPOOF_BACKGROUND_RESTRICTION,
-            ConfigKeys.SPOOF_POWER_STATE,
-            ConfigKeys.MEDIA_CONTINUITY,
-            ConfigKeys.MEDIA_ECHO_GUARD,
-            ConfigKeys.AUTO_SMALL_WINDOW,
-            ConfigKeys.AOSP_FREEFORM_FALLBACK,
-            ConfigKeys.DIAGNOSTICS_ACTIVE
+            ConfigKeys.SYSTEM_IMPORTANCE_TOP,
+            ConfigKeys.SYSTEM_HAS_RESUMED,
+            ConfigKeys.SYSTEM_KEEP_MINI_RESUMED,
+            ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME,
+            ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT,
+            ConfigKeys.AOSP_FREEFORM_FALLBACK
     };
 
     private static final String[] INT_KEYS = {
             ConfigKeys.SMALL_WINDOW_FORM,
             ConfigKeys.SMALL_WINDOW_WIDTH,
-            ConfigKeys.SMALL_WINDOW_HEIGHT,
-            ConfigKeys.BACKGROUND_CONFIRM_MS,
-            ConfigKeys.MEDIA_RESUME_DELAY_MS,
-            ConfigKeys.ECHO_GUARD_MS
+            ConfigKeys.SMALL_WINDOW_HEIGHT
     };
 
     private static volatile GuardApp instance;
@@ -57,7 +49,6 @@ public final class GuardApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
-        ensureBridgeToken();
 
         XposedServiceHelper.registerListener(new XposedServiceHelper.OnServiceListener() {
             @Override
@@ -123,14 +114,27 @@ public final class GuardApp extends Application {
         syncAll();
     }
 
-    static void resetDefaults() {
-        String token = ensureBridgeToken();
-        localPrefs().edit().clear().putString(ConfigKeys.ROOT_BRIDGE_TOKEN, token).commit();
-        syncAll();
+    static Set<String> getTargetPackages() {
+        String raw = getString(ConfigKeys.TARGET_PACKAGES);
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        if (!raw.isBlank()) {
+            for (String line : raw.split("\n")) {
+                String pkg = line.trim();
+                if (!pkg.isEmpty()) result.add(pkg);
+            }
+        }
+        return result;
     }
 
-    static String bridgeToken() {
-        return ensureBridgeToken();
+    static void setTargetPackages(Set<String> packages) {
+        String[] sorted = packages.toArray(new String[0]);
+        Arrays.sort(sorted);
+        putString(ConfigKeys.TARGET_PACKAGES, String.join("\n", sorted));
+    }
+
+    static void resetDefaults() {
+        localPrefs().edit().clear().commit();
+        syncAll();
     }
 
     static synchronized boolean syncAll() {
@@ -147,28 +151,13 @@ public final class GuardApp extends Application {
             for (String key : INT_KEYS) {
                 editor.putInt(key, getInt(key));
             }
-
-            editor.putString(ConfigKeys.ROOT_BRIDGE_TOKEN, ensureBridgeToken());
             editor.putString(
-                    ConfigKeys.DIAGNOSTICS_TARGET,
-                    getString(ConfigKeys.DIAGNOSTICS_TARGET));
-
+                    ConfigKeys.TARGET_PACKAGES,
+                    getString(ConfigKeys.TARGET_PACKAGES));
             return editor.commit();
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync remote preferences", t);
             return false;
         }
-    }
-
-    private static String ensureBridgeToken() {
-        SharedPreferences prefs = localPrefs();
-        String existing = prefs.getString(ConfigKeys.ROOT_BRIDGE_TOKEN, "");
-        if (existing != null && !existing.isEmpty()) return existing;
-
-        String token = UUID.randomUUID()
-                + "-"
-                + Long.toHexString(new SecureRandom().nextLong());
-        prefs.edit().putString(ConfigKeys.ROOT_BRIDGE_TOKEN, token).commit();
-        return token;
     }
 }
