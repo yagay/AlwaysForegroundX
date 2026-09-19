@@ -97,7 +97,7 @@ public final class MainActivity extends Activity {
 
     private void addStatusCard(LinearLayout parent) {
         LinearLayout card = card(parent, "运行状态",
-                "LSPosed 只需要给本模块勾选 System Framework / system_server，不要再勾目标 App。");
+                "LSPosed 作用域已固定为 System Framework / system_server（system），不再需要手动给目标 App 勾作用域。");
 
         rootStatus = statusLine("Root：检测中…");
         card.addView(rootStatus);
@@ -126,7 +126,7 @@ public final class MainActivity extends Activity {
         });
         card.addView(overlayPermission);
 
-        card.addView(statusLine("LSPosed 作用域：system / system_server"));
+        card.addView(statusLine("LSPosed 固定作用域：system / system_server"));
         card.addView(statusLine("模块包名：com.yagay.MiniWindowGuard"));
 
         addSwitch(card,
@@ -375,7 +375,7 @@ public final class MainActivity extends Activity {
                 "核心不依赖厂商小窗，也不 Hook 单独 App。");
 
         card.addView(detailBlock("LSPosed",
-                "• 作用域只选 System Framework / system_server (android)。\n"
+                "• 固定作用域：System Framework / system_server（system）。\n"
                         + "• system_server 直接管理 ActivityRecord、Task 和 SurfaceControl。\n"
                         + "• 不需要给红果、视频 App、浏览器等目标 App勾 LSPosed。"));
 
