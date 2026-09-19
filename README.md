@@ -1,220 +1,190 @@
 # MiniWindowGuard / 小窗守护
 
-## 4.5.2
+MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
 
-4.5.2 根据 OxygenOS 16 实机诊断加入 **NativeBounds** 模式。
+## 4.3.0
 
-实机已经确认：
+4.3.0 引入 **固定 Bootstrap + 可热重载 Engine**。
 
-- 标准 `WINDOWING_MODE_FREEFORM` 会被 OxygenOS 拒绝，Task 仍保持 fullscreen；
-- 但同一个 display 0 上，Task 的真实 bounds 可以成功变成小窗尺寸；
-- `setAlwaysOnTop(true)` 也会生效；
-- 例如红果 Task 17044 已实际从 1272×2772 改成 774×1330；
-- 4.5.1 只是因为检测到 windowingMode 仍是 fullscreen，就误判失败并回退到 VirtualDisplay。
+目标是解决开发测试阶段最麻烦的问题：以前每次更新 APK 后，system_server 里仍然运行旧模块 ClassLoader，因此必须重启手机。现在只有 Hook 注册层固定驻留，窗口、VirtualDisplay、输入、前台策略和大部分运行逻辑都放进可重新加载的 Engine。
 
-4.5.2 不再强制要求 FREEFORM。
+### 第一次升级
 
-Native 主引擎现在接受两种后端：
+从 4.2.x 或更早版本升级到 4.3.0：
 
-1. `freeform`
-   - ROM 接受标准 Android FREEFORM；
-2. `bounded-fullscreen`
-   - ROM 保持 fullscreen mode；
-   - 但 Task bounds 已真正变小；
-   - Task 仍留在原 display；
-   - SurfaceView / MediaCodec / WebView / GL / 输入焦点继续属于原系统 Task。
+1. 安装 4.3.0 APK。
+2. 仍然需要 **最后重启一次手机**。
+3. 重启后，新的 Bootstrap 会进入 system_server。
+4. 设置页会显示：
+   - Bootstrap code
+   - Engine code
+   - 热重载可用
+   - Engine generation
+   - 活动小窗数量
+   - 上一次 reload 结果
 
-只有连真实 Task bounds 都无法修改时，才回退 VirtualDisplay。
+完成这一次之后，正常 APK 更新不再需要重启手机。
 
-### 原生控制层
+### 以后更新 APK
 
-NativeBounds 新增轻量控制层：
+Bootstrap 每 2 秒检查：
 
-- 返回
-- 拖动标题栏移动真实 Task
-- 缩小
-- 隐藏
-- 关闭/恢复原 Task
-- 右下角拖动改变真实 Task bounds
-- 最小化/隐藏后显示恢复按钮
+- 当前安装 APK 的 versionCode
+- 当前运行 Engine 的 versionCode
+- 手动 reload sequence
+- 当前活动小窗数量
 
-控制层只是 TYPE_APPLICATION_OVERLAY 按钮和手柄，不包含 App 画面。
+默认开启 **自动热重载**。
 
-App 内容仍然由系统 WindowManager / SurfaceFlinger 直接显示，不经过 TextureView。
-
-### 关键日志
-
-- `NATIVE_BOUNDS_APPLIED`
-- `NATIVE_BOUNDS_CHANGED`
-- `NATIVE_BOUNDS_CHANGE_FAILED`
-- `NATIVE_OVERLAY_READY`
-- `NATIVE_OVERLAY_FAILED`
-- `NATIVE_FREEFORM_FAILED`
-- `NATIVE_FALLBACK_TO_VD`
-
-如果看到：
+如果安装新版 APK 时没有活动小窗：
 
 ```
-NATIVE_BOUNDS_APPLIED backend=bounded-fullscreen
-NATIVE_OVERLAY_READY
+APK 更新
+  ↓
+Bootstrap 检测 versionCode 不一致
+  ↓
+停止旧 Engine
+  ↓
+从当前安装 APK sourceDir 创建新的 PathClassLoader
+  ↓
+加载 HotReloadEngine
+  ↓
+启动新版 VirtualDisplay / 输入 / 前台逻辑
+  ↓
+原子切换 current Engine
 ```
 
-说明已经完全走 NativeBounds，不应该再创建 `MiniWindowGuard-<taskId>` VirtualDisplay。
+整个过程不重启 system_server，也不重启手机。
 
-## 4.5.1
+如果更新时仍有活动小窗，自动 reload 会暂缓，避免突然关闭正在运行的窗口。可以：
 
-4.5.1 修复 4.5.0 中目标 App 启动过快时 Native Freeform 没有真正接管的问题。
+- 先关闭当前小窗，Bootstrap 会自动加载新版；
+- 或在设置页点击 **“立即重新加载 System Engine”**，强制 reload。强制 reload 会关闭当前小窗并把对应 Task 恢复到原 display。
 
-根因是：
+### Reload 失败保护
 
-- App 页面先写入 `container_command_seq/package/state`；
-- 然后立即 `startActivity()`；
-- Engine 原来每 180ms 才轮询一次命令；
-- 某些 App 在这 180ms 内已经进入 RESUMED；
-- ActivityRecord.setState Hook 检查时 `pendingPackage` 还没更新，因此错过 capture。
+新版 Engine 会先完成：
 
-现在 `wantsPackage()` 会同步读取尚未被轮询线程消费的新命令：
+- APK 路径解析
+- ClassLoader 创建
+- Engine 类实例化
+- Bootstrap API 兼容性检查
 
-- command seq 不等于 Engine 已消费 seq；
-- package 与当前 RESUMED Activity 一致；
-- state 不是 RELEASED；
+确认候选 Engine 可以加载后，才停止旧 Engine。
 
-满足后直接 capture，不需要等待轮询。
+如果新版启动失败：
 
-这个修复同时应用于：
+- Bootstrap 尝试重新启动旧 Engine；
+- 保留旧 Engine 引用；
+- 写入 `ENGINE_RELOAD_FAILED`；
+- 如果回滚也失败，会记录 `ENGINE_ROLLBACK_FAILED`。
 
-- Native Freeform 主引擎；
-- VirtualDisplay 后备引擎。
+### Bootstrap 与 Engine
 
-这样既消除启动竞态，也不会让已经消费过的旧命令永久生效。
+Bootstrap 负责：
 
-## 4.5.0
+- LSPosed system_server Hook 注册
+- Hook 回调入口
+- Engine ClassLoader 生命周期
+- 自动/手动热重载
+- Engine 状态上报
 
-4.5.0 新增 **Native Freeform / Task Bounds 主引擎**。
+Engine 负责：
 
-这次不再把“系统小窗为什么正常、VirtualDisplay 为什么会遇到视频 Surface 问题”继续当成尺寸问题修补，而是直接改变显示架构。
+- VirtualDisplay
+- TextureView / Surface
+- 输入注入
+- 小窗拖动 / resize
+- 图标 / 隐藏 / 恢复
+- 当前受管 Task
+- 前台策略数据
+- Engine 级运行逻辑
 
-### 默认：Native Freeform
+Bootstrap Hook 只安装一次，不会因为 reload 重复注册。
 
-默认开启：
+### 什么时候仍然需要重启
 
-`优先使用系统原生小窗（推荐）`
+普通功能更新原则上不需要重启，例如：
 
-Native 模式：
+- 修复黑屏
+- 修复输入
+- 修改 VirtualDisplay
+- 修改窗口 UI
+- 修改 resize
+- 修改图标 / 隐藏
+- 修改 Engine 内部前台策略
+- 修改诊断
 
-- Task 保持在原来的 display；
-- 不创建新的 VirtualDisplay；
-- 不创建 TextureView 作为内容宿主；
-- 不把视频 SurfaceView / MediaCodec Surface 跨 display 搬运；
-- 直接请求 Task 使用 FREEFORM windowing mode；
-- 直接调整 Task bounds；
-- WindowManager / SurfaceFlinger / InputDispatcher 继续维护原来的窗口和 Surface 树；
-- 视频、WebView、GL、SurfaceView 的行为更接近系统自带小窗。
+只有以后修改了 **Bootstrap 本身**，例如：
 
-AOSP 的 desktop/freeform 也是以 Task windowing mode、bounds 和 task surface 为核心，而不是把 Task 迁移到另一个 VirtualDisplay。
+- 新增以前没有注册过的 system_server Hook 点
+- 改变 Bootstrap / Engine 接口版本
+- 修改 LSPosed 初始化方式
 
-### 自动后备
+才可能再次需要重启 system_server / 手机。
 
-Native 引擎会验证：
+## 4.2 窗口架构
 
-- windowing mode 是否进入 freeform / multi-window；
-- Task bounds 是否真的变成请求的小窗范围。
+窗口层继续使用 MiniWindowGuard 自己实现的 VirtualDisplay 引擎：
 
-如果 ROM 拒绝 FREEFORM，或者 bounds 没真正生效，会记录：
+- system_server 创建独立 VirtualDisplay；
+- 使用稳定 `TextureView + SurfaceTexture + Surface`；
+- Surface 就绪后才迁移 Task；
+- 宿主窗口存活期间不 remove/add 根 View；
+- VirtualDisplay 使用 `SUPPORTS_TOUCH / TRUSTED / OWN_FOCUS / STEAL_TOP_FOCUS_DISABLED`；
+- 触摸事件重新构造并带目标 displayId 注入；
+- resize 手势移动阶段只预览，松手时才提交一次 VirtualDisplay resize；
+- 标题栏直接提供返回、缩小成图标、隐藏和关闭。
 
-`NATIVE_FREEFORM_FAILED`
+## 始终前台
 
-然后直接把同一个 ActivityRecord 交给原来的 VirtualDisplay 引擎：
+MiniWindowGuard 保留自己的 system_server 前台保护：
 
-`NATIVE_FALLBACK_TO_VD`
+- 进程状态保持前台级别；
+- `hasResumedActivity(uid)` 保持为 true；
+- 拦截真实 pause / stop；
+- 保持客户端可见；
+- 阻止普通最近任务 / OEM 清理链路强杀。
 
-不需要用户重新打开目标 App。
+## 诊断
 
-### 原生模式状态
+诊断 ZIP 现在额外记录：
 
-主要日志：
+- `bootstrapVersionCode`
+- `loadedEngineVersionCode`
+- `hotReloadAvailable`
+- `engineGeneration`
+- `engineActiveSessions`
+- `engineReloadMessage`
+- `engine_reload_seq`
 
-- `NATIVE_ENGINE_READY`
-- `NATIVE_TASK_CAPTURED`
-- `NATIVE_FREEFORM_APPLIED`
-- `NATIVE_FREEFORM_FAILED`
-- `NATIVE_FALLBACK_TO_VD`
-- `NATIVE_WINDOW_READY`
-- `NATIVE_FOCUS`
-- `NATIVE_MOVE_BACK`
-- `NATIVE_TASK_RELEASED`
+关键日志：
 
-### VirtualDisplay 兼容模式
-
-关闭：
-
-`优先使用系统原生小窗（推荐）`
-
-然后点击：
-
-`立即重新加载 System Engine`
-
-即可继续使用 4.4.x 的 VirtualDisplay / TextureView 引擎。
-
-VirtualDisplay 的固定内部画布、48% 兼容比例和外部最小尺寸设置继续保留，作为后备方案。
-
-### 始终前台
-
-Native Freeform 只替换显示引擎，不删除现有 system_server 前台保护。
-
-继续保留：
-
-- 进程状态保持 TOP；
-- hasResumedActivity；
-- Activity pause / invisible 拦截；
-- 最近任务/OEM 清理链路保护。
-
-因此结构变成：
-
-```
-显示：
-Native Task / Freeform
-        ↓
-系统 WindowManager / SurfaceFlinger
-
-前台保护：
-MiniWindowGuard system_server hooks
-```
-
-### 热重载
-
-4.5.0 没有修改 LSPosed Bootstrap Hook 注册接口。
-
-如果 4.3.x 以后已经完成过一次 Bootstrap 重启：
-
-- 安装 4.5.0 后不需要再次重启手机；
-- 没有活动小窗时自动热重载；
-- 或点击“立即重新加载 System Engine”。
-
-### 设计目标
-
-Native 模式的重点不是复刻某个 OEM 私有 API，而是优先使用 Android Task/freeform 体系。
-
-这样可以避免 VirtualDisplay 路线中的：
-
-- displayId 切换；
-- 视频 Surface 首次创建尺寸敏感；
-- TextureView 与内部画布尺寸不同步；
-- 副屏 focused window 竞态；
-- 输入 displayId 映射；
-- VirtualDisplay resize 触发大量 configuration change。
-
-VirtualDisplay 仍然保留，因为部分 ROM 可能完全拒绝标准 freeform。
+- `ENGINE_RELOAD_BEGIN`
+- `ENGINE_RELOAD_SUCCESS`
+- `ENGINE_RELOAD_FAILED`
+- `ENGINE_RELOAD_PENDING`
+- `ENGINE_ROLLBACK_FAILED`
+- `VD_TASK_CAPTURED`
+- `VD_WINDOW_CREATED`
+- `VD_SURFACE_READY`
+- `VD_TASK_MOVED`
+- `VD_FOCUS`
+- `VD_INPUT_DOWN`
+- `VD_RESIZE_COMMIT`
+- `VD_MINIMIZED`
+- `VD_HIDDEN`
+- `VD_RESTORE`
 
 ## 开源架构参考
 
 设计过程中研究过：
 
-- Android AOSP Task / WindowContainerTransaction / Desktop Windowing
 - YAMF² / YAMFsquared
 - YAMF
 - FreeformShell
+- Android AOSP DisplayManager / ActivityTaskManager / InputManager
 
-这些项目仅用于理解公开架构和系统行为。MiniWindowGuard 当前实现为本项目重新实现。
+这些项目用于理解公开架构与系统行为。MiniWindowGuard 当前窗口与热重载 Engine 均为本项目重新实现。
 
 本仓库使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
