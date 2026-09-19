@@ -12,10 +12,10 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -34,6 +34,7 @@ public final class ContainerOverlayService extends Service {
 
     private WindowManager windowManager;
     private View titleBar;
+    private View windowHandle;
     private View miniIcon;
     private View actionMenu;
 
@@ -108,6 +109,7 @@ public final class ContainerOverlayService extends Service {
 
         if (currentState == ConfigKeys.STATE_WINDOW) {
             showTitleBar();
+            showWindowHandle();
         } else if (currentState == ConfigKeys.STATE_ICON) {
             showMiniIcon();
         }
@@ -151,23 +153,6 @@ public final class ContainerOverlayService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1f));
 
-        Button more = new Button(this);
-        more.setText("⋮");
-        more.setTextSize(22);
-        more.setTextColor(0xFFFFFFFF);
-        more.setAllCaps(false);
-        more.setMinWidth(0);
-        more.setMinimumWidth(0);
-        more.setPadding(
-                ContainerGeometry.dp(getResources(), 10),
-                0,
-                ContainerGeometry.dp(getResources(), 10),
-                0);
-        more.setOnClickListener(v -> toggleActionMenu(bounds));
-        bar.addView(more, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.MATCH_PARENT));
-
         WindowManager.LayoutParams lp = overlayParams(
                 bounds.width(),
                 height);
@@ -182,20 +167,68 @@ public final class ContainerOverlayService extends Service {
         }
     }
 
-    private void toggleActionMenu(Rect bounds) {
-        if (actionMenu != null) {
-            dismissActionMenu();
-            return;
+    private void showWindowHandle() {
+        if (windowManager == null || windowHandle != null) return;
+
+        Rect bounds = ContainerGeometry.visibleBounds(
+                getResources(),
+                ConfigKeys.sanitizePercent(
+                        GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH), 58),
+                ConfigKeys.sanitizePercent(
+                        GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT), 66));
+
+        int size = ContainerGeometry.dp(getResources(), 42);
+
+        Button handle = new Button(this);
+        handle.setText("⋮");
+        handle.setTextSize(22);
+        handle.setTextColor(0xFFFFFFFF);
+        handle.setAllCaps(false);
+        handle.setMinWidth(0);
+        handle.setMinimumWidth(0);
+        handle.setPadding(0, 0, 0, 0);
+
+        GradientDrawable handleBackground = new GradientDrawable();
+        handleBackground.setColor(0xEE202328);
+        handleBackground.setCornerRadius(
+                ContainerGeometry.dp(getResources(), 12));
+        handle.setBackground(handleBackground);
+
+        handle.setOnClickListener(v -> toggleActionMenu());
+
+        WindowManager.LayoutParams lp = overlayParams(size, size);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = Math.max(0, bounds.right - size);
+        lp.y = Math.max(0, bounds.top - size);
+
+        try {
+            windowManager.addView(handle, lp);
+            windowHandle = handle;
+        } catch (Throwable t) {
+            CrashStore.record(
+                    this,
+                    "ContainerOverlayService.showWindowHandle",
+                    t);
         }
-        showActionMenu(bounds);
     }
 
-    private void showActionMenu(Rect bounds) {
+    private void toggleActionMenu() {
+        if (actionMenu != null) {
+            dismissActionMenu();
+        } else {
+            showActionMenu();
+        }
+    }
+
+    private void showActionMenu() {
         if (windowManager == null || actionMenu != null) return;
 
-        FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(0x01000000);
-        root.setOnClickListener(v -> dismissActionMenu());
+        Rect bounds = ContainerGeometry.visibleBounds(
+                getResources(),
+                ConfigKeys.sanitizePercent(
+                        GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH), 58),
+                ConfigKeys.sanitizePercent(
+                        GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT), 66));
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -204,9 +237,6 @@ public final class ContainerOverlayService extends Service {
                 ContainerGeometry.dp(getResources(), 6),
                 ContainerGeometry.dp(getResources(), 6),
                 ContainerGeometry.dp(getResources(), 6));
-        panel.setOnClickListener(v -> {
-            // Consume taps inside the panel. Menu items close it explicitly.
-        });
 
         GradientDrawable panelBackground = new GradientDrawable();
         panelBackground.setColor(0xFFF8F9FA);
@@ -215,7 +245,7 @@ public final class ContainerOverlayService extends Service {
         panel.setBackground(panelBackground);
 
         panel.addView(menuButton(
-                "放大（全屏）",
+                "放大",
                 ConfigKeys.STATE_RELEASED));
         panel.addView(menuButton(
                 "小窗",
@@ -227,36 +257,35 @@ public final class ContainerOverlayService extends Service {
                 "隐藏",
                 ConfigKeys.STATE_HIDDEN));
 
+        panel.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
+                dismissActionMenu();
+                return true;
+            }
+            return false;
+        });
+
         int menuWidth = ContainerGeometry.dp(getResources(), 176);
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-
-        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
-                menuWidth,
-                FrameLayout.LayoutParams.WRAP_CONTENT);
-        panelParams.gravity = Gravity.TOP | Gravity.START;
-        panelParams.leftMargin = Math.max(
-                ContainerGeometry.dp(getResources(), 8),
-                Math.min(
-                        screenWidth - menuWidth
-                                - ContainerGeometry.dp(getResources(), 8),
-                        bounds.right - menuWidth));
-        panelParams.topMargin = Math.max(
-                ContainerGeometry.dp(getResources(), 8),
-                bounds.top);
-        root.addView(panel, panelParams);
-
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
+                menuWidth,
+                WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
+        lp.x = Math.max(
+                ContainerGeometry.dp(getResources(), 8),
+                bounds.right - menuWidth);
+        lp.y = Math.max(
+                ContainerGeometry.dp(getResources(), 8),
+                bounds.top);
 
         try {
-            windowManager.addView(root, lp);
-            actionMenu = root;
+            windowManager.addView(panel, lp);
+            actionMenu = panel;
         } catch (Throwable t) {
             CrashStore.record(
                     this,
@@ -280,8 +309,6 @@ public final class ContainerOverlayService extends Service {
                 ContainerGeometry.dp(getResources(), 14),
                 0);
         button.setOnClickListener(v -> {
-            // Close first so even a slow/failed state command never leaves
-            // the menu stuck over the screen.
             dismissActionMenu();
             sendState(state);
         });
@@ -368,6 +395,14 @@ public final class ContainerOverlayService extends Service {
             } catch (Throwable ignored) {
             }
             titleBar = null;
+        }
+
+        if (windowHandle != null) {
+            try {
+                windowManager.removeViewImmediate(windowHandle);
+            } catch (Throwable ignored) {
+            }
+            windowHandle = null;
         }
 
         if (miniIcon != null) {
