@@ -229,22 +229,17 @@ public final class HongguoBackgroundModule extends XposedModule {
      * z05.b from becoming the owner that can play subsequent episodes in the background.
      */
     private static boolean isNativeSeriesHandoffPause() {
-        boolean contextInvisible = false;
-        boolean uiPause = false;
-
+        // P0 is the series UI-player lifecycle pause endpoint. In 7.3.5.32 it is reached from
+        // both the context-invisible handoff and Fragment.onStop. Do not suppress any player
+        // pause below P0: Hongguo needs a clean UI-player pause/detach before z05.b can own and
+        // continuously advance the background series.
         for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
-            String cls = frame.getClassName();
-            String method = frame.getMethodName();
-
-            if (SERIES_LIFECYCLE_OBSERVER.equals(cls) && "a".equals(method)) {
-                contextInvisible = true;
-            }
-            if (SERIES_FRAGMENT.equals(cls) && "P0".equals(method)) {
-                uiPause = true;
+            if (SERIES_FRAGMENT.equals(frame.getClassName())
+                    && "P0".equals(frame.getMethodName())) {
+                return true;
             }
         }
-
-        return contextInvisible && uiPause;
+        return false;
     }
 
     /**
