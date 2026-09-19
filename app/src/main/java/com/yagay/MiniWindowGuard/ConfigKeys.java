@@ -18,6 +18,8 @@ final class ConfigKeys {
             "system_block_remove_kill";
 
     static final String AUTO_CONTAINER = "auto_container";
+    static final String OPLUS_SYSTEM_WINDOW =
+            "oplus_system_window";
     static final String CONTAINER_WIDTH = "container_width";
     static final String CONTAINER_HEIGHT = "container_height";
 
@@ -48,7 +50,8 @@ final class ConfigKeys {
                     SYSTEM_KEEP_CONTAINER_RESUMED,
                     SYSTEM_KEEP_CONTAINER_VISIBLE,
                     SYSTEM_BLOCK_REMOVE_KILL,
-                    AUTO_CONTAINER -> true;
+                    AUTO_CONTAINER,
+                    OPLUS_SYSTEM_WINDOW -> true;
             default -> false;
         };
     }
