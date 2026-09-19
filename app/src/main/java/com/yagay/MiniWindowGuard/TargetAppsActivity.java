@@ -305,14 +305,23 @@ public final class TargetAppsActivity extends Activity {
             refreshCount();
         }
 
-        if (!GuardApp.isSystemEngineCurrent()) {
+        if (!GuardApp.isSystemEngineActive()) {
             String message = !GuardApp.hasSystemScope()
                     ? "LSPosed 实际作用域不包含 system，请检查模块作用域。当前："
                             + GuardApp.getFrameworkScope()
-                    : "作用域已有 system，但本次开机没有收到 system_server 引擎心跳。"
-                            + "请检查 LSPosed 模块是否启用，并重启 system_server/手机。";
+                    : "作用域已有 system，但本次开机没有检测到有效的 system_server 引擎心跳。"
+                            + "请检查 LSPosed 模块是否启用，并重启手机。";
             Toast.makeText(this, message, Toast.LENGTH_LONG).show();
             return;
+        }
+
+        if (GuardApp.isEngineUpdatePending()) {
+            Toast.makeText(
+                    this,
+                    "system_server 正在运行旧版引擎 code "
+                            + GuardApp.getLoadedEngineVersionCode()
+                            + "；本次仍可使用，重启手机后加载当前版本。",
+                    Toast.LENGTH_LONG).show();
         }
 
         button.setEnabled(false);
