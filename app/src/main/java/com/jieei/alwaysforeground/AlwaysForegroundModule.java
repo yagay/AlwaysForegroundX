@@ -42,7 +42,8 @@ public final class AlwaysForegroundModule extends XposedModule {
     private static final String HONGGUO_PACKAGE = "com.phoenix.read";
 
     private static final long BACKGROUND_CONFIRM_MS = 450L;
-    private static final long CONTINUITY_RESUME_MS = 700L;
+    // Give onStop/native player handoff enough time to run before generic fallback resumes.
+    private static final long CONTINUITY_RESUME_MS = 1000L;
     private static final long ASYNC_LIFECYCLE_CAUSE_MS = 350L;
     private static final long NATIVE_HANDOFF_GRACE_MS = 1800L;
     private static final int MAX_HOOK_EVENTS = 160;
@@ -67,6 +68,8 @@ public final class AlwaysForegroundModule extends XposedModule {
     private final AtomicInteger transitionSerial = new AtomicInteger();
     private final ThreadLocal<Integer> lifecycleCauseDepth = ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Boolean> tracingEndpoint = ThreadLocal.withInitial(() -> false);
+    private final ThreadLocal<Boolean> selfContinuityResume =
+            ThreadLocal.withInitial(() -> false);
 
     private volatile String activePackage;
     private volatile Handler mainHandler;
@@ -440,6 +443,12 @@ public final class AlwaysForegroundModule extends XposedModule {
         int playerId = System.identityHashCode(player);
         knownPlayingPlayers.add(playerId);
 
+        // A reflective play/start performed by this module must not be misclassified as an
+        // app-native handoff and cancel its own pending resume.
+        if (Boolean.TRUE.equals(selfContinuityResume.get())) {
+            return;
+        }
+
         long elapsed = SystemClock.elapsedRealtime() - lastLifecyclePauseElapsed;
         if (lastLifecyclePauseElapsed > 0L
                 && elapsed >= 0L
@@ -479,31 +488,46 @@ public final class AlwaysForegroundModule extends XposedModule {
 
     private void tryResumePending(int playerId, PendingResume pending) {
         PendingResume current = pendingResumes.get(playerId);
-        if (current != pending) return;
+        if (current != pending) {
+            logContinuityCancel(pending, "pending-replaced-or-cleared");
+            return;
+        }
 
         if (pending.transition != transitionSerial.get()) {
             pendingResumes.remove(playerId, pending);
+            logContinuityCancel(pending, "transition-changed");
             return;
         }
-        if (!appInBackground || !resumedActivities.isEmpty()) {
+        if (!appInBackground) {
             pendingResumes.remove(playerId, pending);
+            logContinuityCancel(pending, "not-background");
+            return;
+        }
+        if (!resumedActivities.isEmpty()) {
+            pendingResumes.remove(playerId, pending);
+            logContinuityCancel(pending, "activity-resumed");
             return;
         }
 
         Object player = pending.player.get();
         if (player == null) {
             pendingResumes.remove(playerId, pending);
+            logContinuityCancel(pending, "player-collected");
             return;
         }
 
-        Boolean alreadyPlaying = queryPlaying(player);
-        if (Boolean.TRUE.equals(alreadyPlaying)
-                || knownPlayingPlayers.contains(playerId)) {
+        // Do not re-query isPlaying() here. Several engines (including TTVideoEngine) keep a
+        // stale logical "playing" state for a short period after lifecycle pause even though the
+        // AudioTrack is already paused. We captured wasPlaying before pause, which is the reliable
+        // causal signal. An explicit play/start hook will mark knownPlayingPlayers and cancel us.
+        if (knownPlayingPlayers.contains(playerId)) {
             pendingResumes.remove(playerId, pending);
+            logContinuityCancel(pending, "explicit-play-already-seen");
             return;
         }
 
         boolean resumed = false;
+        selfContinuityResume.set(true);
         try {
             if (pending.setPlayWhenReady) {
                 resumed = invokeBooleanMethod(player, "setPlayWhenReady", true);
@@ -516,6 +540,7 @@ public final class AlwaysForegroundModule extends XposedModule {
             log(Log.WARN, TAG, "GENERIC_CONTINUITY resume failed"
                     + " sink=" + pending.sink + " error=" + t);
         } finally {
+            selfContinuityResume.set(false);
             pendingResumes.remove(playerId, pending);
         }
 
@@ -530,6 +555,17 @@ public final class AlwaysForegroundModule extends XposedModule {
                     + " sink=" + pending.sink
                     + " player=" + player.getClass().getName());
         }
+    }
+
+    private void logContinuityCancel(PendingResume pending, String reason) {
+        log(Log.INFO, TAG, "GENERIC_CONTINUITY cancelled"
+                + " sink=" + pending.sink
+                + " reason=" + reason
+                + " queuedTransition=" + pending.transition
+                + " currentTransition=" + transitionSerial.get()
+                + " background=" + appInBackground
+                + " resumedActivities=" + resumedActivities.size()
+                + " package=" + activePackage);
     }
 
     private static Boolean queryPlaying(Object player) {
