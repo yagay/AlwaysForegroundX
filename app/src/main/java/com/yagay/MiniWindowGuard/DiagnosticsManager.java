@@ -203,6 +203,14 @@ final class DiagnosticsManager {
         out.append("lsposedConnected=")
                 .append(GuardApp.isXposedServiceConnected()).append('\n');
         out.append("framework=").append(GuardApp.getFrameworkName()).append('\n');
+        out.append("expectedEngineVersionCode=")
+                .append(GuardApp.getExpectedVersionCode()).append('\n');
+        out.append("loadedEngineVersionCode=")
+                .append(GuardApp.getLoadedEngineVersionCode()).append('\n');
+        out.append("systemEngineCurrent=")
+                .append(GuardApp.isSystemEngineCurrent()).append('\n');
+        out.append("engineStartedAt=")
+                .append(GuardApp.getEngineStartedAt()).append('\n');
         out.append("diagnosticsActive=")
                 .append(GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE)).append('\n');
         out.append("diagnosticsStartedAt=")

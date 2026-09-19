@@ -57,6 +57,12 @@ public final class TargetAppsActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        persistSelection(false);
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         executor.shutdownNow();
         super.onDestroy();
@@ -75,8 +81,8 @@ public final class TargetAppsActivity extends Activity {
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("这里只是小窗守护自己的保护名单，不是 LSPosed 作用域。"
-                + "LSPosed 仍只需要选择 Android/System Framework。");
+        help.setText("勾选后立即自动保存，不需要再点保存。"
+                + "这里只是小窗守护自己的保护名单；LSPosed 仍只需要选择 Android/System Framework。");
         help.setTextSize(13.5f);
         help.setTextColor(0xFF666A73);
         help.setPadding(0, dp(4), 0, dp(10));
@@ -98,6 +104,7 @@ public final class TargetAppsActivity extends Activity {
         all.setAllCaps(false);
         all.setOnClickListener(v -> {
             for (AppItem item : filteredApps) selected.add(item.packageName);
+            persistSelection(true);
             if (adapter != null) adapter.notifyDataSetChanged();
             refreshCount();
         });
@@ -109,6 +116,7 @@ public final class TargetAppsActivity extends Activity {
         none.setAllCaps(false);
         none.setOnClickListener(v -> {
             for (AppItem item : filteredApps) selected.remove(item.packageName);
+            persistSelection(true);
             if (adapter != null) adapter.notifyDataSetChanged();
             refreshCount();
         });
@@ -139,9 +147,12 @@ public final class TargetAppsActivity extends Activity {
                 1f));
 
         Button save = new Button(this);
-        save.setText("保存保护名单并应用 Root 策略");
+        save.setText("完成（勾选已自动保存）");
         save.setAllCaps(false);
-        save.setOnClickListener(v -> saveSelection());
+        save.setOnClickListener(v -> {
+            persistSelection(true);
+            finish();
+        });
         root.addView(save);
 
         setContentView(root);
@@ -265,40 +276,44 @@ public final class TargetAppsActivity extends Activity {
                 + " 个");
     }
 
-    private void saveSelection() {
+    private void persistSelection(boolean applyRoot) {
         Set<String> before = new LinkedHashSet<>(GuardApp.getTargetPackages());
         Set<String> after = new LinkedHashSet<>(selected);
 
+        if (before.equals(after)) return;
+
         GuardApp.setTargetPackages(after);
 
-        executor.execute(() -> {
-            try {
-                RootPolicyManager.reconcile(this, before, after);
-                runOnUiThread(() -> {
-                    Toast.makeText(this,
-                            "已保存 " + after.size() + " 个受保护应用",
-                            Toast.LENGTH_SHORT).show();
-                    finish();
-                });
-            } catch (Throwable t) {
-                CrashStore.record(this, "TargetAppsActivity.saveSelection", t);
-                runOnUiThread(() -> Toast.makeText(
-                        this,
-                        "保存成功，但应用 Root 策略失败："
-                                + t.getClass().getSimpleName(),
-                        Toast.LENGTH_LONG).show());
-            }
-        });
+        if (applyRoot) {
+            executor.execute(() -> {
+                try {
+                    RootPolicyManager.reconcile(this, before, after);
+                } catch (Throwable t) {
+                    CrashStore.record(
+                            this,
+                            "TargetAppsActivity.persistSelection",
+                            t);
+                }
+            });
+        }
     }
 
     private void launchContainer(AppItem item, Button button) {
-        button.setEnabled(false);
-
         if (!selected.contains(item.packageName)) {
             selected.add(item.packageName);
-            GuardApp.setTargetPackages(new LinkedHashSet<>(selected));
+            persistSelection(true);
             refreshCount();
         }
+
+        if (!GuardApp.isSystemEngineCurrent()) {
+            Toast.makeText(
+                    this,
+                    "当前版本的 system_server 引擎还没有加载。安装/更新模块后请先重启手机。",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        button.setEnabled(false);
 
         executor.execute(() -> {
             Throwable failure = null;
@@ -414,6 +429,8 @@ public final class TargetAppsActivity extends Activity {
             holder.check.setOnCheckedChangeListener((buttonView, isChecked) -> {
                 if (isChecked) selected.add(item.packageName);
                 else selected.remove(item.packageName);
+
+                persistSelection(true);
                 refreshCount();
             });
 

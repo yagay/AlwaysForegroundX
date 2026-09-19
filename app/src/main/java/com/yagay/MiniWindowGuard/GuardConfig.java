@@ -47,6 +47,32 @@ final class GuardConfig {
         }
     }
 
+    static long longValue(String key, long fallback) {
+        SharedPreferences p = prefs;
+        if (p == null) return fallback;
+        try {
+            return p.getLong(key, fallback);
+        } catch (Throwable ignored) {
+            return fallback;
+        }
+    }
+
+    static void markEngineActive(long versionCode) {
+        SharedPreferences p = prefs;
+        if (p == null) return;
+
+        long now = System.currentTimeMillis();
+        String session = versionCode + ":" + android.os.Process.myPid() + ":" + now;
+        try {
+            p.edit()
+                    .putLong(ConfigKeys.ENGINE_VERSION_CODE, versionCode)
+                    .putLong(ConfigKeys.ENGINE_STARTED_AT, now)
+                    .putString(ConfigKeys.ENGINE_SESSION, session)
+                    .commit();
+        } catch (Throwable ignored) {
+        }
+    }
+
     static boolean enabled() {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
