@@ -1,5 +1,20 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.4 — 兼容 Home/Recents 的 userLeaving=false 路径
+
+新诊断确认 OxygenOS 16 普通全屏按 Home/手势退后台存在另一条合法路径：
+`TaskFragment.startPausing(... userLeaving=false, reason=pauseInRecentsAnim)`。
+这条路径没有传入可用的 resuming Activity，因此 5.3.3 没有建立 `BACKGROUND_PROTECTED`，
+随后继续执行 `wm_pause_activity → wm_stop_activity → STOP_ACTIVITY_ITEM`。
+
+5.3.4 调整普通后台状态识别：
+
+- 后台播放名单遇到 `pauseInRecentsAnim` 或 `pauseBackTasks` 时可直接建立 `BACKGROUND_PROTECTED`；
+- 不再依赖 `userLeaving=true` 或 resuming Activity 一定存在；
+- 真实 OPlus FloatHandle 的 edge pause guard 仍然优先执行，因此不会破坏小窗路径；
+- 建立状态后继续复用 5.3.3 的 STOP 阶段保护；
+- Bootstrap API 仍为 4，本版只修改热加载 Engine 逻辑。
+
 ## 5.3.3 — 修复普通后台进入 STOPPED 后暂停
 
 5.3.2 已确认普通后台名单同步成功，且 `BACKGROUND_PAUSE_BLOCK` 能命中。
