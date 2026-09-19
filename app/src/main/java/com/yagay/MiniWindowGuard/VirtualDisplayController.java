@@ -1,6 +1,5 @@
 package com.yagay.MiniWindowGuard;
 
-import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.PixelFormat;
@@ -1245,45 +1244,73 @@ final class VirtualDisplayController {
 
         private void focusRemoteTask(String reason) {
             if (!session.active
-                    || !taskMoved) {
+                    || !taskMoved
+                    || displayId < 0
+                    || destroyed) {
                 return;
             }
 
             Object atm = activityTaskManager();
-            boolean requested = false;
+            boolean focusedTask = false;
+            boolean focusedRoot = false;
 
             if (atm != null) {
-                requested |= invokeVoidLike(
+                focusedTask = invokeVoidLike(
                         atm,
                         "setFocusedTask",
                         session.taskId);
 
-                requested |= invokeVoidLike(
+                focusedRoot = invokeVoidLike(
                         atm,
                         "setFocusedRootTask",
                         session.taskId);
             }
 
-            try {
-                ActivityManager am =
-                        context.getSystemService(
-                                ActivityManager.class);
-
-                if (am != null) {
-                    am.moveTaskToFront(
-                            session.taskId,
-                            0);
-                    requested = true;
-                }
-            } catch (Throwable ignored) {
-            }
-
+            // Do not call ActivityManager.moveTaskToFront() here. On a task
+            // hosted by a secondary VirtualDisplay, OxygenOS can treat that as
+            // a global display-0 front-task operation and resume the launcher /
+            // MiniWindowGuard task instead of establishing input focus on the
+            // remote display.
             log("VD_FOCUS",
                     "pkg=" + session.packageName
                             + " taskId=" + session.taskId
                             + " displayId=" + displayId
                             + " reason=" + reason
-                            + " requested=" + requested);
+                            + " focusedTask=" + focusedTask
+                            + " focusedRoot=" + focusedRoot);
+        }
+
+        private void scheduleInitialFocusRetries() {
+            final long[] delays = {
+                    80L,
+                    220L,
+                    480L,
+                    900L,
+                    1500L,
+                    2300L
+            };
+
+            for (int i = 0; i < delays.length; i++) {
+                final int attempt = i + 1;
+                handler.postDelayed(() -> {
+                    if (!session.active
+                            || destroyed
+                            || !taskMoved
+                            || displayId < 0) {
+                        return;
+                    }
+
+                    focusRemoteTask(
+                            "post-move-retry-" + attempt);
+
+                    log("VD_FOCUS_RETRY",
+                            "pkg=" + session.packageName
+                                    + " taskId=" + session.taskId
+                                    + " displayId=" + displayId
+                                    + " attempt=" + attempt
+                                    + " delayMs=" + delays[attempt - 1]);
+                }, delays[i]);
+            }
         }
 
         private void clampWindowPosition() {
@@ -1362,7 +1389,11 @@ final class VirtualDisplayController {
                     }
 
                     focusRemoteTask("surface-ready");
-                    VirtualDisplayController.this.applyState(session, session.state, "initial");
+                    scheduleInitialFocusRetries();
+                    VirtualDisplayController.this.applyState(
+                            session,
+                            session.state,
+                            "initial");
                 }
             } catch (Throwable t) {
                 log("VD_SURFACE_ERROR",
