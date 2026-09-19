@@ -1,175 +1,132 @@
 # MiniWindowGuard / 小窗守护
 
-## 4.4.1
+## 4.5.0
 
-4.4.1 修复首次把 Task 迁移到 VirtualDisplay 后偶发没有 focused window 的竞态。
+4.5.0 新增 **Native Freeform / Task Bounds 主引擎**。
 
-诊断中已经确认：
+这次不再把“系统小窗为什么正常、VirtualDisplay 为什么会遇到视频 Surface 问题”继续当成尺寸问题修补，而是直接改变显示架构。
 
-- VirtualDisplay 774×1330 创建成功；
-- Task 已经进入副屏；
-- 视频 SurfaceView 720×1280 已经创建；
-- 失败点是 InputDispatcher 报 `Application does not have a focused window`；
-- 第二次重新打开同尺寸时，focused window 正常建立，视频也能显示。
-
-因此 4.4.1：
-
-- 移除副屏任务上的 `ActivityManager.moveTaskToFront()`；
-- 避免 OxygenOS 把 display 0 的 MiniWindowGuard/Launcher 再拉回 Resumed；
-- Task 迁移后增加 80 / 220 / 480 / 900 / 1500 / 2300ms 多次焦点重试；
-- 触摸 DOWN 仍会补一次焦点；
-- 固定内部 48% 与外部自由缩放逻辑不变。
-
-新增日志：
-
-- `VD_FOCUS_RETRY`
-
-MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
-
-## 4.4.0
-
-4.4.0 把 **目标 App 的内部 VirtualDisplay** 和 **用户看到的外部小窗**彻底分离。
-
-这是针对视频 App 的 SurfaceView / MediaCodec 兼容问题做的结构调整：部分应用只有在某些首次 VirtualDisplay 尺寸下才能正常建立视频 Surface，但一旦建立成功，后续外部窗口怎么缩放都能继续显示。
-
-### 默认模式：固定内部显示
+### 默认：Native Freeform
 
 默认开启：
 
-`固定内部显示（推荐）`
+`优先使用系统原生小窗（推荐）`
 
-开启后：
+Native 模式：
 
-- 目标 App 运行在稳定的 VirtualDisplay 内部画布。
-- 默认内部渲染比例为 **48%**。
-- 当前设备上 48% 已验证可以正常建立视频 Surface。
-- 外部 TextureView 可以自由改变长宽。
-- 拖动 resize 时不再调用 `VirtualDisplay.resize()`。
-- 目标 App 不会因为外部窗口变化反复收到 display configuration change。
-- SurfaceView / MediaCodec 不需要跟着外部窗口反复重建。
+- Task 保持在原来的 display；
+- 不创建新的 VirtualDisplay；
+- 不创建 TextureView 作为内容宿主；
+- 不把视频 SurfaceView / MediaCodec Surface 跨 display 搬运；
+- 直接请求 Task 使用 FREEFORM windowing mode；
+- 直接调整 Task bounds；
+- WindowManager / SurfaceFlinger / InputDispatcher 继续维护原来的窗口和 Surface 树；
+- 视频、WebView、GL、SurfaceView 的行为更接近系统自带小窗。
 
-### 内部与外部尺寸
+AOSP 的 desktop/freeform 也是以 Task windowing mode、bounds 和 task surface 为核心，而不是把 Task 迁移到另一个 VirtualDisplay。
 
-4.4.0 使用两套独立尺寸：
+### 自动后备
 
-```
-目标 App
-   ↓
-固定 VirtualDisplay
-   ↓
-TextureView
-   ↓
-外部可见小窗
-```
+Native 引擎会验证：
 
-内部尺寸由：
+- windowing mode 是否进入 freeform / multi-window；
+- Task bounds 是否真的变成请求的小窗范围。
 
-`内部渲染比例`
+如果 ROM 拒绝 FREEFORM，或者 bounds 没真正生效，会记录：
 
-控制。
+`NATIVE_FREEFORM_FAILED`
 
-外部尺寸由：
+然后直接把同一个 ActivityRecord 交给原来的 VirtualDisplay 引擎：
 
-- 外部窗口宽度
-- 外部窗口高度
-- 最小外部宽度
-- 最小外部高度
+`NATIVE_FALLBACK_TO_VD`
 
-控制。
+不需要用户重新打开目标 App。
 
-默认：
+### 原生模式状态
 
-- 内部渲染比例：48%
-- 最小外部宽度：160dp
-- 最小外部高度：220dp
+主要日志：
 
-因此内部仍可维持视频兼容所需的安全尺寸，而外部小窗可以比以前明显更小。
+- `NATIVE_ENGINE_READY`
+- `NATIVE_TASK_CAPTURED`
+- `NATIVE_FREEFORM_APPLIED`
+- `NATIVE_FREEFORM_FAILED`
+- `NATIVE_FALLBACK_TO_VD`
+- `NATIVE_WINDOW_READY`
+- `NATIVE_FOCUS`
+- `NATIVE_MOVE_BACK`
+- `NATIVE_TASK_RELEASED`
 
-### 触摸坐标映射
-
-固定内部显示开启时，外部 TextureView 和内部 VirtualDisplay 尺寸可以不同。
-
-MiniWindowGuard 会自动换算触摸坐标：
-
-```
-internalX = hostX × internalWidth / hostWidth
-internalY = hostY × internalHeight / hostHeight
-```
-
-因此即使把外部小窗缩小，点击和滑动仍然会落到正确的 App 坐标。
-
-### 动态模式
+### VirtualDisplay 兼容模式
 
 关闭：
 
-`固定内部显示（推荐）`
+`优先使用系统原生小窗（推荐）`
 
-以后恢复动态模式：
+然后点击：
 
-- 外部窗口 resize 时先只做预览。
-- 松手时真正调用一次 `VirtualDisplay.resize()`。
-- App 会收到新的显示配置。
-- 适合确实希望 App 根据窗口尺寸重新排版的应用。
+`立即重新加载 System Engine`
 
-视频 App 如果存在 SurfaceView 首次创建或重新布局问题，建议继续使用固定内部显示。
+即可继续使用 4.4.x 的 VirtualDisplay / TextureView 引擎。
 
-## 设置页新增
+VirtualDisplay 的固定内部画布、48% 兼容比例和外部最小尺寸设置继续保留，作为后备方案。
 
-“小窗显示与兼容性”中现在可以调整：
+### 始终前台
 
-- 固定内部显示
-- 内部渲染比例
-- 外部窗口默认宽度
-- 外部窗口默认高度
-- 最小外部宽度
-- 最小外部高度
+Native Freeform 只替换显示引擎，不删除现有 system_server 前台保护。
 
-内部渲染比例只对新建小窗生效。
+继续保留：
 
-最小外部宽高只限制之后的拖动缩放，不会降低内部 VirtualDisplay 的安全尺寸。
+- 进程状态保持 TOP；
+- hasResumedActivity；
+- Activity pause / invisible 拦截；
+- 最近任务/OEM 清理链路保护。
 
-## 热重载
+因此结构变成：
 
-4.4.0 没有修改 Bootstrap Hook 注册层。
+```
+显示：
+Native Task / Freeform
+        ↓
+系统 WindowManager / SurfaceFlinger
 
-如果已经安装 4.3.x 并完成过一次 Bootstrap 重启：
+前台保护：
+MiniWindowGuard system_server hooks
+```
 
-- 安装 4.4.0 后无需重启手机；
-- 没有活动小窗时会自动热重载；
-- 或在设置页点击“立即重新加载 System Engine”。
+### 热重载
 
-## 诊断
+4.5.0 没有修改 LSPosed Bootstrap Hook 注册接口。
 
-新增/重点日志：
+如果 4.3.x 以后已经完成过一次 Bootstrap 重启：
 
-- `VD_WINDOW_CREATED`
-  - 同时记录 `host=...` 和 `internal=...`
-- `VD_SURFACE_READY`
-  - 记录 TextureView、内部 buffer、外部 host 尺寸
-- `VD_HOST_RESIZE_ONLY`
-  - 固定内部显示模式下只改变外部窗口
-- `VD_RESIZE_COMMIT`
-  - 动态模式下真正改变 VirtualDisplay
-- `VD_INPUT_DOWN`
-  - 同时记录 host / internal 尺寸
-- `ENGINE_RELOAD_*`
+- 安装 4.5.0 后不需要再次重启手机；
+- 没有活动小窗时自动热重载；
+- 或点击“立即重新加载 System Engine”。
 
-诊断摘要也记录：
+### 设计目标
 
-- `fixed_internal_display`
-- `internal_display_scale`
-- `outer_min_width_dp`
-- `outer_min_height_dp`
+Native 模式的重点不是复刻某个 OEM 私有 API，而是优先使用 Android Task/freeform 体系。
+
+这样可以避免 VirtualDisplay 路线中的：
+
+- displayId 切换；
+- 视频 Surface 首次创建尺寸敏感；
+- TextureView 与内部画布尺寸不同步；
+- 副屏 focused window 竞态；
+- 输入 displayId 映射；
+- VirtualDisplay resize 触发大量 configuration change。
+
+VirtualDisplay 仍然保留，因为部分 ROM 可能完全拒绝标准 freeform。
 
 ## 开源架构参考
 
 设计过程中研究过：
 
+- Android AOSP Task / WindowContainerTransaction / Desktop Windowing
 - YAMF² / YAMFsquared
 - YAMF
 - FreeformShell
-- Android AOSP DisplayManager / ActivityTaskManager / InputManager
 
-这些项目用于理解公开架构与系统行为。MiniWindowGuard 当前实现为本项目重新实现。
+这些项目仅用于理解公开架构和系统行为。MiniWindowGuard 当前实现为本项目重新实现。
 
 本仓库使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
