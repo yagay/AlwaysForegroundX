@@ -26,6 +26,9 @@ public final class MainActivity extends Activity {
     private TextView rootStatus;
     private TextView xposedStatus;
     private TextView targetCount;
+    private TextView diagnosticsStatus;
+    private Button diagnosticsStart;
+    private Button diagnosticsExport;
     private TextView widthLabel;
     private TextView heightLabel;
 
@@ -52,6 +55,7 @@ public final class MainActivity extends Activity {
         addRootCard(root);
         addSystemCard(root);
         addWindowCard(root);
+        addDiagnosticsCard(root);
         addPermissionDetails(root);
         addMaintenanceCard(root);
 
@@ -225,6 +229,103 @@ public final class MainActivity extends Activity {
         card.addView(heightSeek);
     }
 
+    private void addDiagnosticsCard(LinearLayout parent) {
+        LinearLayout card = card(parent, "完整诊断",
+                "开始后再复现问题。详细日志只在诊断期间开启，结束后会导出系统状态和日志 ZIP。");
+
+        diagnosticsStatus = statusLine("");
+        card.addView(diagnosticsStatus);
+
+        card.addView(detailBlock("诊断内容",
+                "• system_server Hook 安装/命中和每次强制结果。\n"
+                        + "• OPlus Zoom/Mini：zoomPkg、windowType、windowShown、zoomRect、组件和退出原因。\n"
+                        + "• ActivityRecord.shouldPauseActivity 决策和关键调用栈。\n"
+                        + "• Root 策略命令及返回值。\n"
+                        + "• Activity/Task/进程/OOM/Window/Doze/NetPolicy/Power/Audio/MediaSession 快照。\n"
+                        + "• 每个受保护 App 的 package、AppOps、standby bucket、meminfo。\n"
+                        + "• 最近 30000 行完整 logcat + 自动筛选后的重点日志。"));
+
+        TextView privacy = detailBlock("注意",
+                "完整 logcat 可能包含其他应用和系统事件。诊断 ZIP 只用于排查时分享，完成后建议关闭诊断模式。");
+        privacy.setTextColor(0xFF8A4B08);
+        card.addView(privacy);
+
+        diagnosticsStart = button("开始诊断");
+        diagnosticsStart.setOnClickListener(v -> {
+            DiagnosticsManager.startSession();
+            Toast.makeText(this,
+                    "诊断已开始。现在复现问题，然后返回这里导出。",
+                    Toast.LENGTH_LONG).show();
+            refreshDiagnosticsStatus();
+        });
+        card.addView(diagnosticsStart);
+
+        diagnosticsExport = button("结束并导出诊断 ZIP");
+        diagnosticsExport.setOnClickListener(v -> exportDiagnostics(true));
+        card.addView(diagnosticsExport);
+
+        Button snapshot = button("直接导出当前状态");
+        snapshot.setOnClickListener(v -> exportDiagnostics(false));
+        card.addView(snapshot);
+    }
+
+    private void exportDiagnostics(boolean stopSession) {
+        if (diagnosticsExport != null) diagnosticsExport.setEnabled(false);
+        if (diagnosticsStart != null) diagnosticsStart.setEnabled(false);
+
+        if (stopSession) DiagnosticsManager.stopSession();
+
+        Toast.makeText(this,
+                "正在收集 system_server、Root 和系统状态…",
+                Toast.LENGTH_SHORT).show();
+
+        executor.execute(() -> {
+            DiagnosticsManager.ExportResult result = DiagnosticsManager.export(this);
+            runOnUiThread(() -> {
+                if (diagnosticsExport != null) diagnosticsExport.setEnabled(true);
+                if (diagnosticsStart != null) diagnosticsStart.setEnabled(true);
+                refreshDiagnosticsStatus();
+
+                if (!result.ok()) {
+                    Toast.makeText(this,
+                            "导出失败：" + result.error,
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                Toast.makeText(this,
+                        "已保存到 Download/MiniWindowGuard/" + result.fileName,
+                        Toast.LENGTH_LONG).show();
+
+                try {
+                    Intent share = new Intent(Intent.ACTION_SEND);
+                    share.setType("application/zip");
+                    share.putExtra(Intent.EXTRA_STREAM, result.uri);
+                    share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(share, "分享诊断 ZIP"));
+                } catch (Throwable ignored) {
+                    // The file is already in Downloads even if no share target is available.
+                }
+            });
+        });
+    }
+
+    private void refreshDiagnosticsStatus() {
+        if (diagnosticsStatus == null) return;
+
+        boolean active = GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE);
+        String started = GuardApp.getString(ConfigKeys.DIAGNOSTICS_STARTED_AT);
+
+        if (active) {
+            diagnosticsStatus.setText("诊断状态：记录中"
+                    + (started.isEmpty() ? "" : " · start=" + started));
+            diagnosticsStatus.setTextColor(0xFFB3261E);
+        } else {
+            diagnosticsStatus.setText("诊断状态：未开启");
+            diagnosticsStatus.setTextColor(0xFF16794A);
+        }
+    }
+
     private void addPermissionDetails(LinearLayout parent) {
         LinearLayout card = card(parent, "权限使用详情",
                 "新架构不再维护推荐 Hook App 列表。");
@@ -271,6 +372,7 @@ public final class MainActivity extends Activity {
         if (targetCount != null) {
             targetCount.setText("当前受保护：" + GuardApp.getTargetPackages().size() + " 个 App");
         }
+        refreshDiagnosticsStatus();
 
         if (xposedStatus != null) {
             boolean connected = GuardApp.isXposedServiceConnected();
