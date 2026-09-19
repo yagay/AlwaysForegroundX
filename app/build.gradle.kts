@@ -7,11 +7,11 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.yagay.alwaysforeground"
+        applicationId = "com.yagay.MiniWindowGuard"
         minSdk = 31
         targetSdk = 37
-        versionCode = 42
-        versionName = "2.2.0"
+        versionCode = 43
+        versionName = "2.2.1"
     }
 
     compileOptions {
