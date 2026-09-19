@@ -25,6 +25,9 @@ final class ConfigKeys {
     static final String SMALL_WINDOW_HEIGHT = "small_window_height";
     static final String AOSP_FREEFORM_FALLBACK = "aosp_freeform_fallback";
 
+    static final String DIAGNOSTICS_ACTIVE = "diagnostics_active";
+    static final String DIAGNOSTICS_STARTED_AT = "diagnostics_started_at";
+
     static final int FORM_WINDOW = 1;
     static final int FORM_ICON = 2;
     static final int FORM_HIDDEN = 3;
