@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -20,9 +21,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class TargetAppsActivity extends Activity {
     private final Map<String, CheckBox> rows = new LinkedHashMap<>();
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private Set<String> original;
 
     @Override
@@ -43,40 +47,77 @@ public final class TargetAppsActivity extends Activity {
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("这里只是小窗守护自己的目标列表，不是 LSPosed 作用域。LSPosed 只需要勾 Android/System Framework。");
+        help.setText("这里只是小窗守护自己的保护名单，不是 LSPosed 作用域。"
+                + "每个 App 右侧“小窗”按钮会按首页设置的自由小窗 / 图标 / 隐藏形态启动。");
         help.setTextSize(14);
         help.setPadding(0, dp(6), 0, dp(12));
         root.addView(help);
 
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+
         Button all = new Button(this);
         all.setText("全选");
         all.setOnClickListener(v -> rows.values().forEach(c -> c.setChecked(true)));
-        root.addView(all);
+        actions.addView(all, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button none = new Button(this);
         none.setText("全部取消");
         none.setOnClickListener(v -> rows.values().forEach(c -> c.setChecked(false)));
-        root.addView(none);
+        actions.addView(none, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        List<AppItem> apps = loadLaunchableApps();
-        for (AppItem app : apps) {
+        root.addView(actions);
+
+        for (AppItem app : loadLaunchableApps()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(3), 0, dp(3));
+
             CheckBox box = new CheckBox(this);
             box.setText(app.label + "\n" + app.packageName);
             box.setTextSize(14);
-            box.setPadding(0, dp(5), 0, dp(5));
             box.setChecked(original.contains(app.packageName));
-            root.addView(box, new LinearLayout.LayoutParams(
+            row.addView(box, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            rows.put(app.packageName, box);
+
+            Button launch = new Button(this);
+            launch.setText("小窗");
+            launch.setAllCaps(false);
+            launch.setOnClickListener(v -> {
+                launch.setEnabled(false);
+                executor.execute(() -> {
+                    boolean ok = WindowLauncher.launch(this, app.packageName);
+                    runOnUiThread(() -> {
+                        launch.setEnabled(true);
+                        Toast.makeText(this,
+                                ok ? "已请求系统小窗" : "小窗启动失败，请检查 Root/系统支持",
+                                Toast.LENGTH_SHORT).show();
+                    });
+                });
+            });
+            row.addView(launch);
+
+            root.addView(row, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
-            rows.put(app.packageName, box);
         }
 
         Button save = new Button(this);
-        save.setText("保存并应用 Root 策略");
+        save.setText("保存保护名单并应用 Root 策略");
         save.setOnClickListener(v -> save());
         root.addView(save);
 
         setContentView(scroll);
+    }
+
+    @Override
+    protected void onDestroy() {
+        executor.shutdownNow();
+        super.onDestroy();
     }
 
     private void save() {
@@ -85,22 +126,26 @@ public final class TargetAppsActivity extends Activity {
             if (entry.getValue().isChecked()) selected.add(entry.getKey());
         }
 
+        Set<String> before = new LinkedHashSet<>(original);
         GuardApp.setTargetPackages(selected);
-        RootPolicyManager.reconcile(this, original, selected);
         original = new LinkedHashSet<>(selected);
 
-        Toast.makeText(this,
-                "已保存 " + selected.size() + " 个受保护应用",
-                Toast.LENGTH_SHORT).show();
-        finish();
+        executor.execute(() -> {
+            RootPolicyManager.reconcile(this, before, selected);
+            runOnUiThread(() -> {
+                Toast.makeText(this,
+                        "已保存 " + selected.size() + " 个受保护应用",
+                        Toast.LENGTH_SHORT).show();
+                finish();
+            });
+        });
     }
 
     private List<AppItem> loadLaunchableApps() {
         Intent launcher = new Intent(Intent.ACTION_MAIN);
         launcher.addCategory(Intent.CATEGORY_LAUNCHER);
 
-        List<ResolveInfo> resolved = getPackageManager()
-                .queryIntentActivities(launcher, 0);
+        List<ResolveInfo> resolved = getPackageManager().queryIntentActivities(launcher, 0);
         Map<String, AppItem> unique = new LinkedHashMap<>();
 
         for (ResolveInfo info : resolved) {
@@ -113,11 +158,8 @@ public final class TargetAppsActivity extends Activity {
             unique.putIfAbsent(pkg, new AppItem(label, pkg));
         }
 
-        // Keep previously selected packages visible even if they have no launcher entry now.
         for (String pkg : original) {
-            if (!unique.containsKey(pkg)) {
-                unique.put(pkg, new AppItem(pkg, pkg));
-            }
+            unique.putIfAbsent(pkg, new AppItem(pkg, pkg));
         }
 
         ArrayList<AppItem> result = new ArrayList<>(unique.values());
