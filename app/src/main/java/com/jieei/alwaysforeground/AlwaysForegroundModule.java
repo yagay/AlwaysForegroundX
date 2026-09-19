@@ -210,6 +210,8 @@ public final class AlwaysForegroundModule extends XposedModule {
      */
     private void installBackgroundActivityVirtualization() {
         int installed = 0;
+
+        // Standard Activity path.
         for (Method method : Instrumentation.class.getDeclaredMethods()) {
             if (!method.getName().startsWith("execStartActivity")) continue;
 
@@ -262,12 +264,6 @@ public final class AlwaysForegroundModule extends XposedModule {
                         return chain.proceed();
                     }
 
-                    // If execution is already inside our hidden display, normal launches inherit
-                    // that display and should not be split into another task/display.
-                    if (backgroundVirtualDisplay.owns(context)) {
-                        return chain.proceed();
-                    }
-
                     if (finalRequestCodeIndex >= 0
                             && finalRequestCodeIndex < args.size()
                             && args.get(finalRequestCodeIndex) instanceof Integer requestCode
@@ -275,59 +271,8 @@ public final class AlwaysForegroundModule extends XposedModule {
                         return chain.proceed();
                     }
 
-                    ComponentName target = resolveOwnActivity(context, intent);
-                    if (target == null || !activePackage.equals(target.getPackageName())) {
-                        return chain.proceed();
-                    }
-
-                    // Prefer a real system/OEM small window. It keeps the Activity genuinely
-                    // active in WindowManager and can be minimized by the OS, which is closer to
-                    // a universal "foreground container" than lifecycle spoofing.
-                    SmallWindowController.LaunchResult small =
-                            smallWindowController.launch(context, intent);
-                    if (small.handled) {
-                        log(Log.INFO, TAG, "GENERIC_SMALL_WINDOW routed"
-                                + " target=" + target.flattenToShortString()
-                                + " backend=" + small.backend
-                                + " detail=" + small.detail
-                                + " via=" + signature
-                                + " package=" + activePackage);
-                        return null;
-                    }
-
-                    log(Log.INFO, TAG, "GENERIC_SMALL_WINDOW fallback"
-                            + " target=" + target.flattenToShortString()
-                            + " reason=" + small.detail
-                            + " package=" + activePackage);
-
-                    // Last-resort container for ROMs without usable small-window APIs.
-                    android.app.ActivityOptions options =
-                            backgroundVirtualDisplay.makeLaunchOptions(context);
-                    if (options == null) {
-                        log(Log.WARN, TAG, "GENERIC_VIRTUAL_LAUNCH unavailable"
-                                + " target=" + target.flattenToShortString()
-                                + " package=" + activePackage);
-                        return chain.proceed();
-                    }
-
-                    Intent virtualIntent = BackgroundVirtualDisplay.virtualizeIntent(intent);
-                    virtualLaunchBypass.set(true);
-                    try {
-                        context.startActivity(virtualIntent, options.toBundle());
-                        log(Log.INFO, TAG, "GENERIC_VIRTUAL_LAUNCH routed"
-                                + " target=" + target.flattenToShortString()
-                                + " displayId=" + backgroundVirtualDisplay.getDisplayId()
-                                + " via=" + signature
-                                + " package=" + activePackage);
-                        return null;
-                    } catch (Throwable t) {
-                        log(Log.WARN, TAG, "GENERIC_VIRTUAL_LAUNCH failed"
-                                + " target=" + target.flattenToShortString()
-                                + " package=" + activePackage, t);
-                        return chain.proceed();
-                    } finally {
-                        virtualLaunchBypass.set(false);
-                    }
+                    return routeBackgroundSelfLaunch(context, intent, signature)
+                            ? null : chain.proceed();
                 });
                 installed++;
             } catch (Throwable t) {
@@ -335,8 +280,115 @@ public final class AlwaysForegroundModule extends XposedModule {
             }
         }
 
+        // Some OEM/app stacks bypass Instrumentation and call ContextImpl.startActivity directly.
+        try {
+            Class<?> contextImpl = Class.forName("android.app.ContextImpl");
+            for (Method method : contextImpl.getDeclaredMethods()) {
+                if (!"startActivity".equals(method.getName())) continue;
+                Class<?>[] types = method.getParameterTypes();
+                if (types.length < 1 || types[0] != Intent.class) continue;
+                if (method.getReturnType() != void.class) continue;
+
+                final String signature = method.toGenericString();
+                try {
+                    method.setAccessible(true);
+                    hook(method).intercept(chain -> {
+                        if (Boolean.TRUE.equals(virtualLaunchBypass.get())
+                                || TargetConfig.getMode() < ModeConfig.MODE_STRONG
+                                || !appInBackground) {
+                            return chain.proceed();
+                        }
+
+                        List<Object> args = chain.getArgs();
+                        if (args.isEmpty() || !(args.get(0) instanceof Intent intent)) {
+                            return chain.proceed();
+                        }
+
+                        Object receiver = chain.getThisObject();
+                        if (!(receiver instanceof Context context)) {
+                            return chain.proceed();
+                        }
+
+                        return routeBackgroundSelfLaunch(context, intent, signature)
+                                ? null : chain.proceed();
+                    });
+                    installed++;
+                } catch (Throwable t) {
+                    logSkipped("ContextImpl background launch " + signature, t);
+                }
+            }
+        } catch (Throwable t) {
+            logSkipped("ContextImpl background launch hooks", t);
+        }
+
         if (installed > 0) {
             logInstalled("background activity virtualization methods=" + installed);
+        }
+    }
+
+    private boolean routeBackgroundSelfLaunch(
+            Context context,
+            Intent intent,
+            String source
+    ) {
+        if (Boolean.TRUE.equals(virtualLaunchBypass.get())
+                || TargetConfig.getMode() < ModeConfig.MODE_STRONG
+                || !appInBackground) {
+            return false;
+        }
+
+        if (backgroundVirtualDisplay.owns(context)) {
+            return false;
+        }
+
+        ComponentName target = resolveOwnActivity(context, intent);
+        if (target == null || !activePackage.equals(target.getPackageName())) {
+            return false;
+        }
+
+        virtualLaunchBypass.set(true);
+        try {
+            SmallWindowController.LaunchResult small =
+                    smallWindowController.launch(context, intent);
+            if (small.handled) {
+                log(Log.INFO, TAG, "GENERIC_SMALL_WINDOW routed"
+                        + " target=" + target.flattenToShortString()
+                        + " backend=" + small.backend
+                        + " detail=" + small.detail
+                        + " via=" + source
+                        + " package=" + activePackage);
+                return true;
+            }
+
+            log(Log.INFO, TAG, "GENERIC_SMALL_WINDOW fallback"
+                    + " target=" + target.flattenToShortString()
+                    + " reason=" + small.detail
+                    + " package=" + activePackage);
+
+            android.app.ActivityOptions options =
+                    backgroundVirtualDisplay.makeLaunchOptions(context);
+            if (options == null) {
+                log(Log.WARN, TAG, "GENERIC_VIRTUAL_LAUNCH unavailable"
+                        + " target=" + target.flattenToShortString()
+                        + " package=" + activePackage);
+                return false;
+            }
+
+            Intent virtualIntent = BackgroundVirtualDisplay.virtualizeIntent(intent);
+            context.startActivity(virtualIntent, options.toBundle());
+            log(Log.INFO, TAG, "GENERIC_VIRTUAL_LAUNCH routed"
+                    + " target=" + target.flattenToShortString()
+                    + " displayId=" + backgroundVirtualDisplay.getDisplayId()
+                    + " via=" + source
+                    + " package=" + activePackage);
+            return true;
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "GENERIC_SMALL_WINDOW route failed"
+                    + " target=" + target.flattenToShortString()
+                    + " package=" + activePackage, t);
+            return false;
+        } finally {
+            virtualLaunchBypass.set(false);
         }
     }
 
