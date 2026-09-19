@@ -24,6 +24,7 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
             ConfigKeys.AUTO_CONTAINER,
+            ConfigKeys.NATIVE_FREEFORM_ENGINE,
             ConfigKeys.FIXED_INTERNAL_DISPLAY,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
