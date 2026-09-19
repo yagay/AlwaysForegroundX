@@ -268,6 +268,26 @@ final class EngineBridge {
         return value instanceof Boolean && (Boolean) value;
     }
 
+    boolean isForceSupportPackage(String packageName) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "isForceSupportPackage",
+                new Class<?>[]{String.class},
+                packageName);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    boolean isForegroundPackage(String packageName) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "isForegroundPackage",
+                new Class<?>[]{String.class},
+                packageName);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
     boolean wantsPackage(String packageName) {
         Object value = safeInvoke(
                 currentEngine(),
@@ -303,6 +323,44 @@ final class EngineBridge {
                 "onOplusTaskVanished",
                 new Class<?>[]{Object.class},
                 taskInfo);
+    }
+
+    void onKeyguardStateChanged(boolean showing) {
+        safeInvoke(
+                currentEngine(),
+                "onKeyguardStateChanged",
+                new Class<?>[]{boolean.class},
+                showing);
+    }
+
+    boolean shouldHoldEdgeTask(Object task) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldHoldEdgeTask",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    boolean isEdgeHungTask(Object task) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "isEdgeHungTask",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    boolean shouldKeepTaskAwake(Object task) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldKeepTaskAwake",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
     }
 
     String managedPackageForProcess(String processName) {
