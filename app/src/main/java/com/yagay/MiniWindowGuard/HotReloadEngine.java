@@ -20,7 +20,9 @@ public final class HotReloadEngine {
     private Handler handler;
     private Context context;
     private SharedPreferences prefs;
-    private VirtualDisplayController container;
+    private OplusFlexibleWindowController oplusContainer;
+    private VirtualDisplayController virtualContainer;
+    private volatile boolean usingOplus;
     private volatile boolean started;
 
     public HotReloadEngine() {
@@ -39,29 +41,50 @@ public final class HotReloadEngine {
 
         GuardConfig.initialize(prefs);
 
-        container = new VirtualDisplayController(
-                handler,
-                context,
-                this::engineLog);
-        container.start();
+        usingOplus =
+                GuardConfig.useOplusSystemWindow();
+
+        if (usingOplus) {
+            oplusContainer =
+                    new OplusFlexibleWindowController(
+                            handler,
+                            context,
+                            this::engineLog);
+            oplusContainer.start();
+        } else {
+            virtualContainer =
+                    new VirtualDisplayController(
+                            handler,
+                            context,
+                            this::engineLog);
+            virtualContainer.start();
+        }
 
         started = true;
 
         engineLog("ENGINE_START",
                 "version=" + versionCode()
                         + " bootstrapApiRequired="
-                        + bootstrapApiRequired());
+                        + bootstrapApiRequired()
+                        + " backend="
+                        + (usingOplus
+                        ? "OPlusFlexibleWindow"
+                        : "VirtualDisplay"));
     }
 
     public synchronized void stop() {
         if (!started) return;
 
         try {
-            if (container != null) {
-                container.shutdown();
+            if (oplusContainer != null) {
+                oplusContainer.shutdown();
+            }
+            if (virtualContainer != null) {
+                virtualContainer.shutdown();
             }
         } finally {
-            container = null;
+            oplusContainer = null;
+            virtualContainer = null;
             started = false;
             engineLog("ENGINE_STOP",
                     "version=" + versionCode());
@@ -89,46 +112,135 @@ public final class HotReloadEngine {
     }
 
     public boolean isManagedPackage(String packageName) {
-        VirtualDisplayController current = container;
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            return current != null
+                    && current.isManagedPackage(
+                    packageName);
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         return current != null
-                && current.isManagedPackage(packageName);
+                && current.isManagedPackage(
+                packageName);
     }
 
-    public boolean isManagedTopActivityRecord(Object activityRecord) {
-        VirtualDisplayController current = container;
+    public boolean isManagedTopActivityRecord(
+            Object activityRecord
+    ) {
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            return current != null
+                    && current.isManagedTopActivityRecord(
+                    activityRecord);
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         return current != null
-                && current.isManagedTopActivityRecord(activityRecord);
+                && current.isManagedTopActivityRecord(
+                activityRecord);
     }
 
     public int stateForPackage(String packageName) {
-        VirtualDisplayController current = container;
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            return current == null
+                    ? ConfigKeys.STATE_RELEASED
+                    : current.stateForPackage(
+                    packageName);
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         return current == null
                 ? ConfigKeys.STATE_RELEASED
-                : current.stateForPackage(packageName);
+                : current.stateForPackage(
+                packageName);
     }
 
     public boolean wantsPackage(String packageName) {
-        VirtualDisplayController current = container;
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            return current != null
+                    && current.wantsPackage(
+                    packageName);
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         return current != null
-                && current.wantsPackage(packageName);
+                && current.wantsPackage(
+                packageName);
     }
 
-    public void capture(Object activityRecord, String packageName) {
-        VirtualDisplayController current = container;
+    public void capture(
+            Object activityRecord,
+            String packageName
+    ) {
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            if (current != null) {
+                current.capture(
+                        activityRecord,
+                        packageName);
+            }
+            return;
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         if (current != null) {
-            current.capture(activityRecord, packageName);
+            current.capture(
+                    activityRecord,
+                    packageName);
         }
     }
 
-    public String managedPackageForProcess(String processName) {
-        VirtualDisplayController current = container;
+    public String managedPackageForProcess(
+            String processName
+    ) {
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            return current == null
+                    ? null
+                    : current.managedPackageForProcess(
+                    processName);
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         return current == null
                 ? null
-                : current.managedPackageForProcess(processName);
+                : current.managedPackageForProcess(
+                processName);
     }
 
     public int activeSessionCount() {
-        VirtualDisplayController current = container;
+        if (usingOplus) {
+            OplusFlexibleWindowController current =
+                    oplusContainer;
+            return current == null
+                    ? 0
+                    : current.activeSessionCount();
+        }
+
+        VirtualDisplayController current =
+                virtualContainer;
+
         return current == null
                 ? 0
                 : current.activeSessionCount();
