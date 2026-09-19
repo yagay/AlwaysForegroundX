@@ -213,8 +213,8 @@ public final class MainActivity extends Activity {
     }
 
     private void addWindowCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "自有 TaskSurface 小窗",
-                "目标 App 仍是 display 0 上的真实 Task。窗口态通过 WindowContainerTransaction 正式提交 bounds/windowing mode；不再直接改 Task 内部字段。");
+        LinearLayout card = card(parent, "真实 Freeform 小窗",
+                "目标 App 仍是 display 0 上的真实 Task，但窗口态只接受 FREEFORM(5)；不再把 MULTI_WINDOW(6) 当成小窗，避免任务占据整屏。");
 
         addSwitch(card, "自动接管受保护 App",
                 "受保护 App 进入 RESUMED 后自动交给 TaskSurfaceController。",
@@ -227,7 +227,7 @@ public final class MainActivity extends Activity {
         RadioGroup forms = new RadioGroup(this);
         forms.setOrientation(RadioGroup.VERTICAL);
         addForm(forms, ConfigKeys.STATE_WINDOW,
-                "窗口", "真实 Task 缩放到自有窗口区域，触摸仍直接属于目标 App。");
+                "小窗", "真实 Task 进入 FREEFORM 自由窗口并限制在小窗 bounds；背景 App 仍保持正常可见和可操作。");
         addForm(forms, ConfigKeys.STATE_ICON,
                 "图标", "Task 放到其他前台 App 后方，但保持逻辑 Visible/Resumed；真实 Surface 隐藏，仅显示 MiniWindowGuard 图标。");
         addForm(forms, ConfigKeys.STATE_HIDDEN,
@@ -417,7 +417,7 @@ public final class MainActivity extends Activity {
                         + "• 目标 App 的画面不是截图，也不是 Overlay View，而是真实 Task Surface。"));
 
         card.addView(detailBlock("容器状态",
-                "• 窗口：WCT 正式提交 MULTI_WINDOW/FREEFORM + bounds，真实 Surface 正常显示。\n"
+                "• 小窗：只使用 FREEFORM(5) + bounds；如果系统不接受 FREEFORM，会退出接管而不是退化成占整屏的 MULTI_WINDOW。\n"
                         + "• 图标/隐藏：Task reorder 到其他前台 App 后方，同时阻止受保护顶层 Activity 的 pause/stop/clientVisible=false；真实 Surface 用 alpha=0 隐藏。\n"
                         + "• 恢复窗口/释放：Surface alpha 恢复为 1；释放时再恢复接管前的 bounds 和 windowing mode。"));
     }
