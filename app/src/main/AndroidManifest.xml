@@ -13,6 +13,14 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <receiver
+            android:name=".RootSmallWindowReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jieei.alwaysforeground.action.ROOT_SMALL_WINDOW" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
