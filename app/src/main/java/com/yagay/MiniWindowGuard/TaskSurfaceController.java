@@ -29,7 +29,7 @@ final class TaskSurfaceController {
     private static final long POLL_MS = 250L;
 
     private final Handler handler;
-    private final Context systemContext;
+    private volatile Context systemContext;
     private final Logger logger;
     private final Map<Integer, ManagedTask> tasks = new ConcurrentHashMap<>();
 
@@ -78,6 +78,10 @@ final class TaskSurfaceController {
         if (taskObject == null) {
             log("TASK_CAPTURE_SKIP", "pkg=" + packageName + " reason=no-task");
             return;
+        }
+
+        if (systemContext == null) {
+            systemContext = deriveSystemContext(taskObject);
         }
 
         int taskId = taskId(taskObject);
@@ -251,40 +255,16 @@ final class TaskSurfaceController {
     }
 
     private Rect containerBounds() {
-        android.util.DisplayMetrics dm =
-                Resources.getSystem().getDisplayMetrics();
-
-        int screenW = Math.max(1, dm.widthPixels);
-        int screenH = Math.max(1, dm.heightPixels);
-        float density = Math.max(1f, dm.density);
-
-        int width = Math.round(screenW * GuardConfig.containerWidth() / 100f);
-        int height = Math.round(screenH * GuardConfig.containerHeight() / 100f);
-
-        width = Math.min(screenW, Math.max(Math.round(320 * density), width));
-        height = Math.min(screenH, Math.max(Math.round(420 * density), height));
-
-        int margin = Math.round(18 * density);
-        int headerReserve = Math.round(96 * density);
-
-        int left = Math.max(0, screenW - width - margin);
-        int top = Math.min(
-                Math.max(margin, headerReserve),
-                Math.max(0, screenH - height - margin));
-
-        return new Rect(left, top, left + width, top + height);
+        return ContainerGeometry.visibleBounds(
+                Resources.getSystem(),
+                GuardConfig.containerWidth(),
+                GuardConfig.containerHeight());
     }
 
     private Rect offscreenBounds(Rect visible) {
-        android.util.DisplayMetrics dm =
-                Resources.getSystem().getDisplayMetrics();
-        int gap = Math.max(64, Math.round(32 * Math.max(1f, dm.density)));
-        int left = dm.widthPixels + gap;
-        return new Rect(
-                left,
-                visible.top,
-                left + visible.width(),
-                visible.top + visible.height());
+        return ContainerGeometry.offscreenBounds(
+                Resources.getSystem(),
+                visible);
     }
 
     private void notifyCaptured(ManagedTask task) {
@@ -378,6 +358,13 @@ final class TaskSurfaceController {
     private static int readWindowingMode(Object task) {
         Object value = invokeNoArg(task, "getWindowingMode");
         return value instanceof Integer ? (Integer) value : WINDOWING_MODE_FULLSCREEN;
+    }
+
+    private static Context deriveSystemContext(Object task) {
+        Object service = fieldValue(task, "mAtmService");
+        if (service == null) service = fieldValue(task, "mService");
+        Object context = fieldValue(service, "mContext");
+        return context instanceof Context ? (Context) context : null;
     }
 
     private static Object globalLock(Object task) {
