@@ -20,9 +20,7 @@ public final class HotReloadEngine {
     private Handler handler;
     private Context context;
     private SharedPreferences prefs;
-    private NativeFreeformController nativeContainer;
-    private VirtualDisplayController virtualContainer;
-    private volatile boolean usingNative;
+    private VirtualDisplayController container;
     private volatile boolean started;
 
     public HotReloadEngine() {
@@ -41,51 +39,29 @@ public final class HotReloadEngine {
 
         GuardConfig.initialize(prefs);
 
-        usingNative =
-                GuardConfig.nativeFreeformEngine();
-
-        if (usingNative) {
-            nativeContainer =
-                    new NativeFreeformController(
-                            handler,
-                            context,
-                            this::engineLog);
-            nativeContainer.start();
-        } else {
-            virtualContainer =
-                    new VirtualDisplayController(
-                            handler,
-                            context,
-                            this::engineLog);
-            virtualContainer.start();
-        }
+        container = new VirtualDisplayController(
+                handler,
+                context,
+                this::engineLog);
+        container.start();
 
         started = true;
 
         engineLog("ENGINE_START",
                 "version=" + versionCode()
                         + " bootstrapApiRequired="
-                        + bootstrapApiRequired()
-                        + " backend="
-                        + (usingNative
-                        ? "NativeFreeform"
-                        : "VirtualDisplay"));
+                        + bootstrapApiRequired());
     }
 
     public synchronized void stop() {
         if (!started) return;
 
         try {
-            if (nativeContainer != null) {
-                nativeContainer.shutdown();
-            }
-
-            if (virtualContainer != null) {
-                virtualContainer.shutdown();
+            if (container != null) {
+                container.shutdown();
             }
         } finally {
-            nativeContainer = null;
-            virtualContainer = null;
+            container = null;
             started = false;
             engineLog("ENGINE_STOP",
                     "version=" + versionCode());
@@ -113,139 +89,46 @@ public final class HotReloadEngine {
     }
 
     public boolean isManagedPackage(String packageName) {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            return current != null
-                    && current.isManagedPackage(
-                    packageName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+        VirtualDisplayController current = container;
         return current != null
-                && current.isManagedPackage(
-                packageName);
+                && current.isManagedPackage(packageName);
     }
 
-    public boolean isManagedTopActivityRecord(
-            Object activityRecord
-    ) {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            return current != null
-                    && current.isManagedTopActivityRecord(
-                    activityRecord);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+    public boolean isManagedTopActivityRecord(Object activityRecord) {
+        VirtualDisplayController current = container;
         return current != null
-                && current.isManagedTopActivityRecord(
-                activityRecord);
+                && current.isManagedTopActivityRecord(activityRecord);
     }
 
-    public int stateForPackage(
-            String packageName
-    ) {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            return current == null
-                    ? ConfigKeys.STATE_RELEASED
-                    : current.stateForPackage(
-                    packageName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+    public int stateForPackage(String packageName) {
+        VirtualDisplayController current = container;
         return current == null
                 ? ConfigKeys.STATE_RELEASED
-                : current.stateForPackage(
-                packageName);
+                : current.stateForPackage(packageName);
     }
 
-    public boolean wantsPackage(
-            String packageName
-    ) {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            return current != null
-                    && current.wantsPackage(
-                    packageName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+    public boolean wantsPackage(String packageName) {
+        VirtualDisplayController current = container;
         return current != null
-                && current.wantsPackage(
-                packageName);
+                && current.wantsPackage(packageName);
     }
 
-    public void capture(
-            Object activityRecord,
-            String packageName
-    ) {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            if (current != null) {
-                current.capture(
-                        activityRecord,
-                        packageName);
-            }
-            return;
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+    public void capture(Object activityRecord, String packageName) {
+        VirtualDisplayController current = container;
         if (current != null) {
-            current.capture(
-                    activityRecord,
-                    packageName);
+            current.capture(activityRecord, packageName);
         }
     }
 
-    public String managedPackageForProcess(
-            String processName
-    ) {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            return current == null
-                    ? null
-                    : current.managedPackageForProcess(
-                    processName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+    public String managedPackageForProcess(String processName) {
+        VirtualDisplayController current = container;
         return current == null
                 ? null
-                : current.managedPackageForProcess(
-                processName);
+                : current.managedPackageForProcess(processName);
     }
 
     public int activeSessionCount() {
-        if (usingNative) {
-            NativeFreeformController current =
-                    nativeContainer;
-            return current == null
-                    ? 0
-                    : current.activeSessionCount();
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+        VirtualDisplayController current = container;
         return current == null
                 ? 0
                 : current.activeSessionCount();
