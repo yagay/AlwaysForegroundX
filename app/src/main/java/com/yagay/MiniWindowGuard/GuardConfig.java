@@ -2,6 +2,10 @@ package com.yagay.MiniWindowGuard;
 
 import android.content.SharedPreferences;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+
 final class GuardConfig {
     private static volatile SharedPreferences prefs;
 
@@ -50,11 +54,39 @@ final class GuardConfig {
         }
     }
 
+    static Set<String> stringSet(String key) {
+        SharedPreferences p = prefs;
+        if (p == null) return Collections.emptySet();
+
+        try {
+            Set<String> value =
+                    p.getStringSet(
+                            key,
+                            Collections.emptySet());
+            return value == null
+                    ? Collections.emptySet()
+                    : Collections.unmodifiableSet(
+                    new HashSet<>(value));
+        } catch (Throwable ignored) {
+            return Collections.emptySet();
+        }
+    }
+
     static boolean enabled() {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
-    static boolean forceOplusSupport() {
-        return bool(ConfigKeys.OPLUS_FORCE_SUPPORT);
+    static boolean foregroundPackage(String packageName) {
+        return packageName != null
+                && stringSet(
+                ConfigKeys.FOREGROUND_PACKAGES)
+                .contains(packageName);
+    }
+
+    static boolean forceSupportPackage(String packageName) {
+        return packageName != null
+                && stringSet(
+                ConfigKeys.FORCE_SUPPORT_PACKAGES)
+                .contains(packageName);
     }
 }
