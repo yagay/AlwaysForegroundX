@@ -401,6 +401,13 @@ public final class ContainerOverlayService extends Service {
             titleBar = null;
         }
 
+        if (miniIcon != null) {
+            try {
+                windowManager.removeViewImmediate(miniIcon);
+            } catch (Throwable ignored) {
+            }
+            miniIcon = null;
+        }
     }
 
     private void removeViews() {
@@ -415,14 +422,6 @@ public final class ContainerOverlayService extends Service {
             } catch (Throwable ignored) {
             }
             windowHandle = null;
-        }
-
-        if (miniIcon != null) {
-            try {
-                windowManager.removeViewImmediate(miniIcon);
-            } catch (Throwable ignored) {
-            }
-            miniIcon = null;
         }
     }
 
