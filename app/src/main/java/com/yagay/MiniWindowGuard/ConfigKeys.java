@@ -5,6 +5,8 @@ final class ConfigKeys {
     static final String LOCAL_PREFS = "guard_local";
 
     static final String MASTER_ENABLED = "master_enabled";
+    static final String ENGINE_AUTO_RELOAD = "engine_auto_reload";
+    static final String ENGINE_RELOAD_SEQ = "engine_reload_seq";
 
     static final String SYSTEM_IMPORTANCE_TOP = "system_importance_top";
     static final String SYSTEM_HAS_RESUMED = "system_has_resumed";
@@ -40,6 +42,7 @@ final class ConfigKeys {
     static boolean defaultBoolean(String key) {
         return switch (key) {
             case MASTER_ENABLED,
+                    ENGINE_AUTO_RELOAD,
                     SYSTEM_IMPORTANCE_TOP,
                     SYSTEM_HAS_RESUMED,
                     SYSTEM_KEEP_CONTAINER_RESUMED,
