@@ -24,17 +24,12 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
             ConfigKeys.AUTO_CONTAINER,
-            ConfigKeys.NATIVE_FREEFORM_ENGINE,
-            ConfigKeys.FIXED_INTERNAL_DISPLAY,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
     private static final String[] INT_KEYS = {
             ConfigKeys.CONTAINER_WIDTH,
             ConfigKeys.CONTAINER_HEIGHT,
-            ConfigKeys.INTERNAL_DISPLAY_SCALE,
-            ConfigKeys.OUTER_MIN_WIDTH_DP,
-            ConfigKeys.OUTER_MIN_HEIGHT_DP,
             ConfigKeys.ENGINE_RELOAD_SEQ,
             ConfigKeys.CONTAINER_COMMAND_STATE,
             ConfigKeys.CONTAINER_COMMAND_SEQ
