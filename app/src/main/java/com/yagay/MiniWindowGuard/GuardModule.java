@@ -68,6 +68,8 @@ public final class GuardModule extends XposedModule {
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
+        installTaskFragmentHooks(systemClassLoader);
+        installWindowTokenHooks(systemClassLoader);
         installRemovedTaskServiceGuard(systemClassLoader);
         installProcessKillGuard(systemClassLoader);
 
@@ -261,7 +263,7 @@ public final class GuardModule extends XposedModule {
                                 || current == null
                                 || !GuardConfig.bool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)
-                                || !current.isManagedActivityRecord(
+                                || !current.isManagedTopActivityRecord(
                                         chain.getThisObject())) {
                             return chain.proceed();
                         }
@@ -289,6 +291,7 @@ public final class GuardModule extends XposedModule {
             }
 
             if (("shouldBeVisible".equals(name)
+                    || "shouldBeVisibleUnchecked".equals(name)
                     || "isVisibleRequested".equals(name))
                     && method.getReturnType() == boolean.class) {
                 try {
@@ -301,14 +304,14 @@ public final class GuardModule extends XposedModule {
                                 || current == null
                                 || !GuardConfig.bool(
                                         ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
-                                || !current.isManagedActivityRecord(
+                                || !current.isManagedTopActivityRecord(
                                         chain.getThisObject())) {
                             return chain.proceed();
                         }
 
                         String pkg = activityPackage(chain.getThisObject());
                         int state = current.stateForPackage(pkg);
-                        if (state == ConfigKeys.STATE_WINDOW) {
+                        if (state != ConfigKeys.STATE_RELEASED) {
                             diag("ACTIVITY_KEEP_VISIBLE",
                                     "pkg=" + pkg
                                             + " state=" + state
@@ -324,6 +327,154 @@ public final class GuardModule extends XposedModule {
                     log(Log.WARN, TAG,
                             "SYSTEM_SCOPE skipped ActivityRecord."
                                     + name + " error=" + t);
+                }
+                continue;
+            }
+
+            if ("makeInvisible".equals(name)
+                    && method.getReturnType() == void.class
+                    && method.getParameterCount() == 0) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        Object activityRecord = chain.getThisObject();
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
+                                || !current.isManagedTopActivityRecord(
+                                        activityRecord)) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(activityRecord);
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_ICON
+                                && state != ConfigKeys.STATE_HIDDEN) {
+                            return chain.proceed();
+                        }
+
+                        diag("ACTIVITY_INVISIBLE_BLOCK",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " method=" + name
+                                        + " stack=" + stackSummary());
+                        return null;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord.makeInvisible");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord.makeInvisible error=" + t);
+                }
+                continue;
+            }
+
+            if (("setVisibility".equals(name)
+                    || "setVisible".equals(name)
+                    || "commitVisibility".equals(name)
+                    || "setClientVisible".equals(name))
+                    && method.getReturnType() == void.class
+                    && method.getParameterCount() >= 1
+                    && method.getParameterTypes()[0] == boolean.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (args.isEmpty()
+                                || !(args.get(0) instanceof Boolean visible)
+                                || visible) {
+                            return chain.proceed();
+                        }
+
+                        TaskSurfaceController current = container;
+                        Object activityRecord = chain.getThisObject();
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
+                                || !current.isManagedTopActivityRecord(
+                                        activityRecord)) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(activityRecord);
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_ICON
+                                && state != ConfigKeys.STATE_HIDDEN) {
+                            return chain.proceed();
+                        }
+
+                        diag("ACTIVITY_VISIBILITY_FALSE_BLOCK",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " method=" + name
+                                        + " stack=" + stackSummary());
+                        return null;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord." + name);
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord."
+                                    + name + " error=" + t);
+                }
+                continue;
+            }
+
+            if ("setVisibleRequested".equals(name)
+                    && method.getReturnType() == boolean.class
+                    && method.getParameterCount() >= 1
+                    && method.getParameterTypes()[0] == boolean.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (args.isEmpty()
+                                || !(args.get(0) instanceof Boolean visible)
+                                || visible) {
+                            return chain.proceed();
+                        }
+
+                        TaskSurfaceController current = container;
+                        Object activityRecord = chain.getThisObject();
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
+                                || !current.isManagedTopActivityRecord(
+                                        activityRecord)) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(activityRecord);
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_ICON
+                                && state != ConfigKeys.STATE_HIDDEN) {
+                            return chain.proceed();
+                        }
+
+                        diag("ACTIVITY_VISIBLE_REQUEST_BLOCK",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " stack=" + stackSummary());
+                        return false;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord.setVisibleRequested");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord.setVisibleRequested error=" + t);
                 }
                 continue;
             }
@@ -367,6 +518,223 @@ public final class GuardModule extends XposedModule {
                     log(Log.WARN, TAG,
                             "SYSTEM_SCOPE skipped ActivityRecord.setState error=" + t);
                 }
+            }
+        }
+    }
+
+
+    /**
+     * Android 16 pauses a freeform/multi-window activity from TaskFragment.startPausing()
+     * when another task becomes focused. ActivityRecord.shouldPauseActivity() is not on
+     * that path, so icon/hidden mode must guard TaskFragment directly.
+     */
+    private void installTaskFragmentHooks(ClassLoader loader) {
+        Class<?> taskFragment = load(
+                loader,
+                "com.android.server.wm.TaskFragment");
+        if (taskFragment == null) return;
+
+        for (Method method : taskFragment.getDeclaredMethods()) {
+            String name = method.getName();
+
+            if ("startPausing".equals(name)
+                    && method.getReturnType() == boolean.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)) {
+                            return chain.proceed();
+                        }
+
+                        Object resumed = fieldValue(
+                                chain.getThisObject(),
+                                "mResumedActivity");
+                        if (!current.isManagedTopActivityRecord(resumed)) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(resumed);
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_ICON
+                                && state != ConfigKeys.STATE_HIDDEN) {
+                            return chain.proceed();
+                        }
+
+                        diag("TASK_PAUSE_BLOCK",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " method=" + method.toGenericString()
+                                        + " stack=" + stackSummary());
+                        return false;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed TaskFragment.startPausing "
+                                    + method.toGenericString());
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped TaskFragment.startPausing error=" + t);
+                }
+                continue;
+            }
+
+            if ("getVisibility".equals(name)
+                    && method.getReturnType() == int.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)) {
+                            return chain.proceed();
+                        }
+
+                        Object resumed = fieldValue(
+                                chain.getThisObject(),
+                                "mResumedActivity");
+                        if (!current.isManagedTopActivityRecord(resumed)) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(resumed);
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_ICON
+                                && state != ConfigKeys.STATE_HIDDEN) {
+                            return chain.proceed();
+                        }
+
+                        diag("TASK_VISIBILITY_KEEP",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " method=getVisibility");
+                        return 0;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed TaskFragment.getVisibility");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped TaskFragment.getVisibility error=" + t);
+                }
+                continue;
+            }
+
+            if ("shouldBeVisible".equals(name)
+                    && method.getReturnType() == boolean.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)) {
+                            return chain.proceed();
+                        }
+
+                        Object resumed = fieldValue(
+                                chain.getThisObject(),
+                                "mResumedActivity");
+                        if (!current.isManagedTopActivityRecord(resumed)) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(resumed);
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_ICON
+                                && state != ConfigKeys.STATE_HIDDEN) {
+                            return chain.proceed();
+                        }
+
+                        diag("TASK_SHOULD_VISIBLE_KEEP",
+                                "pkg=" + pkg
+                                        + " state=" + state);
+                        return true;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed TaskFragment.shouldBeVisible");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped TaskFragment.shouldBeVisible error=" + t);
+                }
+            }
+        }
+    }
+
+    /**
+     * OEM paths may call WindowToken.setClientVisible(false) directly after a task
+     * loses focus. Keep only the current managed top activity client-visible while
+     * icon/hidden mode uses SurfaceControl alpha for visual hiding.
+     */
+    private void installWindowTokenHooks(ClassLoader loader) {
+        Class<?> windowToken = load(
+                loader,
+                "com.android.server.wm.WindowToken");
+        if (windowToken == null) return;
+
+        for (Method method : windowToken.getDeclaredMethods()) {
+            if (!"setClientVisible".equals(method.getName())
+                    || method.getReturnType() != void.class
+                    || method.getParameterCount() != 1
+                    || method.getParameterTypes()[0] != boolean.class) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+
+                hook(method).intercept(chain -> {
+                    List<Object> args = chain.getArgs();
+                    if (args.isEmpty()
+                            || !(args.get(0) instanceof Boolean visible)
+                            || visible) {
+                        return chain.proceed();
+                    }
+
+                    TaskSurfaceController current = container;
+                    Object token = chain.getThisObject();
+                    if (!enabled()
+                            || current == null
+                            || !GuardConfig.bool(
+                                    ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
+                            || !current.isManagedTopActivityRecord(token)) {
+                        return chain.proceed();
+                    }
+
+                    String pkg = activityPackage(token);
+                    int state = current.stateForPackage(pkg);
+                    if (state != ConfigKeys.STATE_ICON
+                            && state != ConfigKeys.STATE_HIDDEN) {
+                        return chain.proceed();
+                    }
+
+                    diag("CLIENT_VISIBLE_FALSE_BLOCK",
+                            "pkg=" + pkg
+                                    + " state=" + state
+                                    + " stack=" + stackSummary());
+                    return null;
+                });
+
+                log(Log.INFO, TAG,
+                        "SYSTEM_SCOPE installed WindowToken.setClientVisible");
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG,
+                        "SYSTEM_SCOPE skipped WindowToken.setClientVisible error=" + t);
             }
         }
     }
