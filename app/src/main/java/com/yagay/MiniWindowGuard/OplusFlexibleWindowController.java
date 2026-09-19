@@ -2,6 +2,7 @@ package com.yagay.MiniWindowGuard;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Rect;
 import android.media.AudioManager;
@@ -1558,6 +1559,11 @@ final class OplusFlexibleWindowController {
     ) {
         if (value == null) return null;
 
+        if (value instanceof String) {
+            return normalizePackage(
+                    (String) value);
+        }
+
         if (value
                 instanceof ComponentName) {
             return ((ComponentName) value)
@@ -1565,39 +1571,58 @@ final class OplusFlexibleWindowController {
         }
 
         if (value
+                instanceof Intent) {
+            Intent intent =
+                    (Intent) value;
+
+            ComponentName component =
+                    intent.getComponent();
+
+            if (component != null) {
+                return component.getPackageName();
+            }
+
+            return normalizePackage(
+                    intent.getPackage());
+        }
+
+        if (value
                 instanceof ActivityInfo) {
-            return ((ActivityInfo) value)
-                    .packageName;
-        }
-
-        Object packageName =
-                fieldValue(
-                        value,
-                        "packageName");
-
-        if (packageName
-                instanceof String) {
-            return (String) packageName;
-        }
-
-        Object component =
-                fieldValue(
-                        value,
-                        "mActivityComponent");
-
-        if (component
-                instanceof ComponentName) {
-            return ((ComponentName) component)
-                    .getPackageName();
+            return normalizePackage(
+                    ((ActivityInfo) value)
+                            .packageName);
         }
 
         for (String field :
                 new String[]{
+                        "packageName",
+                        "mPackageName"
+                }) {
+            Object packageName =
+                    fieldValue(
+                            value,
+                            field);
+
+            if (packageName
+                    instanceof String) {
+                String normalized =
+                        normalizePackage(
+                                (String) packageName);
+
+                if (normalized != null) {
+                    return normalized;
+                }
+            }
+        }
+
+        for (String field :
+                new String[]{
+                        "mActivityComponent",
                         "topActivity",
                         "baseActivity",
                         "realActivity"
                 }) {
-            component =
+            Object component =
                     fieldValue(
                             value,
                             field);
@@ -1609,6 +1634,29 @@ final class OplusFlexibleWindowController {
             }
         }
 
+        for (String field :
+                new String[]{
+                        "baseIntent",
+                        "intent",
+                        "mIntent"
+                }) {
+            Object intent =
+                    fieldValue(
+                            value,
+                            field);
+
+            if (intent
+                    instanceof Intent) {
+                String pkg =
+                        objectPackage(
+                                intent);
+
+                if (pkg != null) {
+                    return pkg;
+                }
+            }
+        }
+
         Object info =
                 fieldValue(
                         value,
@@ -1616,11 +1664,74 @@ final class OplusFlexibleWindowController {
 
         if (info
                 instanceof ActivityInfo) {
-            return ((ActivityInfo) info)
-                    .packageName;
+            String pkg =
+                    normalizePackage(
+                            ((ActivityInfo) info)
+                                    .packageName);
+
+            if (pkg != null) {
+                return pkg;
+            }
+        }
+
+        Object top =
+                invokeNoArg(
+                        value,
+                        "topRunningActivity");
+
+        if (top != null
+                && top != value) {
+            String pkg =
+                    objectPackage(
+                            top);
+
+            if (pkg != null) {
+                return pkg;
+            }
+        }
+
+        top =
+                invokeNoArg(
+                        value,
+                        "getTopNonFinishingActivity");
+
+        if (top != null
+                && top != value) {
+            String pkg =
+                    objectPackage(
+                            top);
+
+            if (pkg != null) {
+                return pkg;
+            }
         }
 
         return null;
+    }
+
+    private static String normalizePackage(
+            String value
+    ) {
+        if (value == null) return null;
+
+        String normalized =
+                value.trim();
+
+        if (normalized.isEmpty()) {
+            return null;
+        }
+
+        int slash =
+                normalized.indexOf('/');
+
+        if (slash > 0) {
+            normalized =
+                    normalized.substring(
+                            0,
+                            slash);
+        }
+
+        return normalized;
     }
 
     private static Rect taskInfoBounds(
