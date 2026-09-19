@@ -69,19 +69,12 @@ final class GuardConfig {
                 66);
     }
 
-    static boolean safeInitialDisplay() {
-        return bool(ConfigKeys.SAFE_INITIAL_DISPLAY);
+    static boolean fixedInternalDisplay() {
+        return bool(ConfigKeys.FIXED_INTERNAL_DISPLAY);
     }
 
-    static boolean followWindowAfterStart() {
-        return bool(ConfigKeys.FOLLOW_WINDOW_AFTER_START);
-    }
-
-    static int startupSettleMs() {
-        return clamp(
-                integer(ConfigKeys.STARTUP_SETTLE_MS),
-                0,
-                5000);
+    static boolean lockWindowAspect() {
+        return bool(ConfigKeys.LOCK_WINDOW_ASPECT);
     }
 
     static int internalDisplayScale() {
