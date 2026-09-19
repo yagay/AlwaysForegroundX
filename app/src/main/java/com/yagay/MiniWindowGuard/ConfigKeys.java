@@ -55,8 +55,8 @@ final class ConfigKeys {
 
     static int defaultInt(String key) {
         return switch (key) {
-            case CONTAINER_WIDTH -> 58;
-            case CONTAINER_HEIGHT -> 66;
+            case CONTAINER_WIDTH,
+                    CONTAINER_HEIGHT -> 58;
             default -> 0;
         };
     }
