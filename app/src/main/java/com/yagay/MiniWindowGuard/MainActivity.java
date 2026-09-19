@@ -31,7 +31,6 @@ public final class MainActivity extends Activity {
     private TextView overlayStatus;
     private TextView targetCount;
     private TextView diagnosticsStatus;
-    private Button diagnosticsStart;
     private Button diagnosticsExport;
     private TextView widthLabel;
     private TextView heightLabel;
@@ -275,10 +274,33 @@ public final class MainActivity extends Activity {
 
     private void addDiagnosticsCard(LinearLayout parent) {
         LinearLayout card = card(parent, "完整诊断",
-                "开始后再复现问题。详细日志只在诊断期间开启，结束后会导出系统状态和日志 ZIP。");
+                "详细日志可以长期保持开启。打开一次后会持久保存，重启 App/手机后仍保持，不需要每次先点“开始诊断”。");
 
         diagnosticsStatus = statusLine("");
         card.addView(diagnosticsStatus);
+
+        Switch persistentLog = new Switch(this);
+        persistentLog.setText("持续开启详细诊断日志");
+        persistentLog.setTextSize(15);
+        persistentLog.setChecked(
+                GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE));
+        persistentLog.setOnCheckedChangeListener((button, checked) -> {
+            if (checked) {
+                DiagnosticsManager.startSession();
+                Toast.makeText(
+                        this,
+                        "详细日志已持续开启；以后直接复现问题并导出 ZIP 即可。",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                DiagnosticsManager.stopSession();
+                Toast.makeText(
+                        this,
+                        "详细日志已关闭。",
+                        Toast.LENGTH_SHORT).show();
+            }
+            refreshDiagnosticsStatus();
+        });
+        card.addView(persistentLog);
 
         card.addView(detailBlock("诊断内容",
                 "• system_server Hook 安装/命中和每次强制结果。\n"
@@ -290,34 +312,35 @@ public final class MainActivity extends Activity {
                         + "• 最近 30000 行完整 logcat + 自动筛选后的重点日志。"));
 
         TextView privacy = detailBlock("注意",
-                "完整 logcat 可能包含其他应用和系统事件。诊断 ZIP 只用于排查时分享，完成后建议关闭诊断模式。");
+                "持续日志会增加少量 logcat 输出，而且完整 logcat 可能包含其他应用和系统事件。排查期间可以一直开启，平时不需要时再关闭。");
         privacy.setTextColor(0xFF8A4B08);
         card.addView(privacy);
 
-        diagnosticsStart = button("开始诊断");
-        diagnosticsStart.setOnClickListener(v -> {
-            DiagnosticsManager.startSession();
-            Toast.makeText(this,
-                    "诊断已开始。现在复现问题，然后返回这里导出。",
-                    Toast.LENGTH_LONG).show();
-            refreshDiagnosticsStatus();
-        });
-        card.addView(diagnosticsStart);
-
-        diagnosticsExport = button("结束并导出诊断 ZIP");
-        diagnosticsExport.setOnClickListener(v -> exportDiagnostics(true));
+        diagnosticsExport = button("导出诊断 ZIP");
+        diagnosticsExport.setOnClickListener(v -> exportDiagnostics());
         card.addView(diagnosticsExport);
 
-        Button snapshot = button("直接导出当前状态");
-        snapshot.setOnClickListener(v -> exportDiagnostics(false));
-        card.addView(snapshot);
+        Button resetSession = button("重置诊断起点");
+        resetSession.setOnClickListener(v -> {
+            if (GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE)) {
+                DiagnosticsManager.startSession();
+                Toast.makeText(
+                        this,
+                        "诊断起点已重置，详细日志保持开启。",
+                        Toast.LENGTH_SHORT).show();
+                refreshDiagnosticsStatus();
+            } else {
+                Toast.makeText(
+                        this,
+                        "请先打开持续诊断日志。",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+        card.addView(resetSession);
     }
 
-    private void exportDiagnostics(boolean stopSession) {
+    private void exportDiagnostics() {
         if (diagnosticsExport != null) diagnosticsExport.setEnabled(false);
-        if (diagnosticsStart != null) diagnosticsStart.setEnabled(false);
-
-        if (stopSession) DiagnosticsManager.stopSession();
 
         Toast.makeText(this,
                 "正在收集 system_server、Root 和系统状态…",
@@ -327,7 +350,6 @@ public final class MainActivity extends Activity {
             DiagnosticsManager.ExportResult result = DiagnosticsManager.export(this);
             runOnUiThread(() -> {
                 if (diagnosticsExport != null) diagnosticsExport.setEnabled(true);
-                if (diagnosticsStart != null) diagnosticsStart.setEnabled(true);
                 refreshDiagnosticsStatus();
 
                 if (!result.ok()) {
@@ -361,11 +383,11 @@ public final class MainActivity extends Activity {
         String started = GuardApp.getString(ConfigKeys.DIAGNOSTICS_STARTED_AT);
 
         if (active) {
-            diagnosticsStatus.setText("诊断状态：记录中"
+            diagnosticsStatus.setText("详细日志：持续开启"
                     + (started.isEmpty() ? "" : " · start=" + started));
             diagnosticsStatus.setTextColor(0xFFB3261E);
         } else {
-            diagnosticsStatus.setText("诊断状态：未开启");
+            diagnosticsStatus.setText("详细日志：关闭");
             diagnosticsStatus.setTextColor(0xFF16794A);
         }
     }
