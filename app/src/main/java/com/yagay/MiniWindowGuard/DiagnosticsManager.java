@@ -95,6 +95,12 @@ final class DiagnosticsManager {
 
             writeCommand(workDir, "10-build-properties.txt",
                     "getprop", 512_000);
+            writeCommand(workDir, "10a-display.txt",
+                    "dumpsys display", 2_000_000);
+            writeCommand(workDir, "10b-input.txt",
+                    "dumpsys input", 2_000_000);
+            writeCommand(workDir, "10c-surfaceflinger-list.txt",
+                    "dumpsys SurfaceFlinger --list", 1_000_000);
             writeCommand(workDir, "11-activity-activities.txt",
                     "dumpsys activity activities", 2_000_000);
             writeCommand(workDir, "12-activity-processes.txt",
@@ -289,6 +295,10 @@ final class DiagnosticsManager {
                 "VirtualDisplay",
                 "VD_",
                 "DisplayManager",
+                "DisplayDevice",
+                "moveRootTaskToDisplay",
+                "InputDispatcher",
+                "InputManager",
                 "TaskSurface",
                 "SurfaceControl",
                 "OplusHans",
