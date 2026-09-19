@@ -221,6 +221,12 @@ public final class MainActivity extends Activity {
                 "尺寸只控制 VirtualDisplay Overlay，"
                         + "不再修改主屏 Task 的 bounds/windowing mode。");
 
+        card.addView(detailBlock(
+                "首次打开提示",
+                "首次创建小窗时，建议把“窗口宽度”和“窗口高度”设置成相同百分比。"
+                        + "如果两者差异较大，部分 OxygenOS 设备可能出现首次无画面。"
+                        + "小窗成功显示以后，可以再自由拖动缩放，长宽不需要保持一致。"));
+
         int width = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH),
                 58);
