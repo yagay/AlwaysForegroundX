@@ -83,6 +83,8 @@ public final class AlwaysForegroundModule extends XposedModule {
             ThreadLocal.withInitial(() -> false);
     private final BackgroundVirtualDisplay backgroundVirtualDisplay =
             new BackgroundVirtualDisplay();
+    private final SmallWindowController smallWindowController =
+            new SmallWindowController();
 
     private volatile String activePackage;
     private volatile Handler mainHandler;
@@ -278,6 +280,27 @@ public final class AlwaysForegroundModule extends XposedModule {
                         return chain.proceed();
                     }
 
+                    // Prefer a real system/OEM small window. It keeps the Activity genuinely
+                    // active in WindowManager and can be minimized by the OS, which is closer to
+                    // a universal "foreground container" than lifecycle spoofing.
+                    SmallWindowController.LaunchResult small =
+                            smallWindowController.launch(context, intent);
+                    if (small.handled) {
+                        log(Log.INFO, TAG, "GENERIC_SMALL_WINDOW routed"
+                                + " target=" + target.flattenToShortString()
+                                + " backend=" + small.backend
+                                + " detail=" + small.detail
+                                + " via=" + signature
+                                + " package=" + activePackage);
+                        return null;
+                    }
+
+                    log(Log.INFO, TAG, "GENERIC_SMALL_WINDOW fallback"
+                            + " target=" + target.flattenToShortString()
+                            + " reason=" + small.detail
+                            + " package=" + activePackage);
+
+                    // Last-resort container for ROMs without usable small-window APIs.
                     android.app.ActivityOptions options =
                             backgroundVirtualDisplay.makeLaunchOptions(context);
                     if (options == null) {
