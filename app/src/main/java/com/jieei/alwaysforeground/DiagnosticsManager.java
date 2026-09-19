@@ -191,7 +191,7 @@ final class DiagnosticsManager {
                     || line.contains("GENERIC_CONTINUITY")
                     || line.contains("GENERIC_VIRTUAL_")
                     || line.contains("GENERIC_SMALL_WINDOW")
-                    || line.contains("HIT Hongguo native")) {
+                    || line.contains("VIRTUAL_FOREGROUND")) {
                 out.append(line).append('\n');
             }
         }
@@ -277,7 +277,7 @@ final class DiagnosticsManager {
 
     private static String buildSummary(String target, boolean root, boolean lsposedCopied,
                                        long startMs, long endMs) {
-        return "AlwaysForegroundX diagnostic session\n"
+        return "小窗守护 diagnostic session\n"
                 + "Target: " + target + "\n"
                 + "Start: " + formatFull(startMs) + "\n"
                 + "End: " + formatFull(endMs) + "\n"
@@ -287,7 +287,7 @@ final class DiagnosticsManager {
                 + "Automatic hook-point locator: enabled\n"
                 + "Hook candidates: current diagnostic session only\n\n"
                 + "Files:\n"
-                + "- hook-candidates.txt: current-session playback endpoint events only\n"
+                + "- hook-candidates.txt: playback endpoints + virtual foreground/small-window decisions\n"
                 + "- module.log: AlwaysForeground/libxposed/LSPosed related logcat\n"
                 + "- logcat.txt: target + lifecycle/window/runtime/player related logcat\n"
                 + "- system-events.txt: ActivityManager/WindowManager event buffer entries\n"
