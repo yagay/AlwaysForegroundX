@@ -280,6 +280,24 @@ final class VirtualDisplayController {
         }
     }
 
+    void setPackageState(
+            String packageName,
+            int state,
+            String reason
+    ) {
+        Session session = latestSession(packageName);
+        if (session != null) {
+            int safeState = ConfigKeys.sanitizeState(state);
+            handler.post(() ->
+                    applyState(
+                            session,
+                            safeState,
+                            reason == null
+                                    ? "external-state"
+                                    : reason));
+        }
+    }
+
     private final Runnable commandPoll = new Runnable() {
         @Override
         public void run() {
