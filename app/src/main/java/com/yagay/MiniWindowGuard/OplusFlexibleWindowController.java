@@ -2,6 +2,8 @@ package com.yagay.MiniWindowGuard;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Handler;
 import android.os.IBinder;
@@ -9,24 +11,27 @@ import android.os.SystemClock;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * OxygenOS / ColorOS native flexible-window backend.
+ * Runtime state for OxygenOS / ColorOS FlexibleWindow.
  *
- * No app content is mirrored and no VirtualDisplay is created. The existing
- * task stays on display 0 and is handed to OPlusActivityTaskManager's native
- * flexible-window implementation. MiniWindowGuard only keeps the task/process
- * logically foreground through the existing system_server hooks.
+ * This class never creates a window, Surface, VirtualDisplay or overlay.
+ * OxygenOS owns all rendering and interaction. We only request the OEM window,
+ * remember the requested task, and expose whether the task is *currently*
+ * inside the OPlus flexible/floating state.
  */
 final class OplusFlexibleWindowController {
+    interface Logger {
+        void log(String event, String detail);
+    }
+
     private static final long COMMAND_POLL_MS = 180L;
-    private static final long TOGGLE_DEBOUNCE_MS = 1200L;
+    private static final long TOGGLE_DEBOUNCE_MS = 900L;
 
     private final Handler handler;
-    private final VirtualDisplayController.Logger logger;
+    private final Logger logger;
     private final Map<Integer, Session> sessions =
             new ConcurrentHashMap<>();
 
@@ -42,7 +47,7 @@ final class OplusFlexibleWindowController {
     OplusFlexibleWindowController(
             Handler handler,
             Context systemContext,
-            VirtualDisplayController.Logger logger
+            Logger logger
     ) {
         this.handler = handler;
         this.systemContext = systemContext;
@@ -56,35 +61,14 @@ final class OplusFlexibleWindowController {
         handler.removeCallbacks(commandPoll);
         handler.post(commandPoll);
 
-        log("OPLUS_ENGINE_READY",
-                "api=" + (toggleFlexibleWindow != null)
-                        + " manager="
-                        + (oplusAtm == null
-                        ? "null"
-                        : oplusAtm.getClass().getName()));
+        log(
+                "OPLUS_ENGINE_READY",
+                "toggleApi=" + (toggleFlexibleWindow != null));
     }
 
     void shutdown() {
         running = false;
         handler.removeCallbacks(commandPoll);
-
-        Session[] snapshot =
-                sessions.values().toArray(new Session[0]);
-
-        for (Session session : snapshot) {
-            try {
-                releaseSession(
-                        session,
-                        true,
-                        "engine-reload");
-            } catch (Throwable t) {
-                log("OPLUS_SHUTDOWN_ERROR",
-                        "pkg=" + session.packageName
-                                + " taskId=" + session.taskId
-                                + " error=" + t);
-            }
-        }
-
         sessions.clear();
         pendingPackage = "";
         lastCommandSeq = Integer.MIN_VALUE;
@@ -99,14 +83,40 @@ final class OplusFlexibleWindowController {
     }
 
     boolean wantsPackage(String packageName) {
-        return packageName != null
-                && (packageName.equals(pendingPackage)
-                || isManagedPackage(packageName)
-                || immediateCommandState(packageName) != null);
+        if (packageName == null || packageName.isBlank()) {
+            return false;
+        }
+
+        if (packageName.equals(pendingPackage)) {
+            return true;
+        }
+
+        for (Session session : sessions.values()) {
+            if (session.active
+                    && packageName.equals(session.packageName)) {
+                return true;
+            }
+        }
+
+        return immediateCommandState(packageName) != null;
     }
 
-    boolean isManagedPackage(String packageName) {
-        if (packageName == null) return false;
+    boolean isKnownPackage(String packageName) {
+        if (packageName == null || packageName.isBlank()) {
+            return false;
+        }
+
+        if (packageName.equals(pendingPackage)) {
+            return true;
+        }
+
+        String commandPackage =
+                GuardConfig.string(
+                        ConfigKeys.OPLUS_COMMAND_PACKAGE);
+
+        if (packageName.equals(commandPackage)) {
+            return true;
+        }
 
         for (Session session : sessions.values()) {
             if (session.active
@@ -118,13 +128,38 @@ final class OplusFlexibleWindowController {
         return false;
     }
 
-    String managedPackageForProcess(String processName) {
+    /**
+     * Foreground/kill protection is intentionally stricter than "known".
+     * A package is protected only while OxygenOS still owns the task as an
+     * actual flexible window or its native edge/minimized floating handle.
+     */
+    boolean isProtectedPackage(String packageName) {
+        if (packageName == null) return false;
+
+        for (Session session : sessions.values()) {
+            if (!session.active
+                    || !packageName.equals(session.packageName)) {
+                continue;
+            }
+
+            if (isSessionProtected(session)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    String protectedPackageForProcess(String processName) {
         if (processName == null || processName.isBlank()) {
             return null;
         }
 
         for (Session session : sessions.values()) {
-            if (!session.active) continue;
+            if (!session.active
+                    || !isSessionProtected(session)) {
+                continue;
+            }
 
             String pkg = session.packageName;
             if (processName.equals(pkg)
@@ -136,49 +171,21 @@ final class OplusFlexibleWindowController {
         return null;
     }
 
-    boolean isManagedTopActivityRecord(Object activityRecord) {
-        if (activityRecord == null) return false;
-
-        String pkg = activityPackage(activityRecord);
-        if (!isManagedPackage(pkg)) return false;
-
-        Object task = activityTask(activityRecord);
-        if (task == null) return false;
-
-        Object top = invokeNoArg(
-                task,
-                "topRunningActivity");
-
-        if (top == null) {
-            top = invokeNoArg(
-                    task,
-                    "getTopResumedActivity");
-        }
-
-        return top == null || top == activityRecord;
-    }
-
-    int stateForPackage(String packageName) {
-        Session session = latestSession(packageName);
-        return session == null || !session.active
-                ? ConfigKeys.STATE_RELEASED
-                : session.state;
-    }
-
     void capture(
             Object activityRecord,
             String packageName
     ) {
         if (activityRecord == null
                 || packageName == null
-                || !GuardConfig.bool(ConfigKeys.AUTO_CONTAINER)
+                || !GuardConfig.enabled()
                 || !wantsPackage(packageName)) {
             return;
         }
 
         Object task = activityTask(activityRecord);
         if (task == null) {
-            log("OPLUS_CAPTURE_SKIP",
+            log(
+                    "OPLUS_CAPTURE_SKIP",
                     "pkg=" + packageName
                             + " reason=no-task");
             return;
@@ -190,18 +197,10 @@ final class OplusFlexibleWindowController {
 
         int taskId = taskId(task);
         if (taskId < 0) {
-            log("OPLUS_CAPTURE_SKIP",
+            log(
+                    "OPLUS_CAPTURE_SKIP",
                     "pkg=" + packageName
                             + " reason=no-task-id");
-            return;
-        }
-
-        Session existing = sessions.get(taskId);
-        if (existing != null && existing.active) {
-            existing.activityRecord = activityRecord;
-            existing.taskObject = task;
-            existing.lastSeenElapsed =
-                    SystemClock.elapsedRealtime();
             return;
         }
 
@@ -215,68 +214,181 @@ final class OplusFlexibleWindowController {
                         ? pendingState
                         : ConfigKeys.STATE_WINDOW;
 
-        Session session =
-                new Session(
-                        taskId,
-                        packageName,
-                        task,
-                        activityRecord,
-                        initialState);
+        Session session = sessions.get(taskId);
 
-        sessions.put(taskId, session);
+        if (session == null || !session.active) {
+            session = new Session(
+                    taskId,
+                    packageName,
+                    task,
+                    activityRecord,
+                    initialState);
+            sessions.put(taskId, session);
+
+            log(
+                    "OPLUS_TASK_TRACKED",
+                    "pkg=" + packageName
+                            + " taskId=" + taskId
+                            + " bounds=" + taskBounds(task)
+                            + " maxBounds=" + taskMaxBounds(task)
+                            + " flexible="
+                            + isFlexibleTask(task)
+                            + " floating="
+                            + isInFloatingList(taskId));
+        } else {
+            session.taskObject = task;
+            session.activityRecord = activityRecord;
+            session.state = initialState;
+            session.lastSeenElapsed =
+                    SystemClock.elapsedRealtime();
+
+            log(
+                    "OPLUS_ACTIVITY_CHANGED",
+                    "pkg=" + packageName
+                            + " taskId=" + taskId
+                            + " activity="
+                            + activityComponent(activityRecord)
+                            + " flexible="
+                            + isFlexibleTask(task));
+        }
 
         if (packageName.equals(pendingPackage)) {
             pendingPackage = "";
         }
 
-        if (immediateState != null) {
-            log("OPLUS_IMMEDIATE_COMMAND",
-                    "pkg=" + packageName
-                            + " seq="
-                            + GuardConfig.integer(
-                            ConfigKeys.CONTAINER_COMMAND_SEQ)
-                            + " state=" + initialState);
+        if (initialState == ConfigKeys.STATE_RELEASED) {
+            releaseSession(
+                    session,
+                    "capture-release");
+            return;
         }
 
-        log("OPLUS_TASK_CAPTURED",
-                "pkg=" + packageName
+        final Session target = session;
+
+        // Let the newly resumed Activity finish its own configuration first.
+        // This is important for video/series Activities that request fullscreen
+        // during launch; OPlus support hooks decide whether it remains eligible.
+        handler.postDelayed(
+                () -> ensureFlexible(
+                        target,
+                        "activity-resumed"),
+                120L);
+
+        handler.postDelayed(
+                () -> verifyState(
+                        target,
+                        "activity-resumed"),
+                650L);
+    }
+
+    void onOplusTaskInfoChanged(Object taskInfo) {
+        if (taskInfo == null) return;
+
+        int taskId = taskInfoId(taskInfo);
+        if (taskId < 0) return;
+
+        Session session = sessions.get(taskId);
+        if (session == null || !session.active) {
+            return;
+        }
+
+        String pkg = taskInfoPackage(taskInfo);
+        boolean embedded =
+                booleanField(
+                        taskInfo,
+                        "isInFlexibleEmbedded",
+                        false);
+
+        Rect bounds =
+                taskInfoBounds(taskInfo);
+        Rect maxBounds =
+                taskInfoMaxBounds(taskInfo);
+
+        boolean bounded =
+                bounds != null
+                        && maxBounds != null
+                        && !bounds.isEmpty()
+                        && !maxBounds.isEmpty()
+                        && !bounds.equals(maxBounds);
+
+        session.oemReportedFlexible =
+                embedded || bounded;
+        session.lastOplusStateElapsed =
+                SystemClock.elapsedRealtime();
+
+        log(
+                "OPLUS_TASK_INFO",
+                "pkg=" + session.packageName
+                        + " reportedPkg=" + pkg
                         + " taskId=" + taskId
-                        + " displayId="
-                        + taskDisplayId(task)
-                        + " bounds="
-                        + taskBounds(task)
-                        + " flexible="
-                        + isFlexibleTask(task)
-                        + " support="
-                        + queryOplusSupport(task)
-                        + " state="
-                        + initialState);
-
-        handler.post(() ->
-                applyState(
-                        session,
-                        initialState,
-                        "capture"));
+                        + " embedded=" + embedded
+                        + " bounded=" + bounded
+                        + " bounds=" + bounds
+                        + " maxBounds=" + maxBounds
+                        + " protected="
+                        + isSessionProtected(session));
     }
 
-    void releasePackage(String packageName) {
-        Session session = latestSession(packageName);
-        if (session != null) {
-            handler.post(() ->
-                    releaseSession(
-                            session,
-                            true,
-                            "release-package"));
+    void onOplusTaskVanished(Object taskInfo) {
+        if (taskInfo == null) return;
+
+        int taskId = taskInfoId(taskInfo);
+        if (taskId < 0) return;
+
+        Session session = sessions.get(taskId);
+        if (session == null) return;
+
+        session.oemReportedFlexible = false;
+        session.lastOplusStateElapsed =
+                SystemClock.elapsedRealtime();
+
+        boolean runningTask =
+                booleanField(
+                        taskInfo,
+                        "isRunning",
+                        true);
+
+        int displayId =
+                intField(
+                        taskInfo,
+                        "displayId",
+                        0);
+
+        log(
+                "OPLUS_TASK_VANISHED",
+                "pkg=" + session.packageName
+                        + " taskId=" + taskId
+                        + " isRunning=" + runningTask
+                        + " displayId=" + displayId);
+
+        if (!runningTask || displayId < 0) {
+            releaseSession(
+                    session,
+                    "task-vanished");
         }
     }
 
-    private Integer immediateCommandState(
-            String packageName
-    ) {
-        if (packageName == null) return null;
+    private boolean isSessionProtected(Session session) {
+        if (session == null
+                || !session.active
+                || session.state == ConfigKeys.STATE_RELEASED) {
+            return false;
+        }
 
-        int seq = GuardConfig.integer(
-                ConfigKeys.CONTAINER_COMMAND_SEQ);
+        if (session.oemReportedFlexible) {
+            return true;
+        }
+
+        Object task = session.taskObject;
+
+        return isFlexibleTask(task)
+                || isInFloatingList(session.taskId);
+    }
+
+    private Integer immediateCommandState(String packageName) {
+        int seq =
+                GuardConfig.integer(
+                        ConfigKeys.OPLUS_COMMAND_SEQ);
 
         if (seq == lastCommandSeq) {
             return null;
@@ -284,59 +396,59 @@ final class OplusFlexibleWindowController {
 
         String commandPackage =
                 GuardConfig.string(
-                        ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+                        ConfigKeys.OPLUS_COMMAND_PACKAGE);
 
         if (!packageName.equals(commandPackage)) {
             return null;
         }
 
-        int state = ConfigKeys.sanitizeState(
+        return ConfigKeys.sanitizeState(
                 GuardConfig.integer(
-                        ConfigKeys.CONTAINER_COMMAND_STATE));
-
-        return state == ConfigKeys.STATE_RELEASED
-                ? null
-                : state;
+                        ConfigKeys.OPLUS_COMMAND_STATE));
     }
 
     private final Runnable commandPoll = new Runnable() {
         @Override
         public void run() {
             try {
-                int seq = GuardConfig.integer(
-                        ConfigKeys.CONTAINER_COMMAND_SEQ);
+                int seq =
+                        GuardConfig.integer(
+                                ConfigKeys.OPLUS_COMMAND_SEQ);
 
                 if (seq != lastCommandSeq) {
                     lastCommandSeq = seq;
 
-                    String pkg = GuardConfig.string(
-                            ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+                    String pkg =
+                            GuardConfig.string(
+                                    ConfigKeys.OPLUS_COMMAND_PACKAGE);
 
-                    int state = ConfigKeys.sanitizeState(
-                            GuardConfig.integer(
-                                    ConfigKeys.CONTAINER_COMMAND_STATE));
+                    int state =
+                            ConfigKeys.sanitizeState(
+                                    GuardConfig.integer(
+                                            ConfigKeys.OPLUS_COMMAND_STATE));
 
                     if (!pkg.isEmpty()) {
                         Session session =
                                 latestSession(pkg);
 
-                        if (state == ConfigKeys.STATE_RELEASED) {
+                        if (state
+                                == ConfigKeys.STATE_RELEASED) {
                             if (session != null) {
                                 releaseSession(
                                         session,
-                                        true,
                                         "remote-command");
                             }
                         } else if (session != null) {
-                            applyState(
+                            session.state = state;
+                            ensureFlexible(
                                     session,
-                                    state,
                                     "remote-command");
                         } else {
                             pendingPackage = pkg;
                             pendingState = state;
 
-                            log("OPLUS_COMMAND_PENDING",
+                            log(
+                                    "OPLUS_COMMAND_PENDING",
                                     "seq=" + seq
                                             + " pkg=" + pkg
                                             + " state=" + state);
@@ -344,7 +456,8 @@ final class OplusFlexibleWindowController {
                     }
                 }
             } catch (Throwable t) {
-                log("OPLUS_COMMAND_ERROR",
+                log(
+                        "OPLUS_COMMAND_ERROR",
                         String.valueOf(t));
             } finally {
                 if (running) {
@@ -356,85 +469,34 @@ final class OplusFlexibleWindowController {
         }
     };
 
-    private void applyState(
-            Session session,
-            int state,
-            String reason
-    ) {
-        if (session == null || !session.active) {
-            return;
-        }
-
-        int safeState =
-                ConfigKeys.sanitizeState(state);
-
-        session.state = safeState;
-        session.lastSeenElapsed =
-                SystemClock.elapsedRealtime();
-
-        if (safeState == ConfigKeys.STATE_RELEASED) {
-            releaseSession(
-                    session,
-                    true,
-                    reason);
-            return;
-        }
-
-        // System flexible window owns minimize/hide/restore UI itself.
-        // Any non-released MiniWindowGuard state therefore means "keep this
-        // OPlus task protected and ensure it is in native flexible mode".
-        ensureFlexible(
-                session,
-                reason);
-
-        log("OPLUS_STATE",
-                "pkg=" + session.packageName
-                        + " taskId=" + session.taskId
-                        + " state=" + safeState
-                        + " reason=" + reason);
-    }
-
     private void ensureFlexible(
             Session session,
             String reason
     ) {
-        if (session == null || !session.active) return;
+        if (session == null
+                || !session.active
+                || session.state == ConfigKeys.STATE_RELEASED) {
+            return;
+        }
 
-        Object task = session.taskObject;
-
-        if (isFlexibleTask(task)) {
-            session.enterConfirmed = true;
-
-            log("OPLUS_FLEX_ALREADY",
+        if (isSessionProtected(session)) {
+            log(
+                    "OPLUS_FLEX_ALREADY",
                     "pkg=" + session.packageName
                             + " taskId=" + session.taskId
-                            + " reason=" + reason
-                            + " bounds=" + taskBounds(task));
+                            + " reason=" + reason);
             return;
         }
 
         long now = SystemClock.elapsedRealtime();
-
         if (now - session.lastToggleElapsed
                 < TOGGLE_DEBOUNCE_MS) {
-            log("OPLUS_FLEX_PENDING",
-                    "pkg=" + session.packageName
-                            + " taskId=" + session.taskId
-                            + " reason=" + reason
-                            + " attempts="
-                            + session.toggleAttempts);
             return;
         }
 
-        if (!toggleFlexible(
+        toggleFlexible(
                 session,
                 true,
-                reason)) {
-            return;
-        }
-
-        scheduleVerification(
-                session,
                 reason);
     }
 
@@ -443,17 +505,20 @@ final class OplusFlexibleWindowController {
             boolean enter,
             String reason
     ) {
-        if (session == null) return false;
-
         resolveOplusApi();
 
         Object manager = oplusAtm;
         Method toggle = toggleFlexibleWindow;
 
-        if (manager == null || toggle == null) {
-            log("OPLUS_FLEX_FAILED",
-                    "pkg=" + session.packageName
-                            + " taskId=" + session.taskId
+        if (session == null
+                || manager == null
+                || toggle == null) {
+            log(
+                    "OPLUS_FLEX_FAILED",
+                    "taskId="
+                            + (session == null
+                            ? -1
+                            : session.taskId)
                             + " enter=" + enter
                             + " reason=" + reason
                             + " error=api-unavailable");
@@ -464,10 +529,6 @@ final class OplusFlexibleWindowController {
             session.lastToggleElapsed =
                     SystemClock.elapsedRealtime();
 
-            if (enter) {
-                session.toggleAttempts++;
-            }
-
             Object result =
                     toggle.invoke(
                             manager,
@@ -476,20 +537,20 @@ final class OplusFlexibleWindowController {
                             true,
                             enter);
 
-            log("OPLUS_FLEX_TOGGLE",
+            log(
+                    "OPLUS_FLEX_TOGGLE",
                     "pkg=" + session.packageName
                             + " taskId=" + session.taskId
                             + " enter=" + enter
                             + " reason=" + reason
-                            + " attempt="
-                            + session.toggleAttempts
                             + " result=" + result
-                            + " boundsBefore="
+                            + " bounds="
                             + taskBounds(session.taskObject));
 
             return true;
         } catch (Throwable t) {
-            log("OPLUS_FLEX_FAILED",
+            log(
+                    "OPLUS_FLEX_FAILED",
                     "pkg=" + session.packageName
                             + " taskId=" + session.taskId
                             + " enter=" + enter
@@ -499,91 +560,56 @@ final class OplusFlexibleWindowController {
         }
     }
 
-    private void scheduleVerification(
+    private void verifyState(
             Session session,
-            String reason
-    ) {
-        long[] delays = {250L, 650L, 1300L};
-
-        for (long delay : delays) {
-            handler.postDelayed(() -> {
-                if (session == null || !session.active) {
-                    return;
-                }
-
-                boolean flexible =
-                        isFlexibleTask(
-                                session.taskObject);
-
-                if (flexible) {
-                    session.enterConfirmed = true;
-                }
-
-                log("OPLUS_FLEX_VERIFY",
-                        "pkg=" + session.packageName
-                                + " taskId="
-                                + session.taskId
-                                + " delayMs=" + delay
-                                + " flexible="
-                                + flexible
-                                + " displayId="
-                                + taskDisplayId(
-                                session.taskObject)
-                                + " mode="
-                                + taskWindowingMode(
-                                session.taskObject)
-                                + " bounds="
-                                + taskBounds(
-                                session.taskObject));
-
-                if (!flexible
-                        && delay >= 1300L
-                        && session.toggleAttempts < 2) {
-                    ensureFlexible(
-                            session,
-                            "verify-retry-" + reason);
-                }
-            }, delay);
-        }
-    }
-
-    private void releaseSession(
-            Session session,
-            boolean leaveFlexible,
             String reason
     ) {
         if (session == null || !session.active) {
             return;
         }
 
+        boolean flexible =
+                isFlexibleTask(session.taskObject);
+        boolean floating =
+                isInFloatingList(session.taskId);
+
+        log(
+                "OPLUS_FLEX_VERIFY",
+                "pkg=" + session.packageName
+                        + " taskId=" + session.taskId
+                        + " reason=" + reason
+                        + " flexible=" + flexible
+                        + " floating=" + floating
+                        + " oemReported="
+                        + session.oemReportedFlexible
+                        + " bounds="
+                        + taskBounds(session.taskObject)
+                        + " maxBounds="
+                        + taskMaxBounds(session.taskObject));
+    }
+
+    private void releaseSession(
+            Session session,
+            String reason
+    ) {
+        if (session == null) return;
+
         session.active = false;
         session.state = ConfigKeys.STATE_RELEASED;
-
-        if (leaveFlexible
-                && isFlexibleTask(
-                session.taskObject)) {
-            toggleFlexible(
-                    session,
-                    false,
-                    "release-" + reason);
-        }
+        session.oemReportedFlexible = false;
 
         sessions.remove(
                 session.taskId,
                 session);
 
-        log("OPLUS_TASK_RELEASED",
+        log(
+                "OPLUS_TASK_RELEASED",
                 "pkg=" + session.packageName
                         + " taskId=" + session.taskId
-                        + " reason=" + reason
-                        + " flexible="
-                        + isFlexibleTask(
-                        session.taskObject));
+                        + " reason=" + reason);
     }
 
-    private Session latestSession(
-            String packageName
-    ) {
+    private Session latestSession(String packageName) {
         if (packageName == null) return null;
 
         Session latest = null;
@@ -616,123 +642,67 @@ final class OplusFlexibleWindowController {
                     loadSystemClass(
                             "android.app.OplusActivityTaskManager");
 
-            Method getInstance =
-                    cls.getMethod("getInstance");
-
             Object manager =
-                    getInstance.invoke(null);
+                    cls.getMethod("getInstance")
+                            .invoke(null);
 
-            Method toggle = null;
-
-            try {
-                toggle = cls.getMethod(
-                        "toggleFlexibleWindow",
-                        IBinder.class,
-                        int.class,
-                        boolean.class,
-                        boolean.class);
-            } catch (Throwable ignored) {
-                for (Method method :
-                        cls.getMethods()) {
-                    if (!"toggleFlexibleWindow"
-                            .equals(method.getName())
-                            || method.getParameterCount() != 4) {
-                        continue;
-                    }
-
-                    Class<?>[] p =
-                            method.getParameterTypes();
-
-                    if (IBinder.class
-                            .isAssignableFrom(p[0])
-                            && p[1] == int.class
-                            && p[2] == boolean.class
-                            && p[3] == boolean.class) {
-                        toggle = method;
-                        break;
-                    }
-                }
-            }
-
-            if (manager == null || toggle == null) {
-                throw new IllegalStateException(
-                        "toggleFlexibleWindow unavailable");
-            }
+            Method toggle =
+                    cls.getMethod(
+                            "toggleFlexibleWindow",
+                            IBinder.class,
+                            int.class,
+                            boolean.class,
+                            boolean.class);
 
             toggle.setAccessible(true);
 
             oplusAtm = manager;
             toggleFlexibleWindow = toggle;
 
-            log("OPLUS_API_READY",
-                    "class=" + cls.getName()
-                            + " method="
-                            + toggle.toGenericString());
+            log(
+                    "OPLUS_API_READY",
+                    toggle.toGenericString());
         } catch (Throwable t) {
             oplusAtm = null;
             toggleFlexibleWindow = null;
 
-            log("OPLUS_API_ERROR",
+            log(
+                    "OPLUS_API_ERROR",
                     String.valueOf(t));
         }
     }
 
-    private boolean queryOplusSupport(Object task) {
-        if (task == null) return false;
+    private boolean isInFloatingList(int taskId) {
+        if (taskId < 0) return false;
 
         try {
-            Class<?> utils =
+            Class<?> cls =
                     loadSystemClass(
-                            "com.android.server.wm.FlexibleWindowUtils");
+                            "com.android.server.wm.FloatHandleController");
 
-            for (Method method :
-                    utils.getDeclaredMethods()) {
-                if (!"isSupportFlexibleWindow"
-                        .equals(method.getName())
-                        || !Modifier.isStatic(
-                        method.getModifiers())
-                        || method.getParameterCount() != 1
-                        || method.getReturnType()
-                        != boolean.class) {
-                    continue;
-                }
+            Object instance =
+                    cls.getMethod("getInstance")
+                            .invoke(null);
 
-                Class<?> parameter =
-                        method.getParameterTypes()[0];
+            Object result =
+                    cls.getMethod(
+                                    "isInFloatingList",
+                                    int.class)
+                            .invoke(
+                                    instance,
+                                    taskId);
 
-                if (!parameter
-                        .isAssignableFrom(
-                        task.getClass())
-                        && !parameter
-                        .getName()
-                        .equals(
-                        task.getClass().getName())) {
-                    continue;
-                }
-
-                method.setAccessible(true);
-
-                Object value =
-                        method.invoke(
-                                null,
-                                task);
-
-                return value instanceof Boolean
-                        && (Boolean) value;
-            }
+            return result instanceof Boolean
+                    && (Boolean) result;
         } catch (Throwable ignored) {
+            return false;
         }
-
-        return false;
     }
 
-    private static boolean isFlexibleTask(
-            Object task
-    ) {
+    private static boolean isFlexibleTask(Object task) {
         if (task == null) return false;
 
         int mode = taskWindowingMode(task);
-
         if (mode != 0 && mode != 1) {
             return true;
         }
@@ -747,9 +717,7 @@ final class OplusFlexibleWindowController {
                 && !bounds.equals(maxBounds);
     }
 
-    private static int taskWindowingMode(
-            Object task
-    ) {
+    private static int taskWindowingMode(Object task) {
         Object value =
                 invokeNoArg(
                         task,
@@ -771,9 +739,7 @@ final class OplusFlexibleWindowController {
                 : new Rect();
     }
 
-    private static Rect taskMaxBounds(
-            Object task
-    ) {
+    private static Rect taskMaxBounds(Object task) {
         Object config =
                 invokeNoArg(
                         task,
@@ -783,13 +749,6 @@ final class OplusFlexibleWindowController {
                 fieldValue(
                         config,
                         "windowConfiguration");
-
-        if (windowConfig == null) {
-            windowConfig =
-                    invokeNoArg(
-                            config,
-                            "getWindowConfiguration");
-        }
 
         Object value =
                 invokeNoArg(
@@ -801,36 +760,7 @@ final class OplusFlexibleWindowController {
                 : new Rect();
     }
 
-    private static int taskDisplayId(
-            Object task
-    ) {
-        Object value =
-                invokeNoArg(
-                        task,
-                        "getDisplayId");
-
-        if (value instanceof Number) {
-            return ((Number) value).intValue();
-        }
-
-        Object displayArea =
-                invokeNoArg(
-                        task,
-                        "getDisplayArea");
-
-        value =
-                invokeNoArg(
-                        displayArea,
-                        "getDisplayId");
-
-        return value instanceof Number
-                ? ((Number) value).intValue()
-                : 0;
-    }
-
-    private static Object activityTask(
-            Object activityRecord
-    ) {
+    private static Object activityTask(Object activityRecord) {
         Object task =
                 invokeNoArg(
                         activityRecord,
@@ -838,13 +768,14 @@ final class OplusFlexibleWindowController {
 
         if (task != null) return task;
 
-        task = fieldValue(
-                activityRecord,
-                "task");
+        task =
+                fieldValue(
+                        activityRecord,
+                        "task");
 
-        if (task != null) return task;
-
-        return fieldValue(
+        return task != null
+                ? task
+                : fieldValue(
                 activityRecord,
                 "mTask");
     }
@@ -859,43 +790,28 @@ final class OplusFlexibleWindowController {
             return ((Number) value).intValue();
         }
 
-        value = fieldValue(
-                task,
-                "mTaskId");
+        value =
+                fieldValue(
+                        task,
+                        "mTaskId");
 
         return value instanceof Number
                 ? ((Number) value).intValue()
                 : -1;
     }
 
-    private static String activityPackage(
+    private static String activityComponent(
             Object activityRecord
     ) {
-        Object value =
-                fieldValue(
-                        activityRecord,
-                        "packageName");
-
-        if (value instanceof String) {
-            return (String) value;
-        }
-
         Object component =
                 fieldValue(
                         activityRecord,
                         "mActivityComponent");
 
-        if (component instanceof ComponentName) {
-            return ((ComponentName) component)
-                    .getPackageName();
-        }
-
-        return null;
+        return String.valueOf(component);
     }
 
-    private static Context deriveSystemContext(
-            Object task
-    ) {
+    private static Context deriveSystemContext(Object task) {
         Object service =
                 fieldValue(
                         task,
@@ -925,6 +841,93 @@ final class OplusFlexibleWindowController {
                 : null;
     }
 
+    private static int taskInfoId(Object taskInfo) {
+        return intField(
+                taskInfo,
+                "taskId",
+                -1);
+    }
+
+    private static String taskInfoPackage(Object taskInfo) {
+        for (String field : new String[]{
+                "topActivity",
+                "baseActivity",
+                "realActivity"
+        }) {
+            Object value =
+                    fieldValue(
+                            taskInfo,
+                            field);
+
+            if (value instanceof ComponentName) {
+                return ((ComponentName) value)
+                        .getPackageName();
+            }
+        }
+
+        Object info =
+                fieldValue(
+                        taskInfo,
+                        "topActivityInfo");
+
+        if (info instanceof ActivityInfo) {
+            return ((ActivityInfo) info)
+                    .packageName;
+        }
+
+        return null;
+    }
+
+    private static Rect taskInfoBounds(Object taskInfo) {
+        Object config =
+                fieldValue(
+                        taskInfo,
+                        "configuration");
+
+        return configurationBounds(config);
+    }
+
+    private static Rect taskInfoMaxBounds(Object taskInfo) {
+        Object config =
+                fieldValue(
+                        taskInfo,
+                        "configuration");
+
+        return configurationMaxBounds(config);
+    }
+
+    private static Rect configurationBounds(Object config) {
+        Object wc =
+                fieldValue(
+                        config,
+                        "windowConfiguration");
+
+        Object value =
+                invokeNoArg(
+                        wc,
+                        "getBounds");
+
+        return value instanceof Rect
+                ? new Rect((Rect) value)
+                : new Rect();
+    }
+
+    private static Rect configurationMaxBounds(Object config) {
+        Object wc =
+                fieldValue(
+                        config,
+                        "windowConfiguration");
+
+        Object value =
+                invokeNoArg(
+                        wc,
+                        "getMaxBounds");
+
+        return value instanceof Rect
+                ? new Rect((Rect) value)
+                : new Rect();
+    }
+
     private static Class<?> loadSystemClass(
             String name
     ) throws ClassNotFoundException {
@@ -952,7 +955,7 @@ final class OplusFlexibleWindowController {
         if (receiver == null) return null;
 
         Method method =
-                findMethod(
+                findNoArgMethod(
                         receiver.getClass(),
                         methodName);
 
@@ -966,7 +969,7 @@ final class OplusFlexibleWindowController {
         }
     }
 
-    private static Method findMethod(
+    private static Method findNoArgMethod(
             Class<?> type,
             String name
     ) {
@@ -981,15 +984,10 @@ final class OplusFlexibleWindowController {
                 }
             }
 
-            current =
-                    current.getSuperclass();
+            current = current.getSuperclass();
         }
 
-        try {
-            return type.getMethod(name);
-        } catch (Throwable ignored) {
-            return null;
-        }
+        return null;
     }
 
     private static Object fieldValue(
@@ -1019,14 +1017,39 @@ final class OplusFlexibleWindowController {
         return null;
     }
 
-    private void log(
-            String event,
-            String detail
+    private static boolean booleanField(
+            Object receiver,
+            String name,
+            boolean fallback
     ) {
+        Object value =
+                fieldValue(
+                        receiver,
+                        name);
+
+        return value instanceof Boolean
+                ? (Boolean) value
+                : fallback;
+    }
+
+    private static int intField(
+            Object receiver,
+            String name,
+            int fallback
+    ) {
+        Object value =
+                fieldValue(
+                        receiver,
+                        name);
+
+        return value instanceof Number
+                ? ((Number) value).intValue()
+                : fallback;
+    }
+
+    private void log(String event, String detail) {
         if (logger != null) {
-            logger.log(
-                    event,
-                    detail);
+            logger.log(event, detail);
         }
     }
 
@@ -1039,9 +1062,10 @@ final class OplusFlexibleWindowController {
 
         volatile int state;
         volatile boolean active = true;
-        volatile boolean enterConfirmed;
-        volatile int toggleAttempts;
+        volatile boolean oemReportedFlexible;
+
         volatile long lastToggleElapsed;
+        volatile long lastOplusStateElapsed;
         volatile long lastSeenElapsed =
                 SystemClock.elapsedRealtime();
 
