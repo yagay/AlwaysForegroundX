@@ -32,9 +32,6 @@ final class ConfigKeys {
     static final String DIAGNOSTICS_ACTIVE = "diagnostics_active";
     static final String DIAGNOSTICS_STARTED_AT = "diagnostics_started_at";
 
-    static final String ENGINE_VERSION_CODE = "engine_version_code";
-    static final String ENGINE_STARTED_AT = "engine_started_at";
-    static final String ENGINE_SESSION = "engine_session";
 
     static final int STATE_WINDOW = 1;
     static final int STATE_ICON = 2;
