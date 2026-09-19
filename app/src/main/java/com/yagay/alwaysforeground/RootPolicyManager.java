@@ -2,10 +2,12 @@ package com.yagay.alwaysforeground;
 
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
+import android.util.Log;
 
 import java.util.Set;
 
 final class RootPolicyManager {
+    private static final String TAG = "MiniWindowGuard";
     private RootPolicyManager() {}
 
     static void reconcile(Context context, Set<String> before, Set<String> after) {
@@ -68,6 +70,22 @@ final class RootPolicyManager {
     }
 
     private static void run(String command) {
-        RootManager.run(command, null);
+        StringBuilder detail = GuardApp.getBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE)
+                ? new StringBuilder()
+                : null;
+        boolean ok = RootManager.run(command, detail);
+
+        if (detail != null) {
+            Log.i(TAG, "DIAG_ROOT_POLICY"
+                    + " ok=" + ok
+                    + " command=" + command
+                    + " result=" + compact(detail.toString()));
+        }
+    }
+
+    private static String compact(String value) {
+        if (value == null) return "";
+        String compact = value.replace('\n', ' ').replace('\r', ' ').trim();
+        return compact.length() <= 1200 ? compact : compact.substring(0, 1200);
     }
 }
