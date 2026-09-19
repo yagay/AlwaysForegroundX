@@ -102,7 +102,7 @@ public final class MainActivity extends Activity {
         card.addView(xposedStatus);
 
         card.addView(statusLine("LSPosed 作用域：android / System Framework"));
-        card.addView(statusLine("模块包名：com.yagay.alwaysforeground"));
+        card.addView(statusLine("模块包名：com.yagay.MiniWindowGuard"));
 
         addSwitch(card,
                 "启用小窗守护",
