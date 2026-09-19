@@ -417,6 +417,38 @@ final class OplusFlexibleWindowController {
                         + session.lockKeepAlive);
     }
 
+    void onFloatHandleOpened(
+            int taskId
+    ) {
+        if (!running || taskId < 0) {
+            return;
+        }
+
+        Session session =
+                sessions.get(taskId);
+
+        if (session == null
+                || !session.active) {
+            return;
+        }
+
+        boolean hadEdgeState =
+                session.edgeMinimizeRequested
+                        || session.edgeHung;
+
+        session.edgeMinimizeRequested = false;
+        session.edgeHung = false;
+        session.lastSeenElapsed =
+                SystemClock.elapsedRealtime();
+
+        log(
+                "OPLUS_EDGE_RESTORE",
+                "pkg=" + session.packageName
+                        + " taskId=" + taskId
+                        + " cleared="
+                        + hadEdgeState);
+    }
+
     void onOplusFlexibleEvent(
             int taskId,
             int event
