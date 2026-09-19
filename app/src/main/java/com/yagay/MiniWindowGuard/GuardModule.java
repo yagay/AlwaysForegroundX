@@ -46,17 +46,9 @@ public final class GuardModule extends XposedModule {
     }
 
     @Override
-    public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
-        if (!param.isFirstPackage()) return;
-        if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
-        log(Log.INFO, TAG, "SYSTEM_SCOPE system_server package loaded");
-    }
-
-    @Override
-    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
-        if (!param.isFirstPackage()) return;
-        if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
-
+    public void onSystemServerStarting(
+            XposedModuleInterface.SystemServerStartingParam param
+    ) {
         systemClassLoader = param.getClassLoader();
         Handler handler = new Handler(Looper.getMainLooper());
 
@@ -73,7 +65,7 @@ public final class GuardModule extends XposedModule {
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
 
-        log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready");
+        log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready in system_server");
         diag("ENGINE_READY",
                 "targets=" + GuardConfig.targetPackages()
                         + " hooks=" + installedHooks.size()
