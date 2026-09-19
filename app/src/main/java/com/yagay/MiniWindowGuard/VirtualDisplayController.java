@@ -1,5 +1,6 @@
 package com.yagay.MiniWindowGuard;
 
+import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.PixelFormat;
@@ -122,46 +123,7 @@ final class VirtualDisplayController {
     boolean wantsPackage(String packageName) {
         return packageName != null
                 && (packageName.equals(pendingPackage)
-                || isManagedPackage(packageName)
-                || isImmediatePendingCommand(packageName));
-    }
-
-    private boolean isImmediatePendingCommand(
-            String packageName
-    ) {
-        if (packageName == null) return false;
-
-        int seq = GuardConfig.integer(
-                ConfigKeys.CONTAINER_COMMAND_SEQ);
-
-        if (seq == lastCommandSeq) {
-            return false;
-        }
-
-        String pkg = GuardConfig.string(
-                ConfigKeys.CONTAINER_COMMAND_PACKAGE);
-
-        int state = ConfigKeys.sanitizeState(
-                GuardConfig.integer(
-                        ConfigKeys.CONTAINER_COMMAND_STATE));
-
-        return packageName.equals(pkg)
-                && state != ConfigKeys.STATE_RELEASED;
-    }
-
-    private int requestedStateFor(
-            String packageName
-    ) {
-        if (isImmediatePendingCommand(packageName)) {
-            return ConfigKeys.sanitizeState(
-                    GuardConfig.integer(
-                            ConfigKeys.CONTAINER_COMMAND_STATE));
-        }
-
-        return packageName != null
-                && packageName.equals(pendingPackage)
-                ? pendingState
-                : ConfigKeys.STATE_WINDOW;
+                || isManagedPackage(packageName));
     }
 
     boolean isManagedPackage(String packageName) {
@@ -227,44 +189,10 @@ final class VirtualDisplayController {
             return;
         }
 
-        int initialState =
-                requestedStateFor(packageName);
-
-        captureInternal(
-                activityRecord,
-                packageName,
-                initialState,
-                false);
-    }
-
-    void captureFallback(
-            Object activityRecord,
-            String packageName,
-            int initialState
-    ) {
-        captureInternal(
-                activityRecord,
-                packageName,
-                ConfigKeys.sanitizeState(initialState),
-                true);
-    }
-
-    private void captureInternal(
-            Object activityRecord,
-            String packageName,
-            int initialState,
-            boolean fallback
-    ) {
-        if (activityRecord == null || packageName == null) {
-            return;
-        }
-
         Object task = activityTask(activityRecord);
         if (task == null) {
             log("VD_CAPTURE_SKIP",
-                    "pkg=" + packageName
-                            + " reason=no-task"
-                            + " fallback=" + fallback);
+                    "pkg=" + packageName + " reason=no-task");
             return;
         }
 
@@ -275,9 +203,7 @@ final class VirtualDisplayController {
         int id = taskId(task);
         if (id < 0) {
             log("VD_CAPTURE_SKIP",
-                    "pkg=" + packageName
-                            + " reason=no-task-id"
-                            + " fallback=" + fallback);
+                    "pkg=" + packageName + " reason=no-task-id");
             return;
         }
 
@@ -286,6 +212,10 @@ final class VirtualDisplayController {
             existing.lastSeenElapsed = SystemClock.elapsedRealtime();
             return;
         }
+
+        int initialState = packageName.equals(pendingPackage)
+                ? pendingState
+                : ConfigKeys.STATE_WINDOW;
 
         Session session = new Session(
                 id,
@@ -304,8 +234,7 @@ final class VirtualDisplayController {
                 "pkg=" + packageName
                         + " taskId=" + id
                         + " originalDisplay=" + session.originalDisplayId
-                        + " state=" + initialState
-                        + " fallback=" + fallback);
+                        + " state=" + initialState);
 
         handler.post(() -> openSession(session));
     }
@@ -315,24 +244,6 @@ final class VirtualDisplayController {
         if (session != null) {
             handler.post(() ->
                     closeSession(session, true, "release-package"));
-        }
-    }
-
-    void setPackageState(
-            String packageName,
-            int state,
-            String reason
-    ) {
-        Session session = latestSession(packageName);
-        if (session != null) {
-            int safeState = ConfigKeys.sanitizeState(state);
-            handler.post(() ->
-                    applyState(
-                            session,
-                            safeState,
-                            reason == null
-                                    ? "external-state"
-                                    : reason));
         }
     }
 
@@ -503,14 +414,8 @@ final class VirtualDisplayController {
         private WindowManager.LayoutParams windowParams;
         private WindowManager.LayoutParams restoreParams;
 
-        // Visible host window size on display 0.
         private int contentWidth;
         private int contentHeight;
-
-        // Logical/render size seen by the target app on the VirtualDisplay.
-        private int displayWidth;
-        private int displayHeight;
-
         private int titleHeight;
 
         private int savedWindowX;
@@ -563,58 +468,27 @@ final class VirtualDisplayController {
                 densityDpi = Math.max(160, metrics.densityDpi);
                 titleHeight = dp(42);
 
-                int outerMinWidth =
-                        dp(GuardConfig.outerMinWidthDp());
-                int outerMinHeight =
-                        dp(GuardConfig.outerMinHeightDp());
-
                 contentWidth = clamp(
                         metrics.widthPixels
                                 * GuardConfig.containerWidth()
                                 / 100,
-                        outerMinWidth,
-                        Math.max(
-                                outerMinWidth,
-                                metrics.widthPixels - dp(12)));
+                        dp(260),
+                        Math.max(dp(260),
+                                metrics.widthPixels - dp(20)));
 
                 contentHeight = clamp(
                         metrics.heightPixels
                                 * GuardConfig.containerHeight()
                                 / 100,
-                        outerMinHeight,
-                        Math.max(
-                                outerMinHeight,
-                                metrics.heightPixels - dp(90)));
-
-                if (GuardConfig.fixedInternalDisplay()) {
-                    int scale =
-                            GuardConfig.internalDisplayScale();
-
-                    // Keep the target app on a stable, known-good internal
-                    // canvas. The visible host can be much smaller/larger.
-                    displayWidth = clamp(
-                            metrics.widthPixels * scale / 100,
-                            dp(260),
-                            Math.max(
-                                    dp(260),
-                                    metrics.widthPixels - dp(20)));
-
-                    displayHeight = clamp(
-                            metrics.heightPixels * scale / 100,
-                            dp(320),
-                            Math.max(
-                                    dp(320),
-                                    metrics.heightPixels - dp(110)));
-                } else {
-                    displayWidth = contentWidth;
-                    displayHeight = contentHeight;
-                }
+                        dp(320),
+                        Math.max(dp(320),
+                                metrics.heightPixels - dp(110)));
 
                 virtualDisplay =
                         displayManager.createVirtualDisplay(
                                 "MiniWindowGuard-" + session.taskId,
-                                displayWidth,
-                                displayHeight,
+                                contentWidth,
+                                contentHeight,
                                 densityDpi,
                                 null,
                                 VIRTUAL_DISPLAY_FLAGS);
@@ -636,12 +510,8 @@ final class VirtualDisplayController {
                         "pkg=" + session.packageName
                                 + " taskId=" + session.taskId
                                 + " displayId=" + displayId
-                                + " host=" + contentWidth
+                                + " size=" + contentWidth
                                 + "x" + contentHeight
-                                + " internal=" + displayWidth
-                                + "x" + displayHeight
-                                + " fixedInternal="
-                                + GuardConfig.fixedInternalDisplay()
                                 + " density=" + densityDpi
                                 + " flags=" + VIRTUAL_DISPLAY_FLAGS
                                 + " renderer=TextureView"
@@ -715,7 +585,7 @@ final class VirtualDisplayController {
             titleBar.addView(
                     back,
                     new LinearLayout.LayoutParams(
-                            dp(34),
+                            titleHeight,
                             titleHeight));
 
             titleBar.addView(
@@ -728,19 +598,19 @@ final class VirtualDisplayController {
             titleBar.addView(
                     minimize,
                     new LinearLayout.LayoutParams(
-                            dp(34),
+                            titleHeight,
                             titleHeight));
 
             titleBar.addView(
                     hide,
                     new LinearLayout.LayoutParams(
-                            dp(34),
+                            titleHeight,
                             titleHeight));
 
             titleBar.addView(
                     close,
                     new LinearLayout.LayoutParams(
-                            dp(34),
+                            titleHeight,
                             titleHeight));
 
             FrameLayout content =
@@ -1055,9 +925,9 @@ final class VirtualDisplayController {
                                     + Math.round(
                                     event.getRawX()
                                             - resizeStartRawX),
-                            dp(GuardConfig.outerMinWidthDp()),
+                            dp(240),
                             Math.max(
-                                    dp(GuardConfig.outerMinWidthDp()),
+                                    dp(240),
                                     metrics.widthPixels - dp(12)));
 
                     contentHeight = clamp(
@@ -1065,9 +935,9 @@ final class VirtualDisplayController {
                                     + Math.round(
                                     event.getRawY()
                                             - resizeStartRawY),
-                            dp(GuardConfig.outerMinHeightDp()),
+                            dp(280),
                             Math.max(
-                                    dp(GuardConfig.outerMinHeightDp()),
+                                    dp(280),
                                     metrics.heightPixels - dp(90)));
 
                     // Preview only. TextureView scales the last VirtualDisplay frame.
@@ -1116,21 +986,7 @@ final class VirtualDisplayController {
                 return;
             }
 
-            if (GuardConfig.fixedInternalDisplay()) {
-                log("VD_HOST_RESIZE_ONLY",
-                        "pkg=" + session.packageName
-                                + " displayId=" + displayId
-                                + " host=" + contentWidth
-                                + "x" + contentHeight
-                                + " internal=" + displayWidth
-                                + "x" + displayHeight);
-                return;
-            }
-
             try {
-                displayWidth = Math.max(1, contentWidth);
-                displayHeight = Math.max(1, contentHeight);
-
                 SurfaceTexture texture =
                         textureView == null
                                 ? null
@@ -1138,20 +994,20 @@ final class VirtualDisplayController {
 
                 if (texture != null) {
                     texture.setDefaultBufferSize(
-                            displayWidth,
-                            displayHeight);
+                            Math.max(1, contentWidth),
+                            Math.max(1, contentHeight));
                 }
 
                 virtualDisplay.resize(
-                        displayWidth,
-                        displayHeight,
+                        Math.max(1, contentWidth),
+                        Math.max(1, contentHeight),
                         densityDpi);
 
                 log("VD_RESIZE_COMMIT",
                         "pkg=" + session.packageName
                                 + " displayId=" + displayId
-                                + " internal=" + displayWidth
-                                + "x" + displayHeight);
+                                + " size=" + contentWidth
+                                + "x" + contentHeight);
             } catch (Throwable t) {
                 log("VD_RESIZE_ERROR",
                         "pkg=" + session.packageName
@@ -1215,20 +1071,6 @@ final class VirtualDisplayController {
                 MotionEvent.PointerCoords coord =
                         new MotionEvent.PointerCoords();
                 source.getPointerCoords(i, coord);
-
-                float scaleX =
-                        contentWidth > 0
-                                ? (float) displayWidth
-                                / (float) contentWidth
-                                : 1f;
-                float scaleY =
-                        contentHeight > 0
-                                ? (float) displayHeight
-                                / (float) contentHeight
-                                : 1f;
-
-                coord.x *= scaleX;
-                coord.y *= scaleY;
                 coords[i] = coord;
             }
 
@@ -1275,12 +1117,8 @@ final class VirtualDisplayController {
                     log("VD_INPUT_DOWN",
                             "pkg=" + session.packageName
                                     + " displayId=" + displayId
-                                    + " hostX=" + source.getX()
-                                    + " hostY=" + source.getY()
-                                    + " internal="
-                                    + displayWidth + "x" + displayHeight
-                                    + " host="
-                                    + contentWidth + "x" + contentHeight);
+                                    + " x=" + source.getX()
+                                    + " y=" + source.getY());
                 }
 
                 return true;
@@ -1334,73 +1172,45 @@ final class VirtualDisplayController {
 
         private void focusRemoteTask(String reason) {
             if (!session.active
-                    || !taskMoved
-                    || displayId < 0
-                    || destroyed) {
+                    || !taskMoved) {
                 return;
             }
 
             Object atm = activityTaskManager();
-            boolean focusedTask = false;
-            boolean focusedRoot = false;
+            boolean requested = false;
 
             if (atm != null) {
-                focusedTask = invokeVoidLike(
+                requested |= invokeVoidLike(
                         atm,
                         "setFocusedTask",
                         session.taskId);
 
-                focusedRoot = invokeVoidLike(
+                requested |= invokeVoidLike(
                         atm,
                         "setFocusedRootTask",
                         session.taskId);
             }
 
-            // Do not call ActivityManager.moveTaskToFront() here. On a task
-            // hosted by a secondary VirtualDisplay, OxygenOS can treat that as
-            // a global display-0 front-task operation and resume the launcher /
-            // MiniWindowGuard task instead of establishing input focus on the
-            // remote display.
+            try {
+                ActivityManager am =
+                        context.getSystemService(
+                                ActivityManager.class);
+
+                if (am != null) {
+                    am.moveTaskToFront(
+                            session.taskId,
+                            0);
+                    requested = true;
+                }
+            } catch (Throwable ignored) {
+            }
+
             log("VD_FOCUS",
                     "pkg=" + session.packageName
                             + " taskId=" + session.taskId
                             + " displayId=" + displayId
                             + " reason=" + reason
-                            + " focusedTask=" + focusedTask
-                            + " focusedRoot=" + focusedRoot);
-        }
-
-        private void scheduleInitialFocusRetries() {
-            final long[] delays = {
-                    80L,
-                    220L,
-                    480L,
-                    900L,
-                    1500L,
-                    2300L
-            };
-
-            for (int i = 0; i < delays.length; i++) {
-                final int attempt = i + 1;
-                handler.postDelayed(() -> {
-                    if (!session.active
-                            || destroyed
-                            || !taskMoved
-                            || displayId < 0) {
-                        return;
-                    }
-
-                    focusRemoteTask(
-                            "post-move-retry-" + attempt);
-
-                    log("VD_FOCUS_RETRY",
-                            "pkg=" + session.packageName
-                                    + " taskId=" + session.taskId
-                                    + " displayId=" + displayId
-                                    + " attempt=" + attempt
-                                    + " delayMs=" + delays[attempt - 1]);
-                }, delays[i]);
-            }
+                            + " requested=" + requested);
         }
 
         private void clampWindowPosition() {
@@ -1438,8 +1248,8 @@ final class VirtualDisplayController {
 
             try {
                 texture.setDefaultBufferSize(
-                        Math.max(1, displayWidth),
-                        Math.max(1, displayHeight));
+                        Math.max(1, contentWidth),
+                        Math.max(1, contentHeight));
 
                 if (renderSurface != null) {
                     try {
@@ -1458,9 +1268,7 @@ final class VirtualDisplayController {
                                 + " displayId=" + displayId
                                 + " texture=" + width
                                 + "x" + height
-                                + " buffer=" + displayWidth
-                                + "x" + displayHeight
-                                + " host=" + contentWidth
+                                + " buffer=" + contentWidth
                                 + "x" + contentHeight);
 
                 if (!taskMoved) {
@@ -1479,11 +1287,7 @@ final class VirtualDisplayController {
                     }
 
                     focusRemoteTask("surface-ready");
-                    scheduleInitialFocusRetries();
-                    VirtualDisplayController.this.applyState(
-                            session,
-                            session.state,
-                            "initial");
+                    VirtualDisplayController.this.applyState(session, session.state, "initial");
                 }
             } catch (Throwable t) {
                 log("VD_SURFACE_ERROR",
