@@ -18,16 +18,11 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * System-only engine.
- *
- * Target apps are never injected. The module runs only in android/system_server and directly
- * manages their real Task + SurfaceControl through TaskSurfaceController.
+ * System-only engine. Target apps are never injected.
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final String SYSTEM_PACKAGE = "android";
-
-    // android.app.ActivityManager.PROCESS_STATE_TOP is hidden from the public SDK.
     private static final int PROCESS_STATE_TOP = 2;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
@@ -36,7 +31,6 @@ public final class GuardModule extends XposedModule {
             new ConcurrentHashMap<>();
 
     private volatile ClassLoader systemClassLoader;
-    private volatile Handler systemHandler;
     private volatile TaskSurfaceController container;
 
     @Override
@@ -64,11 +58,11 @@ public final class GuardModule extends XposedModule {
         if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
 
         systemClassLoader = param.getClassLoader();
-        systemHandler = new Handler(Looper.getMainLooper());
+        Handler handler = new Handler(Looper.getMainLooper());
 
         Context context = resolveSystemContext(systemClassLoader);
         container = new TaskSurfaceController(
-                systemHandler,
+                handler,
                 context,
                 this::containerLog);
         container.start();
@@ -119,60 +113,95 @@ public final class GuardModule extends XposedModule {
 
             if ("getPackageProcessState".equals(name)
                     && method.getReturnType() == int.class) {
-                install(method, "AMS.getPackageProcessState", chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof String pkg
-                            && isTargetPackage(pkg)) {
-                        diag("AMS_PACKAGE_STATE",
-                                "pkg=" + pkg + " forced=" + PROCESS_STATE_TOP);
-                        return PROCESS_STATE_TOP;
-                    }
-                    return chain.proceed();
-                });
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                                && !args.isEmpty()
+                                && args.get(0) instanceof String pkg
+                                && isTargetPackage(pkg)) {
+                            diag("AMS_PACKAGE_STATE",
+                                    "pkg=" + pkg + " forced=" + PROCESS_STATE_TOP);
+                            return PROCESS_STATE_TOP;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed AMS.getPackageProcessState");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped AMS.getPackageProcessState error=" + t);
+                }
                 continue;
             }
 
             if ("getUidProcessState".equals(name)
                     && method.getReturnType() == int.class) {
-                install(method, "AMS.getUidProcessState", chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof Integer uid
-                            && isTargetUid(uid)) {
-                        diag("AMS_UID_STATE",
-                                "uid=" + uid
-                                        + " packages="
-                                        + Arrays.toString(resolvePackagesForUid(uid))
-                                        + " forced=" + PROCESS_STATE_TOP);
-                        return PROCESS_STATE_TOP;
-                    }
-                    return chain.proceed();
-                });
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                                && !args.isEmpty()
+                                && args.get(0) instanceof Integer uid
+                                && isTargetUid(uid)) {
+                            diag("AMS_UID_STATE",
+                                    "uid=" + uid
+                                            + " packages="
+                                            + Arrays.toString(resolvePackagesForUid(uid))
+                                            + " forced=" + PROCESS_STATE_TOP);
+                            return PROCESS_STATE_TOP;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed AMS.getUidProcessState");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped AMS.getUidProcessState error=" + t);
+                }
                 continue;
             }
 
             if ("isAppForeground".equals(name)
                     && method.getReturnType() == boolean.class) {
-                install(method, "AMS.isAppForeground", chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof Integer uid
-                            && isTargetUid(uid)) {
-                        diag("AMS_FOREGROUND", "uid=" + uid + " forced=true");
-                        return true;
-                    }
-                    return chain.proceed();
-                });
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                                && !args.isEmpty()
+                                && args.get(0) instanceof Integer uid
+                                && isTargetUid(uid)) {
+                            diag("AMS_FOREGROUND",
+                                    "uid=" + uid + " forced=true");
+                            return true;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed AMS.isAppForeground");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped AMS.isAppForeground error=" + t);
+                }
             }
         }
     }
 
     private void installActivityTaskManagerHooks(ClassLoader loader) {
-        Class<?> atms = load(loader,
+        Class<?> atms = load(
+                loader,
                 "com.android.server.wm.ActivityTaskManagerService");
         if (atms == null) return;
 
@@ -182,21 +211,32 @@ public final class GuardModule extends XposedModule {
                 continue;
             }
 
-            install(method, "ATMS.hasResumedActivity", chain -> {
-                List<Object> args = chain.getArgs();
-                if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
-                        && !args.isEmpty()
-                        && args.get(0) instanceof Integer uid
-                        && isTargetUid(uid)) {
-                    diag("ATMS_HAS_RESUMED",
-                            "uid=" + uid
-                                    + " packages="
-                                    + Arrays.toString(resolvePackagesForUid(uid))
-                                    + " forced=true");
-                    return true;
-                }
-                return chain.proceed();
-            });
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+
+                hook(method).intercept(chain -> {
+                    List<Object> args = chain.getArgs();
+                    if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
+                            && !args.isEmpty()
+                            && args.get(0) instanceof Integer uid
+                            && isTargetUid(uid)) {
+                        diag("ATMS_HAS_RESUMED",
+                                "uid=" + uid
+                                        + " packages="
+                                        + Arrays.toString(resolvePackagesForUid(uid))
+                                        + " forced=true");
+                        return true;
+                    }
+                    return chain.proceed();
+                });
+                log(Log.INFO, TAG,
+                        "SYSTEM_SCOPE installed ATMS.hasResumedActivity");
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG,
+                        "SYSTEM_SCOPE skipped ATMS.hasResumedActivity error=" + t);
+            }
         }
     }
 
@@ -209,85 +249,122 @@ public final class GuardModule extends XposedModule {
 
             if ("shouldPauseActivity".equals(name)
                     && method.getReturnType() == boolean.class) {
-                install(method, "ActivityRecord.shouldPauseActivity", chain -> {
-                    TaskSurfaceController current = container;
-                    if (!enabled()
-                            || current == null
-                            || !GuardConfig.bool(
-                                    ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)
-                            || !current.isManagedActivityRecord(chain.getThisObject())) {
-                        return chain.proceed();
-                    }
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
 
-                    String pkg = activityPackage(chain.getThisObject());
-                    int state = current.stateForPackage(pkg);
-                    if (state == ConfigKeys.STATE_RELEASED) {
-                        return chain.proceed();
-                    }
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)
+                                || !current.isManagedActivityRecord(
+                                        chain.getThisObject())) {
+                            return chain.proceed();
+                        }
 
-                    diag("ACTIVITY_KEEP_RESUMED",
-                            "pkg=" + pkg
-                                    + " state=" + state
-                                    + " stack=" + stackSummary());
-                    return false;
-                });
+                        String pkg = activityPackage(chain.getThisObject());
+                        int state = current.stateForPackage(pkg);
+                        if (state == ConfigKeys.STATE_RELEASED) {
+                            return chain.proceed();
+                        }
+
+                        diag("ACTIVITY_KEEP_RESUMED",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " stack=" + stackSummary());
+                        return false;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord.shouldPauseActivity");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord.shouldPauseActivity error=" + t);
+                }
                 continue;
             }
 
             if (("shouldBeVisible".equals(name)
                     || "isVisibleRequested".equals(name))
                     && method.getReturnType() == boolean.class) {
-                install(method, "ActivityRecord." + name, chain -> {
-                    TaskSurfaceController current = container;
-                    if (!enabled()
-                            || current == null
-                            || !GuardConfig.bool(
-                                    ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
-                            || !current.isManagedActivityRecord(chain.getThisObject())) {
-                        return chain.proceed();
-                    }
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
 
-                    String pkg = activityPackage(chain.getThisObject());
-                    int state = current.stateForPackage(pkg);
-                    if (state != ConfigKeys.STATE_RELEASED) {
-                        diag("ACTIVITY_KEEP_VISIBLE",
-                                "pkg=" + pkg
-                                        + " state=" + state
-                                        + " method=" + name);
-                        return true;
-                    }
-                    return chain.proceed();
-                });
+                    hook(method).intercept(chain -> {
+                        TaskSurfaceController current = container;
+                        if (!enabled()
+                                || current == null
+                                || !GuardConfig.bool(
+                                        ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
+                                || !current.isManagedActivityRecord(
+                                        chain.getThisObject())) {
+                            return chain.proceed();
+                        }
+
+                        String pkg = activityPackage(chain.getThisObject());
+                        int state = current.stateForPackage(pkg);
+                        if (state != ConfigKeys.STATE_RELEASED) {
+                            diag("ACTIVITY_KEEP_VISIBLE",
+                                    "pkg=" + pkg
+                                            + " state=" + state
+                                            + " method=" + name);
+                            return true;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord." + name);
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord."
+                                    + name + " error=" + t);
+                }
                 continue;
             }
 
             if ("setState".equals(name)
                     && method.getReturnType() == void.class
                     && method.getParameterCount() >= 1) {
-                install(method, "ActivityRecord.setState", chain -> {
-                    Object result = chain.proceed();
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
 
-                    if (!enabled()
-                            || !GuardConfig.bool(ConfigKeys.AUTO_CONTAINER)) {
+                    hook(method).intercept(chain -> {
+                        Object result = chain.proceed();
+
+                        if (!enabled()
+                                || !GuardConfig.bool(ConfigKeys.AUTO_CONTAINER)) {
+                            return result;
+                        }
+
+                        List<Object> args = chain.getArgs();
+                        if (args.isEmpty()
+                                || !"RESUMED".equals(
+                                        String.valueOf(args.get(0)))) {
+                            return result;
+                        }
+
+                        Object activityRecord = chain.getThisObject();
+                        String pkg = activityPackage(activityRecord);
+                        if (!isTargetPackage(pkg)) return result;
+
+                        TaskSurfaceController current = container;
+                        if (current != null) {
+                            current.capture(activityRecord, pkg);
+                        }
                         return result;
-                    }
-
-                    List<Object> args = chain.getArgs();
-                    if (args.isEmpty()
-                            || !"RESUMED".equals(String.valueOf(args.get(0)))) {
-                        return result;
-                    }
-
-                    Object activityRecord = chain.getThisObject();
-                    String pkg = activityPackage(activityRecord);
-                    if (!isTargetPackage(pkg)) return result;
-
-                    TaskSurfaceController current = container;
-                    if (current != null) {
-                        current.capture(activityRecord, pkg);
-                    }
-                    return result;
-                });
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord.setState");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord.setState error=" + t);
+                }
             }
         }
     }
@@ -301,7 +378,8 @@ public final class GuardModule extends XposedModule {
 
             Class<?> iPackageManager = Class.forName(
                     "android.content.pm.IPackageManager", false, systemClassLoader);
-            Method method = iPackageManager.getMethod("getPackagesForUid", int.class);
+            Method method = iPackageManager.getMethod(
+                    "getPackagesForUid", int.class);
             Object result = method.invoke(pm, uid);
             return result instanceof String[] ? (String[]) result : null;
         } catch (Throwable t) {
@@ -319,6 +397,7 @@ public final class GuardModule extends XposedModule {
                     "currentActivityThread");
             current.setAccessible(true);
             Object thread = current.invoke(null);
+
             if (thread != null) {
                 Method getSystemContext =
                         activityThread.getDeclaredMethod("getSystemContext");
@@ -343,26 +422,6 @@ public final class GuardModule extends XposedModule {
             return ((ComponentName) component).getPackageName();
         }
         return null;
-    }
-
-    private interface HookBody {
-        Object run(io.github.libxposed.api.XposedInterface.Chain chain)
-                throws Throwable;
-    }
-
-    private void install(Method method, String label, HookBody body) {
-        String signature = method.toGenericString();
-        if (!installedHooks.add(signature)) return;
-
-        try {
-            method.setAccessible(true);
-            hook(method).intercept(body::run);
-            log(Log.INFO, TAG, "SYSTEM_SCOPE installed " + label);
-        } catch (Throwable t) {
-            installedHooks.remove(signature);
-            log(Log.WARN, TAG,
-                    "SYSTEM_SCOPE skipped " + label + " error=" + t);
-        }
     }
 
     private Class<?> load(ClassLoader loader, String className) {
@@ -409,6 +468,7 @@ public final class GuardModule extends XposedModule {
                 + " event=" + event
                 + " detail=" + detail;
         log(Log.INFO, TAG, message);
+
         if (diagnosticsActive()) {
             Log.i(TAG, "DIAG_SYS " + message);
         }
@@ -416,6 +476,7 @@ public final class GuardModule extends XposedModule {
 
     private void diag(String event, String detail) {
         if (!diagnosticsActive()) return;
+
         String message = "DIAG_SYS"
                 + " event=" + event
                 + " thread=" + Thread.currentThread().getName()
