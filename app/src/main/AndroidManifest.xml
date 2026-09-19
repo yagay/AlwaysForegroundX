@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
-        android:name="com.yagay.alwaysforeground.GuardApp"
+        android:name="com.yagay.MiniWindowGuard.GuardApp"
         android:allowBackup="false"
         android:description="@string/app_description"
         android:label="@string/app_name"
@@ -10,11 +10,11 @@
         android:theme="@style/AppTheme">
 
         <activity
-            android:name="com.yagay.alwaysforeground.TargetAppsActivity"
+            android:name="com.yagay.MiniWindowGuard.TargetAppsActivity"
             android:exported="false" />
 
         <activity
-            android:name="com.yagay.alwaysforeground.MainActivity"
+            android:name="com.yagay.MiniWindowGuard.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
