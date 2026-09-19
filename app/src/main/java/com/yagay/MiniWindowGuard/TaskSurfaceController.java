@@ -203,7 +203,10 @@ final class TaskSurfaceController {
             }
 
             if (state == ConfigKeys.STATE_WINDOW) {
-                applyWindowState(managed, WINDOWING_MODE_MULTI_WINDOW, 1);
+                // A real floating window must use FREEFORM. MULTI_WINDOW is split/
+                // multi-task semantics on handheld devices and can still reserve the
+                // whole display even when bounds are smaller.
+                applyWindowState(managed, WINDOWING_MODE_FREEFORM, 1);
                 return;
             }
 
@@ -278,9 +281,7 @@ final class TaskSurfaceController {
                 requestedBounds,
                 actualBounds,
                 12);
-        boolean modeOk = actualMode == requestedMode
-                || actualMode == WINDOWING_MODE_MULTI_WINDOW
-                || actualMode == WINDOWING_MODE_FREEFORM;
+        boolean modeOk = actualMode == WINDOWING_MODE_FREEFORM;
 
         log("TASK_VERIFY",
                 "pkg=" + managed.packageName
@@ -295,20 +296,22 @@ final class TaskSurfaceController {
 
         if (modeOk && boundsOk) return;
 
-        if (attempt == 1 && requestedMode != WINDOWING_MODE_FREEFORM) {
-            log("TASK_BACKEND_FALLBACK",
-                    "pkg=" + managed.packageName
-                            + " taskId=" + managed.taskId
-                            + " from=MULTI_WINDOW to=FREEFORM");
-            applyWindowState(managed, WINDOWING_MODE_FREEFORM, 2);
-            return;
-        }
-
         log("TASK_WINDOW_UNSUPPORTED",
                 "pkg=" + managed.packageName
                         + " taskId=" + managed.taskId
+                        + " requestedMode=FREEFORM"
                         + " actualMode=" + actualMode
-                        + " actualBounds=" + actualBounds);
+                        + " requestedBounds=" + requestedBounds
+                        + " actualBounds=" + actualBounds
+                        + " reason=freeform-not-honored");
+
+        // Never silently degrade to MULTI_WINDOW. On phones that mode can own the
+        // whole display even with smaller bounds, which is not a floating window.
+        restoreTask(managed);
+        managed.state = ConfigKeys.STATE_RELEASED;
+        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+        tasks.remove(managed.taskId, managed);
+        notifyCaptured(managed);
     }
 
     private void applyBackgroundState(ManagedTask managed, int state) {
