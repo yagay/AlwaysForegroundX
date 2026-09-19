@@ -62,6 +62,10 @@ final class OplusFlexibleWindowController {
                         + " forceSupportApps="
                         + GuardConfig.stringSet(
                         ConfigKeys.FORCE_SUPPORT_PACKAGES)
+                        .size()
+                        + " backgroundPlaybackApps="
+                        + GuardConfig.stringSet(
+                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)
                         .size());
     }
 
@@ -84,6 +88,8 @@ final class OplusFlexibleWindowController {
 
     boolean wantsPackage(String packageName) {
         return GuardConfig.foregroundPackage(
+                packageName)
+                || GuardConfig.backgroundPlaybackPackage(
                 packageName);
     }
 
@@ -108,11 +114,17 @@ final class OplusFlexibleWindowController {
                 packageName);
     }
 
+    boolean isBackgroundPlaybackPackage(
+            String packageName
+    ) {
+        return GuardConfig.backgroundPlaybackPackage(
+                packageName);
+    }
+
     boolean isProtectedPackage(
             String packageName
     ) {
-        if (!GuardConfig.foregroundPackage(
-                packageName)) {
+        if (packageName == null) {
             return false;
         }
 
@@ -163,7 +175,7 @@ final class OplusFlexibleWindowController {
     ) {
         if (!running
                 || activityRecord == null
-                || !GuardConfig.foregroundPackage(
+                || !wantsPackage(
                 packageName)) {
             return;
         }
@@ -217,6 +229,17 @@ final class OplusFlexibleWindowController {
 
                             return current;
                         });
+
+        if (session.backgroundProtected) {
+            session.backgroundProtected = false;
+
+            log(
+                    "BACKGROUND_PROTECTED",
+                    "pkg=" + session.packageName
+                            + " taskId=" + session.taskId
+                            + " enabled=false"
+                            + " reason=activity-resumed");
+        }
 
         refreshSessionState(
                 session,
@@ -533,6 +556,111 @@ final class OplusFlexibleWindowController {
                 UNLOCK_GRACE_MS);
     }
 
+    boolean shouldSuppressBackgroundPause(
+            Object task,
+            String resumingPackage,
+            boolean userLeaving,
+            boolean uiSleeping,
+            String reason,
+            boolean finishing
+    ) {
+        Session session =
+                sessionForTask(task);
+
+        if (session == null
+                || !session.active
+                || !GuardConfig.backgroundPlaybackPackage(
+                session.packageName)) {
+            return false;
+        }
+
+        if (finishing) {
+            session.backgroundProtected = false;
+            return false;
+        }
+
+        if (resumingPackage != null
+                && session.packageName.equals(
+                resumingPackage)) {
+            if (session.backgroundProtected) {
+                session.backgroundProtected = false;
+                log(
+                        "BACKGROUND_PROTECTED",
+                        "pkg=" + session.packageName
+                                + " taskId=" + session.taskId
+                                + " enabled=false"
+                                + " reason=same-package-resume");
+            }
+            return false;
+        }
+
+        boolean switchingPackage =
+                resumingPackage != null
+                        && !session.packageName.equals(
+                        resumingPackage);
+        boolean explicitLeave =
+                userLeaving
+                        && resumingPackage == null;
+
+        if (!session.backgroundProtected
+                && !switchingPackage
+                && !explicitLeave
+                && !uiSleeping) {
+            return false;
+        }
+
+        session.backgroundProtected = true;
+        session.taskObject = task;
+        session.lastSeenElapsed =
+                SystemClock.elapsedRealtime();
+
+        log(
+                "BACKGROUND_PAUSE_SUPPRESS",
+                "pkg=" + session.packageName
+                        + " taskId=" + session.taskId
+                        + " resumingPkg=" + resumingPackage
+                        + " userLeaving=" + userLeaving
+                        + " uiSleeping=" + uiSleeping
+                        + " reason=" + reason);
+
+        return true;
+    }
+
+    void onFocusedActivity(
+            Object activityRecord
+    ) {
+        if (activityRecord == null) return;
+
+        Object task =
+                activityTask(
+                        activityRecord);
+        if (task == null) return;
+
+        Session session =
+                sessions.get(
+                        taskId(task));
+
+        if (session == null
+                || !session.backgroundProtected
+                || !session.packageName.equals(
+                objectPackage(activityRecord))) {
+            return;
+        }
+
+        session.backgroundProtected = false;
+        session.activityRecord = activityRecord;
+        session.taskObject = task;
+        session.lastSeenElapsed =
+                SystemClock.elapsedRealtime();
+
+        log(
+                "BACKGROUND_PROTECTED",
+                "pkg=" + session.packageName
+                        + " taskId=" + session.taskId
+                        + " enabled=false"
+                        + " reason=focused");
+    }
+
     boolean shouldSuppressRecentsPause(
             Object task
     ) {
@@ -627,15 +755,26 @@ final class OplusFlexibleWindowController {
         Session session =
                 sessionForTask(task);
 
-        return session != null
-                && session.active
-                && GuardConfig
-                .foregroundPackage(
+        if (session == null
+                || !session.active) {
+            return false;
+        }
+
+        boolean oplusProtected =
+                GuardConfig.foregroundPackage(
                         session.packageName)
-                && (isNativeOplusWindow(session)
-                || session.lockKeepAlive
-                || session.edgeHung
-                || session.edgeMinimizeRequested);
+                        && (isNativeOplusWindow(session)
+                        || session.lockKeepAlive
+                        || session.edgeHung
+                        || session.edgeMinimizeRequested);
+
+        boolean backgroundProtected =
+                GuardConfig.backgroundPlaybackPackage(
+                        session.packageName)
+                        && session.backgroundProtected;
+
+        return oplusProtected
+                || backgroundProtected;
     }
 
     private Session sessionForTask(Object task) {
@@ -654,7 +793,8 @@ final class OplusFlexibleWindowController {
         String pkg =
                 taskPackage(task);
 
-        if (!GuardConfig.foregroundPackage(pkg)
+        if ((!GuardConfig.foregroundPackage(pkg)
+                && !GuardConfig.backgroundPlaybackPackage(pkg))
                 || id < 0) {
             return null;
         }
@@ -708,24 +848,53 @@ final class OplusFlexibleWindowController {
                         + " edgeHung="
                         + session.edgeHung
                         + " lock="
-                        + session.lockKeepAlive);
+                        + session.lockKeepAlive
+                        + " background="
+                        + session.backgroundProtected);
     }
 
     private boolean isSessionProtected(
             Session session
     ) {
         if (session == null
-                || !session.active
-                || !GuardConfig
-                .foregroundPackage(
-                        session.packageName)) {
+                || !session.active) {
             return false;
         }
 
-        return session.lockKeepAlive
+        return isOplusSessionProtected(session)
+                || (GuardConfig.backgroundPlaybackPackage(
+                session.packageName)
+                && session.backgroundProtected);
+    }
+
+    private boolean isOplusSessionProtected(
+            Session session
+    ) {
+        return session != null
+                && session.active
+                && GuardConfig.foregroundPackage(
+                session.packageName)
+                && (session.lockKeepAlive
                 || session.edgeHung
-                || isNativeOplusWindow(
-                session);
+                || session.edgeMinimizeRequested
+                || isNativeOplusWindow(session));
+    }
+
+    boolean shouldBlockTaskRemoval(
+            String packageName
+    ) {
+        if (packageName == null) return false;
+
+        for (Session session : sessions.values()) {
+            if (packageName.equals(
+                    session.packageName)
+                    && isOplusSessionProtected(
+                    session)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean isNativeOplusWindow(
@@ -1258,6 +1427,7 @@ final class OplusFlexibleWindowController {
         volatile boolean edgeMinimizeRequested;
         volatile boolean edgeHung;
         volatile boolean lockKeepAlive;
+        volatile boolean backgroundProtected;
 
         volatile long lastOplusStateElapsed;
         volatile long lastSeenElapsed =
