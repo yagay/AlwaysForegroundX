@@ -48,7 +48,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("为 LSPosed 作用域中的应用选择前台状态伪装强度");
+        subtitle.setText("为 LSPosed 作用域中的应用选择后台运行保护强度（保持真实界面前后台状态）");
         subtitle.setTextSize(15);
         subtitle.setTextColor(0xFF666666);
         subtitle.setPadding(0, dp(8), 0, dp(10));
@@ -66,11 +66,11 @@ public final class MainActivity extends Activity {
         RadioGroup modes = new RadioGroup(this);
         modes.setOrientation(RadioGroup.VERTICAL);
         addMode(modes, ModeConfig.MODE_STANDARD, "普通模式",
-                "伪装亮屏、解锁和当前进程前台重要性。默认模式，风险最低。", selectedMode);
+                "保持真实 Activity/窗口前后台状态，仅放宽应用侧后台限制判断。兼容性最高。", selectedMode);
         addMode(modes, ModeConfig.MODE_ENHANCED, "增强模式",
-                "在普通模式基础上，再伪装后台限制、待机/省电状态和 UID 重要性。", selectedMode);
+                "在普通模式基础上，放宽待机、省电和电池优化查询，但不伪装窗口焦点或进程前台。", selectedMode);
         addMode(modes, ModeConfig.MODE_STRONG, "强力模式",
-                "在增强模式基础上，额外启用安全的强力前台查询 Hook 和应用专用诊断。", selectedMode);
+                "在增强模式基础上启用通用媒体连续播放：确认应用真正进入后台后，恢复由生命周期导致的播放器暂停；若应用自己启动后台播放器则自动让位。", selectedMode);
         modes.setOnCheckedChangeListener((group, checkedId) -> {
             if (!ModeConfig.isValid(checkedId)) return;
             boolean synced = AlwaysForegroundApp.setConfiguredMode(checkedId);
@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
         root.addView(diagHeading);
 
         TextView diagHelp = new TextView(this);
-        diagHelp.setText("开始诊断后，模块会自动监听 MediaPlayer、AudioTrack、ExoPlayer/Media3、TTVideoEngine 等播放器的 pause/stop/release 终点。去目标应用播放视频并退到后台，等播放停止后回来导出。ZIP 里的 hook-candidates.txt 会包含建议 Hook 点和完整调用栈。Root 可用时同时附带 LSPosed 原始日志。");
+        diagHelp.setText("开始诊断后，模块会记录真实 Activity 前后台切换、通用媒体连续播放决策，以及 MediaPlayer、AudioTrack、ExoPlayer/Media3、TTVideoEngine 的 pause/stop/release 调用链。ZIP 会同时保留候选 Hook 点和系统事件，方便判断是应用主动暂停、原生后台播放器接管，还是系统策略限制。");
         diagHelp.setTextSize(14);
         diagHelp.setTextColor(0xFF555555);
         diagHelp.setLineSpacing(0, 1.15f);
@@ -153,7 +153,7 @@ public final class MainActivity extends Activity {
         text.append("4. 回到本模块点“停止并导出”。\n");
         text.append("5. 直接查看/发送 ZIP 中的 hook-candidates.txt，不再逐个猜 onPause/onStop。\n\n");
         appendHeading(text, "候选判断\n");
-        text.append("HOOK_CANDIDATE 是真正发生的播放器停止终点；HOOK_SUGGEST 是自动评分后的建议上游调用者；HOOK_STACK 是完整调用链。优先 Hook 分数高的应用自身方法，而不是 MediaPlayer/Fragment 生命周期本身。\n\n");
+        text.append("HOOK_CANDIDATE 是真实播放器终点；GENERIC_BACKGROUND 表示已确认整个应用进入后台；GENERIC_CONTINUITY queued/resumed/native handoff won 表示通用连续播放引擎的决策。优先保留应用自己的后台播放机制，通用引擎只在应用没有接管时兜底。\n\n");
         appendHeading(text, "限制\n");
         text.append("如果目标应用完全在 native/JNI 层停止播放，Java 终点可能抓不到；这种情况 ZIP 仍会保留系统事件和 LSPosed 日志，再继续定位 native 或 Surface/AudioFocus 路径。\n");
         body.setText(text);
