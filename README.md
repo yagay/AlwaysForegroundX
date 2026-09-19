@@ -1,5 +1,24 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.3 — 修复普通后台进入 STOPPED 后暂停
+
+5.3.2 已确认普通后台名单同步成功，且 `BACKGROUND_PAUSE_BLOCK` 能命中。
+新诊断进一步确认：OxygenOS 的 Recents/Home 过渡在 pause 被拦截后，仍会在过渡结束时调用
+`ActivityRecord.stopIfPossible()`。Android 随后发送 `StopActivityItem`；客户端为了执行 Stop 会先补一次
+`performPause()`，因此播放器仍然停止。
+
+5.3.3 新增普通后台 STOP 阶段保护：
+
+- 只对已经进入 `BACKGROUND_PROTECTED` 的后台播放名单 Activity 生效；
+- 继续允许窗口变为不可见，因此桌面/其他 App 正常显示和获得焦点；
+- 拦截 `ActivityRecord.stopIfPossible()`，不向目标 App 发送 `StopActivityItem`；
+- 新增 `BACKGROUND_STOP_SUPPRESS / BACKGROUND_STOP_BLOCK` 日志；
+- Activity finishing、强制停止、更新和真实关闭不使用此保护；
+- 返回目标 App 时仍由现有焦点状态自动退出 `BACKGROUND_PROTECTED`；
+- 不修改已经稳定的小窗/FloatHandle 路径。
+
+> 本版新增固定 system_server Hook，Bootstrap API 升级为 4，安装后需要完整重启一次。
+
 ## 5.3.2 — 修复普通后台/普通锁屏名单未同步
 
 5.3.0 加入了 `background_playback_packages`，但 App 侧 `GuardApp.syncAll()` 的
