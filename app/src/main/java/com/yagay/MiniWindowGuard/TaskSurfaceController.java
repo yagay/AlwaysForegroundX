@@ -63,6 +63,19 @@ final class TaskSurfaceController {
         return isManagedPackage(pkg);
     }
 
+    boolean isManagedTopActivityRecord(Object activityRecord) {
+        if (!isManagedActivityRecord(activityRecord)) return false;
+
+        Object task = getTask(activityRecord);
+        if (task == null) return false;
+
+        Object top = invokeNoArg(task, "topRunningActivity");
+        if (top == null) {
+            top = invokeNoArg(task, "getTopResumedActivity");
+        }
+        return top == null || top == activityRecord;
+    }
+
     int stateForPackage(String packageName) {
         ManagedTask task = findLatest(packageName);
         return task == null ? ConfigKeys.STATE_RELEASED : task.state;
@@ -230,6 +243,7 @@ final class TaskSurfaceController {
         managed.state = ConfigKeys.STATE_WINDOW;
         managed.lastBounds = new Rect(bounds);
         managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+        setTaskSurfaceAlpha(managed, 1.0f, "window");
 
         notifyCaptured(managed);
         log("TASK_STATE",
@@ -298,8 +312,13 @@ final class TaskSurfaceController {
     }
 
     private void applyBackgroundState(ManagedTask managed, int state) {
-        // Never make the currently focused top task transparent/off-screen.
-        // A transparent top task leaves no visible activity behind it and produces a black screen.
+        // Icon/hidden is a visual state, not an Android lifecycle state.
+        // Mark it before reordering so lifecycle hooks can suppress pause/stop while
+        // WindowOrganizer moves the task behind the user's foreground task.
+        int previousState = managed.state;
+        managed.state = state;
+        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+
         boolean ok = applyWindowContainerTransaction(
                 managed.taskObject,
                 readWindowingMode(managed.taskObject),
@@ -309,6 +328,8 @@ final class TaskSurfaceController {
                 false);
 
         if (!ok) {
+            managed.state = previousState;
+            setTaskSurfaceAlpha(managed, 1.0f, "background-revert");
             log("TASK_BACKGROUND_ERROR",
                     "pkg=" + managed.packageName
                             + " taskId=" + managed.taskId
@@ -317,16 +338,30 @@ final class TaskSurfaceController {
             return;
         }
 
-        managed.state = state;
-        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+        // The task stays logically visible/resumed in system_server, but its real
+        // compositor surface is transparent while it sits behind the foreground task.
+        // Re-apply after transition settling because OEM Shell may rewrite task alpha.
+        setTaskSurfaceAlpha(managed, 0.0f, "background");
+        handler.postDelayed(() -> {
+            if (managed.state == ConfigKeys.STATE_ICON
+                    || managed.state == ConfigKeys.STATE_HIDDEN) {
+                setTaskSurfaceAlpha(managed, 0.0f, "background-settle-1");
+            }
+        }, 180L);
+        handler.postDelayed(() -> {
+            if (managed.state == ConfigKeys.STATE_ICON
+                    || managed.state == ConfigKeys.STATE_HIDDEN) {
+                setTaskSurfaceAlpha(managed, 0.0f, "background-settle-2");
+            }
+        }, 700L);
 
         notifyCaptured(managed);
         log("TASK_STATE",
                 "pkg=" + managed.packageName
                         + " taskId=" + managed.taskId
                         + " state=" + state
-                        + " backend=WCT"
-                        + " action=reorder-to-back");
+                        + " backend=WCT+SurfaceControl"
+                        + " action=reorder-to-back-keep-live");
     }
 
     private void restoreTask(ManagedTask managed) {
@@ -341,6 +376,58 @@ final class TaskSurfaceController {
                 true,
                 false,
                 true);
+        setTaskSurfaceAlpha(managed, 1.0f, "release");
+    }
+
+    private void setTaskSurfaceAlpha(
+            ManagedTask managed,
+            float alpha,
+            String reason
+    ) {
+        boolean ok = applyTaskSurfaceAlpha(managed.taskObject, alpha);
+        log("TASK_SURFACE_ALPHA",
+                "pkg=" + managed.packageName
+                        + " taskId=" + managed.taskId
+                        + " state=" + managed.state
+                        + " alpha=" + alpha
+                        + " reason=" + reason
+                        + " ok=" + ok);
+    }
+
+    private boolean applyTaskSurfaceAlpha(Object task, float alpha) {
+        if (task == null) return false;
+
+        try {
+            Object surface = invokeNoArg(task, "getSurfaceControl");
+            if (surface == null) return false;
+
+            ClassLoader loader = task.getClass().getClassLoader();
+            Class<?> txClass = Class.forName(
+                    "android.view.SurfaceControl$Transaction",
+                    false,
+                    loader);
+            Object tx = txClass.getDeclaredConstructor().newInstance();
+
+            boolean alphaSet = invokeCompatible(
+                    tx,
+                    "setAlpha",
+                    surface,
+                    alpha);
+            if (!alphaSet) {
+                invokeCompatible(tx, "close");
+                return false;
+            }
+
+            // Keep the task surface present. Alpha controls only composition; lifecycle
+            // and client visibility remain owned by the system_server guard.
+            invokeCompatible(tx, "show", surface);
+            boolean applied = invokeCompatible(tx, "apply");
+            invokeCompatible(tx, "close");
+            return applied;
+        } catch (Throwable t) {
+            log("TASK_SURFACE_ALPHA_ERROR", String.valueOf(t));
+            return false;
+        }
     }
 
     private Rect containerBounds() {
