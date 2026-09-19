@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace = "com.jieei.alwaysforeground"
+    namespace = "com.yagay.alwaysforeground"
     compileSdk = 37
 
     defaultConfig {
         applicationId = "com.yagay.alwaysforeground"
         minSdk = 31
         targetSdk = 37
-        versionCode = 39
-        versionName = "1.9.1"
+        versionCode = 40
+        versionName = "2.0.0"
     }
 
     compileOptions {
