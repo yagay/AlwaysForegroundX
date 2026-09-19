@@ -185,7 +185,11 @@ final class DiagnosticsManager {
             if (line.contains("HOOK_CANDIDATE")
                     || line.contains("HOOK_SUGGEST")
                     || line.contains("HOOK_STACK")
-                    || line.contains("HOOK_TRACE_FAILED")) {
+                    || line.contains("HOOK_TRACE_FAILED")
+                    || line.contains("GENERIC_BACKGROUND")
+                    || line.contains("GENERIC_FOREGROUND")
+                    || line.contains("GENERIC_CONTINUITY")
+                    || line.contains("HIT Hongguo native")) {
                 out.append(line).append('\n');
             }
         }
