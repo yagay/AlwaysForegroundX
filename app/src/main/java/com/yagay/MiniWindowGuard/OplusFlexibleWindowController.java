@@ -392,6 +392,39 @@ final class OplusFlexibleWindowController {
                         + session.lockKeepAlive);
     }
 
+    void preArmLockKeepAlive(
+            String reason
+    ) {
+        if (!running) return;
+
+        int armed = 0;
+
+        for (Session session :
+                sessions.values()) {
+            if (!session.active
+                    || !GuardConfig
+                    .foregroundPackage(
+                            session.packageName)) {
+                continue;
+            }
+
+            if (!isNativeOplusWindow(
+                    session)) {
+                continue;
+            }
+
+            if (!session.lockKeepAlive) {
+                session.lockKeepAlive = true;
+                armed++;
+            }
+        }
+
+        log(
+                "OPLUS_LOCK_PREARM",
+                "reason=" + reason
+                        + " armed=" + armed);
+    }
+
     void onKeyguardStateChanged(
             boolean showing
     ) {
@@ -519,8 +552,8 @@ final class OplusFlexibleWindowController {
                 && GuardConfig
                 .foregroundPackage(
                         session.packageName)
-                && isSessionProtected(
-                        session);
+                && (session.lockKeepAlive
+                || session.edgeHung);
     }
 
     private Session sessionForTask(Object task) {
