@@ -93,6 +93,13 @@ public final class AlwaysForegroundModule extends XposedModule {
     }
 
     private void installSafeStrongHooks() {
+        // Hongguo has its own context-invisible -> native background-player handoff. Pretending
+        // its Activity still has window focus can interfere with that handoff, so let Hongguo
+        // observe the real focus state and rely on HongguoBackgroundModule for playback.
+        if (HONGGUO_PACKAGE.equals(activePackage)) {
+            log(Log.INFO, TAG, "SKIPPED Activity.hasWindowFocus for Hongguo native background handoff");
+            return;
+        }
         hookBoolean(Activity.class, "hasWindowFocus", true, ModeConfig.MODE_STRONG);
     }
 
