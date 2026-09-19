@@ -3,10 +3,13 @@ package com.jieei.alwaysforeground;
 import android.app.Activity;
 import android.app.Application;
 import android.app.Instrumentation;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.MediaPlayer;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.Window;
+import android.view.WindowManager;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -31,6 +34,7 @@ import io.github.libxposed.api.XposedModuleInterface;
 public final class HongguoBackgroundModule extends XposedModule {
     private static final String TAG = "AlwaysForeground";
     private static final String HONGGUO_PACKAGE = "com.phoenix.read";
+    private static final String AUTO_ENTER_INNER_KEY = "key_is_auto_enter_inner";
 
     // A short window also covers pause calls posted asynchronously from Activity/Fragment pause.
     private static final long BACKGROUND_TRANSITION_WINDOW_MS = 3000L;
@@ -59,6 +63,7 @@ public final class HongguoBackgroundModule extends XposedModule {
     private volatile SharedPreferences preferences;
     private volatile boolean activityPaused;
     private volatile long lastBackgroundTransitionMs;
+    private volatile boolean backgroundAutoEnterPending;
 
     private volatile boolean firstLifecycleBlockedLogged;
     private volatile boolean firstFeedBlockedLogged;
@@ -90,6 +95,8 @@ public final class HongguoBackgroundModule extends XposedModule {
         ClassLoader classLoader = param.getClassLoader();
 
         // Primary, version-resistant path.
+        installHongguoForegroundSemantics(classLoader);
+        installBackgroundAutoEnterLifecycle();
         installActivityBackgroundTracking();
         installStablePlayerEndpoints(classLoader);
 
@@ -100,6 +107,141 @@ public final class HongguoBackgroundModule extends XposedModule {
         log(Log.INFO, TAG, "INSTALLED Hongguo resilient background-play strategy"
                 + " windowMs=" + BACKGROUND_TRANSITION_WINDOW_MS
                 + " process=" + safeProcessName());
+    }
+
+    /**
+     * Red Fruit 7.3.5.32 checks ActivityRecordHelper.isForeground() in its short-video
+     * completion path before auto_to_single. Spoof that app-owned foreground query only while
+     * Hongguo is truly backgrounded and the caller belongs to its short-video component.
+     */
+    private void installHongguoForegroundSemantics(ClassLoader classLoader) {
+        installBooleanForegroundHook(
+                classLoader,
+                "com.dragon.read.base.util.ActivityRecordHelper",
+                "isForeground"
+        );
+        installBooleanForegroundHook(
+                classLoader,
+                "com.dragon.read.app.ActivityRecordManager",
+                "isAppForeground"
+        );
+    }
+
+    private void installBooleanForegroundHook(
+            ClassLoader classLoader,
+            String className,
+            String methodName
+    ) {
+        try {
+            Class<?> clazz = classLoader.loadClass(className);
+            int installed = 0;
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (!methodName.equals(method.getName())) continue;
+                if (method.getParameterCount() != 0) continue;
+                if (method.getReturnType() != boolean.class) continue;
+
+                method.setAccessible(true);
+                hook(method).intercept(chain -> {
+                    if (getMode() >= ModeConfig.MODE_STRONG
+                            && activityPaused
+                            && hasShortVideoCaller()) {
+                        return true;
+                    }
+                    return chain.proceed();
+                });
+                installed++;
+            }
+            if (installed > 0) {
+                log(Log.INFO, TAG, "INSTALLED Hongguo foreground semantic "
+                        + className + "." + methodName + " methods=" + installed);
+            }
+        } catch (ClassNotFoundException ignored) {
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "SKIPPED Hongguo foreground semantic "
+                    + className + "." + methodName + ": " + t, t);
+        }
+    }
+
+    private static boolean hasShortVideoCaller() {
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            String cls = frame.getClassName();
+            if (cls.startsWith("com.dragon.read.component.shortvideo.")
+                    || cls.startsWith("com.dragon.read.shortvideo.")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Automatic series entry normally brings Hongguo to the foreground. For only the native
+     * auto-enter intent (key_is_auto_enter_inner=true) created while Hongguo is already
+     * backgrounded, hide its window before onCreate, allow one real onResume so the native series
+     * player/data state initializes, then immediately move the task back. Manual series opens are
+     * untouched.
+     */
+    private void installBackgroundAutoEnterLifecycle() {
+        try {
+            Method method = Instrumentation.class.getDeclaredMethod(
+                    "callActivityOnCreate", Activity.class, android.os.Bundle.class);
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                List<Object> args = chain.getArgs();
+                Activity activity = !args.isEmpty() && args.get(0) instanceof Activity
+                        ? (Activity) args.get(0) : null;
+
+                if (getMode() >= ModeConfig.MODE_STRONG
+                        && activityPaused
+                        && isAutoEnterInnerActivity(activity)) {
+                    backgroundAutoEnterPending = true;
+                    hideActivityWindow(activity);
+                    log(Log.INFO, TAG, "HIT Hongguo background auto-enter prepared activity="
+                            + activity.getClass().getName());
+                }
+                return chain.proceed();
+            });
+            log(Log.INFO, TAG, "INSTALLED Hongguo background auto-enter onCreate bridge");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "SKIPPED Hongguo background auto-enter bridge: " + t, t);
+        }
+    }
+
+    private static boolean isAutoEnterInnerActivity(Activity activity) {
+        if (activity == null) return false;
+        try {
+            Intent intent = activity.getIntent();
+            return intent != null && intent.getBooleanExtra(AUTO_ENTER_INNER_KEY, false);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void hideActivityWindow(Activity activity) {
+        if (activity == null) return;
+        try {
+            Window window = activity.getWindow();
+            if (window != null) {
+                WindowManager.LayoutParams attrs = window.getAttributes();
+                attrs.alpha = 0f;
+                window.setAttributes(attrs);
+            }
+            activity.overridePendingTransition(0, 0);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void restoreActivityWindow(Activity activity) {
+        if (activity == null) return;
+        try {
+            Window window = activity.getWindow();
+            if (window != null) {
+                WindowManager.LayoutParams attrs = window.getAttributes();
+                attrs.alpha = 1f;
+                window.setAttributes(attrs);
+            }
+            activity.overridePendingTransition(0, 0);
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -129,11 +271,33 @@ public final class HongguoBackgroundModule extends XposedModule {
                         activityPaused = true;
                         lastBackgroundTransitionMs = SystemClock.elapsedRealtime();
                     }
-                } else {
-                    activityPaused = false;
-                    lastBackgroundTransitionMs = 0L;
+                    return chain.proceed();
                 }
 
+                if (backgroundAutoEnterPending && isAutoEnterInnerActivity(activity)) {
+                    Object result = chain.proceed();
+                    boolean moved = false;
+                    try {
+                        moved = activity != null && activity.moveTaskToBack(true);
+                    } catch (Throwable t) {
+                        log(Log.WARN, TAG, "Hongguo background auto-enter moveTaskToBack failed: "
+                                + t);
+                    } finally {
+                        restoreActivityWindow(activity);
+                        backgroundAutoEnterPending = false;
+                        activityPaused = true;
+                        lastBackgroundTransitionMs = SystemClock.elapsedRealtime();
+                    }
+
+                    log(Log.INFO, TAG, "HIT Hongguo background auto-enter initialized and moved back"
+                            + " activity=" + (activity == null
+                            ? "null" : activity.getClass().getName())
+                            + " moved=" + moved);
+                    return result;
+                }
+
+                activityPaused = false;
+                lastBackgroundTransitionMs = 0L;
                 return chain.proceed();
             });
             log(Log.INFO, TAG, "INSTALLED Hongguo lifecycle marker Instrumentation."
