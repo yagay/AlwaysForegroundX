@@ -79,7 +79,7 @@ final class SmallWindowController {
                     manager,
                     intent,
                     options,
-                    android.os.UserHandle.myUserId(),
+                    Math.max(0, Process.myUid() / 100000),
                     context.getPackageName());
 
             int result = raw instanceof Number ? ((Number) raw).intValue() : -1;
