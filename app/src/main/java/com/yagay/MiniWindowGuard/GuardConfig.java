@@ -57,6 +57,10 @@ final class GuardConfig {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
+    static boolean nativeFreeformEngine() {
+        return bool(ConfigKeys.NATIVE_FREEFORM_ENGINE);
+    }
+
     static int containerWidth() {
         return ConfigKeys.sanitizePercent(
                 integer(ConfigKeys.CONTAINER_WIDTH),
