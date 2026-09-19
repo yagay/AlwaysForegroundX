@@ -123,7 +123,39 @@ final class VirtualDisplayController {
     boolean wantsPackage(String packageName) {
         return packageName != null
                 && (packageName.equals(pendingPackage)
-                || isManagedPackage(packageName));
+                || isManagedPackage(packageName)
+                || immediateCommandState(packageName) != null);
+    }
+
+    private Integer immediateCommandState(
+            String packageName
+    ) {
+        if (packageName == null) return null;
+
+        int seq = GuardConfig.integer(
+                ConfigKeys.CONTAINER_COMMAND_SEQ);
+
+        if (seq == lastCommandSeq) {
+            return null;
+        }
+
+        String commandPackage =
+                GuardConfig.string(
+                        ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+
+        if (!packageName.equals(commandPackage)) {
+            return null;
+        }
+
+        int state = ConfigKeys.sanitizeState(
+                GuardConfig.integer(
+                        ConfigKeys.CONTAINER_COMMAND_STATE));
+
+        if (state == ConfigKeys.STATE_RELEASED) {
+            return null;
+        }
+
+        return state;
     }
 
     boolean isManagedPackage(String packageName) {
@@ -213,9 +245,23 @@ final class VirtualDisplayController {
             return;
         }
 
-        int initialState = packageName.equals(pendingPackage)
+        Integer immediateState =
+                immediateCommandState(packageName);
+
+        int initialState = immediateState != null
+                ? immediateState
+                : packageName.equals(pendingPackage)
                 ? pendingState
                 : ConfigKeys.STATE_WINDOW;
+
+        if (immediateState != null) {
+            log("VD_IMMEDIATE_COMMAND",
+                    "pkg=" + packageName
+                            + " seq="
+                            + GuardConfig.integer(
+                            ConfigKeys.CONTAINER_COMMAND_SEQ)
+                            + " state=" + initialState);
+        }
 
         Session session = new Session(
                 id,
