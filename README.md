@@ -1,5 +1,23 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.1 — 修复 FloatHandle 重复开关后停止播放
+
+诊断确认：第一次缩成 FloatHandle 后，从图标重新打开小窗时，OPlus 会执行
+`FloatHandleController.startActivityByFloatInfo()` 并移除原 FloatHandle。旧逻辑没有在这个明确的“恢复为小窗”事件上清理
+`edgeHung / edgeMinimizeRequested`，导致第二次缩小时可能走 `pending_exit_to=6 / exitTo:6`，
+随后出现 `pauseInRecentsAnim → moveTaskToBack → STOPPED`。
+
+5.3.1 新增原生 FloatHandle 恢复 Hook：
+
+- 点击侧边图标打开小窗时立即触发 `OPLUS_EDGE_RESTORE`；
+- 清理上一次缩小遗留的 `edgeHung` 和 `edgeMinimizeRequested`；
+- 下一次缩小时重新按新的 OPlus FloatHandle 事件建立保护状态；
+- 不使用延迟，不根据动画时间猜测；
+- 不修改 5.2.0 已验证成功的第一次缩小/锁屏保活逻辑；
+- 5.3.0 的普通后台播放状态保持不变。
+
+> Bootstrap API 升级为 3，安装后需要完整重启一次。
+
 ## 5.3.0 — 普通后台播放状态
 
 5.3.0 在已经稳定的 5.2.0 OPlus 小窗状态机旁边增加独立的 `BACKGROUND_PROTECTED`，不改变原有小窗逻辑。
