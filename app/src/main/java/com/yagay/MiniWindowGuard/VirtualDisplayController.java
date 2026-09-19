@@ -72,6 +72,7 @@ final class VirtualDisplayController {
     private volatile int lastCommandSeq = Integer.MIN_VALUE;
     private volatile String pendingPackage = "";
     private volatile int pendingState = ConfigKeys.STATE_WINDOW;
+    private volatile boolean running;
 
     VirtualDisplayController(
             Handler handler,
@@ -84,7 +85,39 @@ final class VirtualDisplayController {
     }
 
     void start() {
+        if (running) return;
+        running = true;
+        handler.removeCallbacks(commandPoll);
         handler.post(commandPoll);
+    }
+
+    void shutdown() {
+        running = false;
+        handler.removeCallbacks(commandPoll);
+
+        Session[] snapshot =
+                sessions.values().toArray(new Session[0]);
+        for (Session session : snapshot) {
+            try {
+                closeSession(session, true, "engine-reload");
+            } catch (Throwable t) {
+                log("VD_SHUTDOWN_ERROR",
+                        "pkg=" + session.packageName
+                                + " taskId=" + session.taskId
+                                + " error=" + t);
+            }
+        }
+
+        pendingPackage = "";
+        lastCommandSeq = Integer.MIN_VALUE;
+    }
+
+    int activeSessionCount() {
+        int count = 0;
+        for (Session session : sessions.values()) {
+            if (session.active) count++;
+        }
+        return count;
     }
 
     boolean wantsPackage(String packageName) {
@@ -255,7 +288,9 @@ final class VirtualDisplayController {
             } catch (Throwable t) {
                 log("VD_COMMAND_ERROR", String.valueOf(t));
             } finally {
-                handler.postDelayed(this, COMMAND_POLL_MS);
+                if (running) {
+                    handler.postDelayed(this, COMMAND_POLL_MS);
+                }
             }
         }
     };
