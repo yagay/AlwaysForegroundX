@@ -8,8 +8,10 @@ final class ConfigKeys {
     static final String ENGINE_AUTO_RELOAD = "engine_auto_reload";
     static final String ENGINE_RELOAD_SEQ = "engine_reload_seq";
 
-    static final String OPLUS_FORCE_SUPPORT =
-            "oplus_force_support";
+    static final String FOREGROUND_PACKAGES =
+            "foreground_packages";
+    static final String FORCE_SUPPORT_PACKAGES =
+            "force_support_packages";
 
     static final String SYSTEM_IMPORTANCE_TOP =
             "system_importance_top";
@@ -18,20 +20,10 @@ final class ConfigKeys {
     static final String SYSTEM_BLOCK_REMOVE_KILL =
             "system_block_remove_kill";
 
-    static final String OPLUS_COMMAND_PACKAGE =
-            "oplus_command_package";
-    static final String OPLUS_COMMAND_STATE =
-            "oplus_command_state";
-    static final String OPLUS_COMMAND_SEQ =
-            "oplus_command_seq";
-
     static final String DIAGNOSTICS_ACTIVE =
             "diagnostics_active";
     static final String DIAGNOSTICS_STARTED_AT =
             "diagnostics_started_at";
-
-    static final int STATE_WINDOW = 1;
-    static final int STATE_RELEASED = 4;
 
     private ConfigKeys() {}
 
@@ -39,7 +31,6 @@ final class ConfigKeys {
         return switch (key) {
             case MASTER_ENABLED,
                     ENGINE_AUTO_RELOAD,
-                    OPLUS_FORCE_SUPPORT,
                     SYSTEM_IMPORTANCE_TOP,
                     SYSTEM_HAS_RESUMED,
                     SYSTEM_BLOCK_REMOVE_KILL -> true;
@@ -49,11 +40,5 @@ final class ConfigKeys {
 
     static int defaultInt(String key) {
         return 0;
-    }
-
-    static int sanitizeState(int value) {
-        return value == STATE_RELEASED
-                ? STATE_RELEASED
-                : STATE_WINDOW;
     }
 }
