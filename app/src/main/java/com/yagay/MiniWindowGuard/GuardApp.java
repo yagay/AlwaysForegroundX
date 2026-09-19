@@ -25,7 +25,6 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
             ConfigKeys.AUTO_CONTAINER,
             ConfigKeys.FIXED_INTERNAL_DISPLAY,
-            ConfigKeys.LOCK_WINDOW_ASPECT,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
