@@ -2,54 +2,74 @@
 
 MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
 
-从 **4.0.0** 开始，小窗核心不再使用 display 0 上的 Freeform / MULTI_WINDOW / WCT bounds，而是改成与 **YAMF² / YAMF** 同类的 **VirtualDisplay 容器架构**。
+## 4.1.0
 
-## 4.0.0
+4.1.0 将小窗窗口层完全重写。公开项目 YAMF / YAMF² / FreeformShell 只作为架构思路参考，当前窗口引擎不复制它们的实现源码。
 
-### VirtualDisplay 小窗
+### 小窗核心
 
 - system_server 创建独立 VirtualDisplay。
-- 用户从应用列表点击“打开小窗”后，目标 App 先正常启动。
-- Activity 进入 RESUMED 时，MiniWindowGuard 捕获对应 Task。
-- 通过 `moveRootTaskToDisplay(taskId, displayId)` 把 Task 从主屏 display 0 移入独立 VirtualDisplay。
-- VirtualDisplay 画面通过 system_server 创建的 `TextureView + Surface` Overlay 显示。
-- 触摸/鼠标事件会带目标 `displayId` 注入回 VirtualDisplay。
-- 支持拖动、调整大小、返回键、三点控制菜单。
-- 菜单支持：
-  - 放大（把 Task 移回原 display）
-  - 小窗
-  - 图标
-  - 隐藏
-- 图标/隐藏只改变显示层；VirtualDisplay 与 Task 保持存在，不再通过把 display 0 Task 设 alpha=0 来模拟隐藏。
+- 使用独立 SurfaceView 作为稳定显示 Surface。
+- **先等 Surface 创建成功，再把目标 Task 移入 VirtualDisplay**，避免 Task 已迁移但显示 Surface 尚未准备好的黑屏。
+- VirtualDisplay 启用 Android 16 的：
+  - `SUPPORTS_TOUCH`
+  - `TRUSTED`
+  - `OWN_FOCUS`
+  - `STEAL_TOP_FOCUS_DISABLED`
+- 目标 display 可以维护自己的输入焦点，同时不抢走主屏 display 0 的顶层焦点。
+- 触摸事件根据 SurfaceView 本地坐标重新构造，并写入目标 `displayId` 后由 system_server 的 InputManager 注入。
+- 窗口移动只调用 `updateViewLayout`，不会 remove/add 承载 Surface 的根 View。
+- resize 使用约 16ms 的节流，并在手势结束时强制提交最终 VirtualDisplay 尺寸。
+
+### 窗口 UI
+
+只保留最小控制：
+
+- 拖动标题栏
+- 调整窗口大小
+- 返回
+- 关闭
+
+已删除旧版：
+
+- 三点菜单
+- 图标态
+- 隐藏态
+- 放大/小窗状态菜单
+- 早期 Overlay 状态切换代码
+
+关闭窗口时，目标 Task 会移回原 display。
 
 ### 始终前台
 
-MiniWindowGuard 保留自己的 system_server 前台保护逻辑：
+保留 MiniWindowGuard 自己的 system_server 前台保护逻辑：
 
-- 对容器 App 返回前台级进程状态。
-- `hasResumedActivity(uid)` 可保持为 true。
-- 保护容器顶层 Activity 的 Resumed/Visible 状态。
-- 阻止 remove-task / OEM 清理链路对容器 App 的强杀。
-- 明确的强制停止、安装/更新流程不会被当成普通清理拦截。
+- 容器 App 进程状态保持前台级别
+- `hasResumedActivity(uid)` 保持为 true
+- 阻止容器顶层 Activity 因 display 0 焦点变化进入 pause/stop
+- 保持 Activity 逻辑 Visible
+- 防止普通最近任务/OEM 清理链路把容器 App 强杀
+- 放回原 display 后解除容器保护
 
-VirtualDisplay 解决“窗口如何显示”，前台保护解决“目标 App 是否继续运行”，两者彼此独立。
+VirtualDisplay 负责“窗口怎么显示和操作”，前台保护负责“App 是否继续真正运行”。
 
 ## 诊断
 
-保留原 MiniWindowGuard 的完整诊断导出。
-
-重点事件包括：
+保留完整诊断 ZIP，重点记录：
 
 - `VD_COMMAND_PENDING`
 - `VD_TASK_CAPTURED`
 - `VD_WINDOW_CREATED`
-- `VD_TASK_MOVED`
 - `VD_SURFACE_READY`
-- `VD_RESIZE`
-- `VD_SURFACE_HIDDEN`
+- `VD_TASK_MOVED`
+- `VD_FOCUS`
+- `VD_INPUT_DOWN`
 - `VD_INPUT_ERROR`
-- Activity pause / visible / resumed 拦截
-- 进程、窗口、Task、Audio、MediaSession 与 logcat 快照
+- `VD_RESIZE`
+- `VD_SURFACE_LOST`
+- Activity Resumed / Visible 生命周期保护
+- Display / InputDispatcher / SurfaceFlinger / Audio / MediaSession / Window / Task 快照
+- 最近 30000 行 logcat
 
 诊断 ZIP 保存到：
 
@@ -58,25 +78,21 @@ VirtualDisplay 解决“窗口如何显示”，前台保护解决“目标 App 
 ## 使用
 
 1. 安装 APK。
-2. 在 LSPosed 启用模块，作用域保持 `system`。
-3. 重启手机，使新版 system_server 模块生效。
-4. 打开 MiniWindowGuard，确认 System 引擎显示当前版本。
+2. 在 LSPosed 启用模块，作用域只选 `system`。
+3. 重启手机。
+4. 确认 System 引擎显示当前 code。
 5. 进入“选择应用并打开小窗”。
 6. 选择目标 App。
-7. Task 会被移动到独立 VirtualDisplay，并显示为真正的悬浮容器。
 
-## 架构来源与许可证
+## 公开架构参考
 
-VirtualDisplay 小窗架构参考并适配自：
+设计过程中研究过：
 
-- YAMF² / YAMFsquared — https://github.com/kaii-lb/YAMFsquared
-- YAMF — https://github.com/duzhaokun123/YAMF
+- YAMF² / YAMFsquared
+- YAMF
+- FreeformShell
+- Android AOSP DisplayManager / ActivityTaskManager / InputManager
 
-这些项目使用 GPLv3。
+这些项目和 AOSP 用于理解公开架构与系统行为。MiniWindowGuard 4.1 的窗口引擎为本项目重新实现，不直接使用上述项目的窗口实现源码。
 
-MiniWindowGuard 4.x 同样以 **GNU GPL v3** 发布。详见：
-
-- `LICENSE`
-- `THIRD_PARTY_NOTICES.md`
-
-MiniWindowGuard 保留自己的前台保护、诊断系统以及与当前项目结构相适配的实现。
+本仓库继续使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
