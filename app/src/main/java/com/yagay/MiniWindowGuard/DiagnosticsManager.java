@@ -263,13 +263,10 @@ final class DiagnosticsManager {
         }
         out.append(ConfigKeys.ENGINE_RELOAD_SEQ).append('=')
                 .append(GuardApp.getInt(ConfigKeys.ENGINE_RELOAD_SEQ)).append('\n');
-
-        out.append(ConfigKeys.OPLUS_COMMAND_PACKAGE).append('=')
-                .append(GuardApp.getString(ConfigKeys.OPLUS_COMMAND_PACKAGE)).append('\n');
-        out.append(ConfigKeys.OPLUS_COMMAND_STATE).append('=')
-                .append(GuardApp.getInt(ConfigKeys.OPLUS_COMMAND_STATE)).append('\n');
-        out.append(ConfigKeys.OPLUS_COMMAND_SEQ).append('=')
-                .append(GuardApp.getInt(ConfigKeys.OPLUS_COMMAND_SEQ)).append('\n');
+        out.append(ConfigKeys.FOREGROUND_PACKAGES).append('=')
+                .append(GuardApp.getStringSet(ConfigKeys.FOREGROUND_PACKAGES)).append('\n');
+        out.append(ConfigKeys.FORCE_SUPPORT_PACKAGES).append('=')
+                .append(GuardApp.getStringSet(ConfigKeys.FORCE_SUPPORT_PACKAGES)).append('\n');
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
@@ -287,7 +284,6 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.SYSTEM_IMPORTANCE_TOP);
         keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
-        keys.add(ConfigKeys.OPLUS_FORCE_SUPPORT);
         return keys;
     }
 
@@ -314,6 +310,12 @@ final class DiagnosticsManager {
                 "InputDispatcher",
                 "SurfaceControl",
                 "OplusHans",
+                "HansCGroup",
+                "CachedAppOptimizer",
+                "freezeAppAsyncInternalLSP",
+                "doStopUidLocked",
+                "sleepIfPossible",
+                "moveTaskToBackForPanorama",
                 "Athena",
                 "OplusClearSystemService",
                 "SwipeUpClearAction",
@@ -354,11 +356,12 @@ final class DiagnosticsManager {
 
     private static Set<String> diagnosticPackages() {
         LinkedHashSet<String> result = new LinkedHashSet<>();
-        String pkg = GuardApp.getString(
-                ConfigKeys.OPLUS_COMMAND_PACKAGE);
-        if (pkg != null && !pkg.isBlank()) {
-            result.add(pkg.trim());
-        }
+        result.addAll(
+                GuardApp.getStringSet(
+                        ConfigKeys.FOREGROUND_PACKAGES));
+        result.addAll(
+                GuardApp.getStringSet(
+                        ConfigKeys.FORCE_SUPPORT_PACKAGES));
         return result;
     }
 
