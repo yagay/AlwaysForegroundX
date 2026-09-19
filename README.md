@@ -2,6 +2,16 @@
 
 MiniWindowGuard 是一个 Android 31+ 的 Root + LSPosed Modern API 102 模块。核心作用域固定在 **System Framework / system_server（system）**，目标 App 本身不需要加入 LSPosed 作用域。
 
+## 3.0.12
+
+- 小窗后端改为真正的 `WINDOWING_MODE_FREEFORM (5)`。
+- 不再把 `WINDOWING_MODE_MULTI_WINDOW (6)` 当作小窗；该模式在手机上可能按分屏/多任务根容器占据整屏。
+- FREEFORM 请求后会严格校验实际 windowing mode 和 bounds；系统不接受时直接恢复原 Task，不再退化成“假小窗”。
+- 对受管 Task / 顶层 Activity 强制 freeform / resize 支持，提升普通 App 进入自由窗口的兼容性。
+- 图标/隐藏态继续保护目标 Activity 的 Resumed / Visible 状态，避免播放器因真实 onPause 停止。
+- “隐藏”只隐藏目标 App 的窗口内容；三点控制入口和已展开菜单保持独立。
+- 受保护应用列表中，已选应用固定排在最前。
+
 ## 3.0.8
 
 本版修复图标态和完全隐藏态会让目标 App 停止播放的问题。
