@@ -41,7 +41,7 @@ public final class MainActivity extends Activity {
         scroll.addView(root);
 
         TextView title = new TextView(this);
-        title.setText("始终前台");
+        title.setText("小窗守护");
         title.setTextSize(28);
         title.setTextColor(0xFF111111);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -49,7 +49,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("为 LSPosed 作用域中的应用选择后台运行保护强度（保持真实界面前后台状态）");
+        subtitle.setText("LSPosed + Root 通用小窗与虚拟前台运行保护");
         subtitle.setTextSize(15);
         subtitle.setTextColor(0xFF666666);
         subtitle.setPadding(0, dp(8), 0, dp(10));
