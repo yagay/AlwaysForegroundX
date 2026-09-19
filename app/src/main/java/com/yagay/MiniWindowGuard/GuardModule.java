@@ -219,6 +219,7 @@ public final class GuardModule extends XposedModule {
 
         installLegacyZoomSupportHook(loader);
         installOplusFlexibleEventHook(loader);
+        installFloatHandleRestoreHook(loader);
 
         Class<?> service =
                 load(
@@ -493,6 +494,97 @@ public final class GuardModule extends XposedModule {
             } catch (Throwable t) {
                 installedHooks.remove(
                         method.toGenericString());
+            }
+        }
+    }
+
+    private void installFloatHandleRestoreHook(
+            ClassLoader loader
+    ) {
+        Class<?> controller =
+                load(
+                        loader,
+                        "com.android.server.wm.FloatHandleController");
+
+        if (controller == null) return;
+
+        for (Method method :
+                controller.getDeclaredMethods()) {
+            if (!"startActivityByFloatInfo"
+                    .equals(method.getName())) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                String hookKey =
+                        "float-handle-restore:"
+                                + method.toGenericString();
+
+                if (!installedHooks.add(hookKey)) {
+                    continue;
+                }
+
+                hook(method).intercept(chain -> {
+                    int taskId = -1;
+
+                    for (Object arg :
+                            chain.getArgs()) {
+                        if (arg instanceof Integer value
+                                && value > 0) {
+                            taskId = value;
+                            break;
+                        }
+
+                        if (arg == null) {
+                            continue;
+                        }
+
+                        taskId =
+                                intField(
+                                        arg,
+                                        "taskId",
+                                        -1);
+
+                        if (taskId < 0) {
+                            taskId =
+                                    intField(
+                                            arg,
+                                            "mTaskId",
+                                            -1);
+                        }
+
+                        if (taskId >= 0) {
+                            break;
+                        }
+                    }
+
+                    EngineBridge current = engine;
+
+                    if (current != null
+                            && taskId >= 0) {
+                        current.onFloatHandleOpened(
+                                taskId);
+
+                        diag(
+                                "OPLUS_EDGE_RESTORE",
+                                "taskId=" + taskId
+                                        + " source=startActivityByFloatInfo");
+                    }
+
+                    return chain.proceed();
+                });
+
+                log(
+                        Log.INFO,
+                        TAG,
+                        "SYSTEM_SCOPE installed FloatHandle restore hook "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        "float-handle-restore:"
+                                + method.toGenericString());
             }
         }
     }
