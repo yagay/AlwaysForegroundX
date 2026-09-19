@@ -293,6 +293,7 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
         keys.add(ConfigKeys.AUTO_CONTAINER);
+        keys.add(ConfigKeys.OPLUS_SYSTEM_WINDOW);
         return keys;
     }
 
@@ -310,6 +311,12 @@ final class DiagnosticsManager {
                 "CONTAINER",
                 "VirtualDisplay",
                 "VD_",
+                "OPLUS_",
+                "OplusActivityTaskManager",
+                "FlexibleWindowManager",
+                "FlexibleWindowManagerService",
+                "FlexibleTaskController",
+                "FlexibleWindowUtils",
                 "VD_FOCUS",
                 "VD_INPUT_DOWN",
                 "VD_SURFACE_READY",
