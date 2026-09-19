@@ -82,7 +82,7 @@ public final class TargetAppsActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("勾选后立即自动保存，不需要再点保存。"
-                + "这里只是小窗守护自己的保护名单；LSPosed 仍只需要选择 Android/System Framework。");
+                + "这里只是小窗守护自己的保护名单；LSPosed 仍只需要选择 System Framework / system_server。");
         help.setTextSize(13.5f);
         help.setTextColor(0xFF666A73);
         help.setPadding(0, dp(4), 0, dp(10));
