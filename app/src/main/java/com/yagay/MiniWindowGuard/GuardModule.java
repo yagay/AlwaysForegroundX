@@ -264,7 +264,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(chain.getThisObject());
                         int state = current.stateForPackage(pkg);
-                        if (state == ConfigKeys.STATE_RELEASED) {
+                        if (state != ConfigKeys.STATE_WINDOW) {
                             return chain.proceed();
                         }
 
@@ -304,7 +304,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(chain.getThisObject());
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_RELEASED) {
+                        if (state == ConfigKeys.STATE_WINDOW) {
                             diag("ACTIVITY_KEEP_VISIBLE",
                                     "pkg=" + pkg
                                             + " state=" + state
