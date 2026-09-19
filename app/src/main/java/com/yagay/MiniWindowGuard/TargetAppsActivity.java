@@ -103,10 +103,11 @@ public final class TargetAppsActivity extends Activity {
         all.setText("全选");
         all.setAllCaps(false);
         all.setOnClickListener(v -> {
-            for (AppItem item : filteredApps) selected.add(item.packageName);
+            for (AppItem item : new ArrayList<>(filteredApps)) {
+                selected.add(item.packageName);
+            }
             persistSelection(true);
-            if (adapter != null) adapter.notifyDataSetChanged();
-            refreshCount();
+            resortVisibleApps();
         });
         actions.addView(all, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -115,10 +116,11 @@ public final class TargetAppsActivity extends Activity {
         none.setText("取消当前");
         none.setAllCaps(false);
         none.setOnClickListener(v -> {
-            for (AppItem item : filteredApps) selected.remove(item.packageName);
+            for (AppItem item : new ArrayList<>(filteredApps)) {
+                selected.remove(item.packageName);
+            }
             persistSelection(true);
-            if (adapter != null) adapter.notifyDataSetChanged();
-            refreshCount();
+            resortVisibleApps();
         });
         actions.addView(none, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -265,8 +267,25 @@ public final class TargetAppsActivity extends Activity {
             }
         }
 
+        filteredApps.sort(appComparator());
+
         if (adapter != null) adapter.notifyDataSetChanged();
         refreshCount();
+    }
+
+    private void resortVisibleApps() {
+        String query = search == null ? "" : search.getText().toString();
+        applyFilter(query);
+    }
+
+    private Comparator<AppItem> appComparator() {
+        return Comparator
+                .comparing((AppItem item) ->
+                        selected.contains(item.packageName) ? 0 : 1)
+                .thenComparing(
+                        item -> item.label,
+                        String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(item -> item.packageName);
     }
 
     private void refreshCount() {
@@ -302,7 +321,7 @@ public final class TargetAppsActivity extends Activity {
         if (!selected.contains(item.packageName)) {
             selected.add(item.packageName);
             persistSelection(true);
-            refreshCount();
+            resortVisibleApps();
         }
 
         if (!GuardApp.isSystemEngineActive()) {
@@ -442,7 +461,10 @@ public final class TargetAppsActivity extends Activity {
                 else selected.remove(item.packageName);
 
                 persistSelection(true);
-                refreshCount();
+
+                // Reorder after the checkbox callback completes so ListView does
+                // not recycle the currently-bound row midway through the event.
+                buttonView.post(TargetAppsActivity.this::resortVisibleApps);
             });
 
             holder.launch.setOnClickListener(
