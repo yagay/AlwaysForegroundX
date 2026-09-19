@@ -81,15 +81,28 @@ public final class AlwaysForegroundModule extends XposedModule {
         hookBoolean(KeyguardManager.class, "isKeyguardLocked", false, ModeConfig.MODE_STANDARD);
         hookBoolean(KeyguardManager.class, "isDeviceLocked", false, ModeConfig.MODE_STANDARD);
         hookBoolean(KeyguardManager.class, "inKeyguardRestrictedInputMode", false, ModeConfig.MODE_STANDARD);
-        hookRunningProcesses();
+
+        // Hongguo uses real process/background state to decide whether to hand playback from the
+        // series UI player to its native z05.b background player. Do not spoof process importance
+        // for Hongguo; its dedicated module handles playback while preserving true background state.
+        if (!HONGGUO_PACKAGE.equals(activePackage)) {
+            hookRunningProcesses();
+        } else {
+            log(Log.INFO, TAG, "SKIPPED ActivityManager.getRunningAppProcesses for Hongguo native background handoff");
+        }
     }
 
     private void installEnhancedHooks() {
         hookBoolean(ActivityManager.class, "isBackgroundRestricted", false, ModeConfig.MODE_ENHANCED);
         hookBoolean(PowerManager.class, "isDeviceIdleMode", false, ModeConfig.MODE_ENHANCED);
         hookBoolean(PowerManager.class, "isPowerSaveMode", false, ModeConfig.MODE_ENHANCED);
-        hookUidImportance();
-        hookMyMemoryState();
+
+        if (!HONGGUO_PACKAGE.equals(activePackage)) {
+            hookUidImportance();
+            hookMyMemoryState();
+        } else {
+            log(Log.INFO, TAG, "SKIPPED ActivityManager importance spoofing for Hongguo native background handoff");
+        }
     }
 
     private void installSafeStrongHooks() {
