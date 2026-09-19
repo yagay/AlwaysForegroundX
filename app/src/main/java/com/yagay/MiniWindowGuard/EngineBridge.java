@@ -19,7 +19,7 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 2;
+    static final int BOOTSTRAP_API = 3;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
@@ -335,6 +335,16 @@ final class EngineBridge {
                 "onOplusTaskVanished",
                 new Class<?>[]{Object.class},
                 taskInfo);
+    }
+
+    void onFloatHandleOpened(
+            int taskId
+    ) {
+        safeInvoke(
+                currentEngine(),
+                "onFloatHandleOpened",
+                new Class<?>[]{int.class},
+                taskId);
     }
 
     void onOplusFlexibleEvent(
