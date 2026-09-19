@@ -1,4 +1,4 @@
-package com.yagay.alwaysforeground;
+package com.yagay.MiniWindowGuard;
 
 final class ConfigKeys {
     static final String REMOTE_GROUP = "guard_config";

@@ -1,4 +1,4 @@
-package com.yagay.alwaysforeground;
+package com.yagay.MiniWindowGuard;
 
 import android.content.ContentValues;
 import android.content.Context;

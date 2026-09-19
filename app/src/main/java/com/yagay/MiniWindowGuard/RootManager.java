@@ -1,4 +1,4 @@
-package com.yagay.alwaysforeground;
+package com.yagay.MiniWindowGuard;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;

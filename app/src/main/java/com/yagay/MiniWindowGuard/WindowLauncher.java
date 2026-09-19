@@ -1,4 +1,4 @@
-package com.yagay.alwaysforeground;
+package com.yagay.MiniWindowGuard;
 
 import android.content.Context;
 import android.content.Intent;
@@ -25,7 +25,7 @@ final class WindowLauncher {
             String command =
                     "CLASSPATH=" + RootManager.quote(context.getApplicationInfo().sourceDir)
                     + " app_process /system/bin "
-                    + "com.yagay.alwaysforeground.RootWindowBridge "
+                    + "com.yagay.MiniWindowGuard.RootWindowBridge "
                     + RootManager.quote(uri) + " "
                     + userId + " "
                     + RootManager.quote(packageName) + " "
