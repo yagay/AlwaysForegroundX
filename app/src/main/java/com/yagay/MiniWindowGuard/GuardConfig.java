@@ -28,9 +28,7 @@ final class GuardConfig {
 
     static int integer(String key) {
         SharedPreferences p = prefs;
-        int fallback =
-                ConfigKeys.defaultInt(key);
-
+        int fallback = ConfigKeys.defaultInt(key);
         if (p == null) return fallback;
 
         try {
@@ -45,8 +43,7 @@ final class GuardConfig {
         if (p == null) return "";
 
         try {
-            String value =
-                    p.getString(key, "");
+            String value = p.getString(key, "");
             return value == null ? "" : value;
         } catch (Throwable ignored) {
             return "";
@@ -57,19 +54,7 @@ final class GuardConfig {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
-    static boolean useOplusSystemWindow() {
-        return bool(ConfigKeys.OPLUS_SYSTEM_WINDOW);
-    }
-
-    static int containerWidth() {
-        return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.CONTAINER_WIDTH),
-                58);
-    }
-
-    static int containerHeight() {
-        return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.CONTAINER_HEIGHT),
-                66);
+    static boolean forceOplusSupport() {
+        return bool(ConfigKeys.OPLUS_FORCE_SUPPORT);
     }
 }
