@@ -926,10 +926,57 @@ final class OplusFlexibleWindowController {
 
             for (AudioPlaybackConfiguration config :
                     current) {
-                if (config != null
-                        && config.isActive()
-                        && config.getClientUid()
-                        == uid) {
+                if (config == null) {
+                    continue;
+                }
+
+                Object activeValue =
+                        invokeNoArg(
+                                config,
+                                "isActive");
+
+                boolean active =
+                        Boolean.TRUE.equals(
+                                activeValue);
+
+                if (activeValue == null) {
+                    Object state =
+                            invokeNoArg(
+                                    config,
+                                    "getPlayerState");
+
+                    if (!(state
+                            instanceof Number)) {
+                        state =
+                                fieldValue(
+                                        config,
+                                        "mPlayerState");
+                    }
+
+                    active =
+                            state instanceof Number
+                                    && ((Number) state)
+                                    .intValue() == 2;
+                }
+
+                Object clientUid =
+                        invokeNoArg(
+                                config,
+                                "getClientUid");
+
+                if (!(clientUid
+                        instanceof Number)) {
+                    clientUid =
+                            fieldValue(
+                                    config,
+                                    "mClientUid");
+                }
+
+                if (active
+                        && clientUid
+                        instanceof Number
+                        && ((Number) clientUid)
+                        .intValue() == uid) {
                     return true;
                 }
             }
