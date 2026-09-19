@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">小窗守护</string>
-    <string name="app_description">通过 LSPosed + Root 提供系统小窗、图标/隐藏形态与虚拟前台运行保护。</string>
+    <string name="app_description">通过 Root + LSPosed 提供通用系统小窗、Mini/隐藏形态、后台保活与虚拟前台运行保护。</string>
 </resources>
