@@ -19,13 +19,15 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 4;
+    static final int BOOTSTRAP_API = 5;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
             "com.yagay.MiniWindowGuard";
     private static final String ENGINE_CLASS =
             "com.yagay.MiniWindowGuard.HotReloadEngine";
+    private static final String RELOADABLE_PREFIX =
+            "com.yagay.MiniWindowGuard.";
 
     private final Handler handler;
     private final Context context;
@@ -73,14 +75,22 @@ final class EngineBridge {
                             "installed APK path unavailable");
                 }
 
-                candidateLoader = new PathClassLoader(
-                        apkPath,
-                        systemClassLoader);
+                candidateLoader =
+                        new ReloadableEngineClassLoader(
+                                apkPath,
+                                systemClassLoader);
 
                 Class<?> engineClass = Class.forName(
                         ENGINE_CLASS,
                         true,
                         candidateLoader);
+
+                if (engineClass.getClassLoader()
+                        != candidateLoader) {
+                    throw new IllegalStateException(
+                            "engine class resolved from stale parent loader "
+                                    + engineClass.getClassLoader());
+                }
 
                 candidate = engineClass
                         .getDeclaredConstructor()
@@ -91,6 +101,21 @@ final class EngineBridge {
                                 candidate,
                                 "versionCode"))
                                 .longValue();
+
+                long installedVersion =
+                        installedVersionCode();
+
+                if (installedVersion > 0
+                        && candidateVersion
+                        != installedVersion) {
+                    throw new IllegalStateException(
+                            "engine version "
+                                    + candidateVersion
+                                    + " != installed version "
+                                    + installedVersion
+                                    + " apk="
+                                    + apkPath);
+                }
 
                 int requiredBootstrap =
                         ((Number) invoke(
@@ -522,6 +547,57 @@ final class EngineBridge {
         return value instanceof Boolean
                 ? (Boolean) value
                 : fallback;
+    }
+
+    private static final class ReloadableEngineClassLoader
+            extends PathClassLoader {
+        ReloadableEngineClassLoader(
+                String dexPath,
+                ClassLoader parent
+        ) {
+            super(
+                    dexPath,
+                    parent);
+        }
+
+        @Override
+        protected Class<?> loadClass(
+                String name,
+                boolean resolve
+        ) throws ClassNotFoundException {
+            synchronized (
+                    getClassLoadingLock(
+                            name)) {
+                Class<?> loaded =
+                        findLoadedClass(
+                                name);
+
+                if (loaded == null
+                        && name.startsWith(
+                                RELOADABLE_PREFIX)) {
+                    try {
+                        loaded =
+                                findClass(
+                                        name);
+                    } catch (ClassNotFoundException ignored) {
+                    }
+                }
+
+                if (loaded == null) {
+                    loaded =
+                            super.loadClass(
+                                    name,
+                                    false);
+                }
+
+                if (resolve) {
+                    resolveClass(
+                            loaded);
+                }
+
+                return loaded;
+            }
+        }
     }
 
     private String resolveInstalledApkPath() throws Exception {
