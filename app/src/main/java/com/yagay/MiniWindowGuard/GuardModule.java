@@ -22,7 +22,7 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
-    private static final String SYSTEM_PACKAGE = "android";
+    private static final String SYSTEM_PACKAGE = "system";
     private static final int PROCESS_STATE_TOP = 2;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
@@ -49,7 +49,7 @@ public final class GuardModule extends XposedModule {
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         if (!param.isFirstPackage()) return;
         if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
-        log(Log.INFO, TAG, "SYSTEM_SCOPE android package loaded");
+        log(Log.INFO, TAG, "SYSTEM_SCOPE system_server package loaded");
     }
 
     @Override
@@ -392,13 +392,13 @@ public final class GuardModule extends XposedModule {
     }
 
     private long resolveInstalledVersionCode(Context context) {
-        if (context == null) return 48L;
+        if (context == null) return 49L;
         try {
             return context.getPackageManager()
                     .getPackageInfo("com.yagay.MiniWindowGuard", 0)
                     .getLongVersionCode();
         } catch (Throwable ignored) {
-            return 48L;
+            return 49L;
         }
     }
 
