@@ -325,6 +325,14 @@ final class EngineBridge {
                 taskInfo);
     }
 
+    void preArmLockKeepAlive(String reason) {
+        safeInvoke(
+                currentEngine(),
+                "preArmLockKeepAlive",
+                new Class<?>[]{String.class},
+                reason);
+    }
+
     void onKeyguardStateChanged(boolean showing) {
         safeInvoke(
                 currentEngine(),
