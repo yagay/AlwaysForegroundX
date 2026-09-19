@@ -454,7 +454,9 @@ final class TaskSurfaceController {
             surfaceView.setSurfaceTextureListener(this);
             surfaceView.setOnTouchListener((v, event) -> {
                 if (managed.state != ConfigKeys.STATE_WINDOW) return false;
-                bringToFront();
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    handler.post(this::bringToFront);
+                }
                 return injectMotionEvent(event);
             });
             surfaceView.setOnGenericMotionListener((v, event) ->
@@ -526,16 +528,19 @@ final class TaskSurfaceController {
             resizeButton.setVisibility(View.GONE);
             moreButton.setText("⋮");
 
-            // Keep TextureView and its SurfaceTexture alive. The task continues
-            // rendering on its VirtualDisplay, but the pixels are visually hidden.
+            // Keep TextureView, SurfaceTexture and the VirtualDisplay buffer at
+            // their full size. Only the host overlay is collapsed and the pixels
+            // are made transparent, so the remote task keeps a live display surface.
             LinearLayout.LayoutParams sp =
-                    new LinearLayout.LayoutParams(1, 1);
+                    new LinearLayout.LayoutParams(
+                            expandedWidth,
+                            expandedHeight);
             surfaceView.setLayoutParams(sp);
             surfaceView.setAlpha(0f);
             surfaceView.setVisibility(View.VISIBLE);
 
             windowParams.width = barHeight + dp(8);
-            windowParams.height = barHeight + 1;
+            windowParams.height = barHeight;
             clampWindowPosition();
             safeUpdateRoot();
             bringToFront();
@@ -568,7 +573,7 @@ final class TaskSurfaceController {
                     dragStartRawY = event.getRawY();
                     dragStartX = windowParams.x;
                     dragStartY = windowParams.y;
-                    bringToFront();
+                    handler.post(this::bringToFront);
                     return true;
                 }
                 case MotionEvent.ACTION_MOVE -> {
@@ -602,7 +607,7 @@ final class TaskSurfaceController {
                     resizeStartRawY = event.getRawY();
                     resizeStartWidth = expandedWidth;
                     resizeStartHeight = expandedHeight;
-                    bringToFront();
+                    handler.post(this::bringToFront);
                     return true;
                 }
                 case MotionEvent.ACTION_MOVE -> {
