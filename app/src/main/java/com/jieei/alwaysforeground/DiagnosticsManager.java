@@ -190,6 +190,7 @@ final class DiagnosticsManager {
                     || line.contains("GENERIC_FOREGROUND")
                     || line.contains("GENERIC_CONTINUITY")
                     || line.contains("GENERIC_VIRTUAL_")
+                    || line.contains("GENERIC_SMALL_WINDOW")
                     || line.contains("HIT Hongguo native")) {
                 out.append(line).append('\n');
             }
