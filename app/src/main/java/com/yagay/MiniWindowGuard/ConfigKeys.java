@@ -18,6 +18,7 @@ final class ConfigKeys {
     static final String SYSTEM_HAS_RESUMED = "system_has_resumed";
     static final String SYSTEM_KEEP_CONTAINER_RESUMED = "system_keep_container_resumed";
     static final String SYSTEM_KEEP_CONTAINER_VISIBLE = "system_keep_container_visible";
+    static final String SYSTEM_BLOCK_REMOVE_KILL = "system_block_remove_kill";
 
     static final String AUTO_CONTAINER = "auto_container";
     static final String CONTAINER_DEFAULT_STATE = "container_default_state";
@@ -53,6 +54,7 @@ final class ConfigKeys {
                     SYSTEM_HAS_RESUMED,
                     SYSTEM_KEEP_CONTAINER_RESUMED,
                     SYSTEM_KEEP_CONTAINER_VISIBLE,
+                    SYSTEM_BLOCK_REMOVE_KILL,
                     AUTO_CONTAINER,
                     CONTAINER_ALWAYS_ON_TOP -> true;
             default -> false;

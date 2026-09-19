@@ -9,8 +9,10 @@ import android.os.Looper;
 import android.os.Process;
 import android.util.Log;
 
+import java.io.FileInputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -66,6 +68,8 @@ public final class GuardModule extends XposedModule {
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
+        installRemovedTaskServiceGuard(systemClassLoader);
+        installProcessKillGuard(systemClassLoader);
 
         log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready in system_server");
         diag("ENGINE_READY",
@@ -365,6 +369,215 @@ public final class GuardModule extends XposedModule {
                 }
             }
         }
+    }
+
+
+    /**
+     * ActivityTaskSupervisor.cleanUpRemovedTask() calls
+     * ActivityManagerInternal.cleanUpServices(userId, component, baseIntent)
+     * while removing a task. For protected apps we keep those services alive.
+     */
+    private void installRemovedTaskServiceGuard(ClassLoader loader) {
+        Class<?> localService = load(
+                loader,
+                "com.android.server.am.ActivityManagerService$LocalService");
+        if (localService == null) return;
+
+        for (Method method : localService.getDeclaredMethods()) {
+            if (!"cleanUpServices".equals(method.getName())
+                    || method.getReturnType() != void.class) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+
+                hook(method).intercept(chain -> {
+                    if (!enabled()
+                            || !GuardConfig.bool(
+                                    ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL)) {
+                        return chain.proceed();
+                    }
+
+                    ComponentName component = null;
+                    for (Object arg : chain.getArgs()) {
+                        if (arg instanceof ComponentName) {
+                            component = (ComponentName) arg;
+                            break;
+                        }
+                    }
+
+                    String pkg = component == null
+                            ? null : component.getPackageName();
+                    if (!isTargetPackage(pkg)) {
+                        return chain.proceed();
+                    }
+
+                    diag("REMOVE_TASK_SERVICES_BLOCK",
+                            "pkg=" + pkg
+                                    + " component=" + component
+                                    + " method=" + method.toGenericString()
+                                    + " stack=" + stackSummary());
+                    return null;
+                });
+
+                log(Log.INFO, TAG,
+                        "SYSTEM_SCOPE installed removed-task service guard "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG,
+                        "SYSTEM_SCOPE skipped removed-task service guard error=" + t);
+            }
+        }
+    }
+
+    /**
+     * OxygenOS/ColorOS can send SIGKILL directly after a task is swiped away.
+     * Only suppress SIGKILL when the PID is a protected app process AND the
+     * system_server call stack is a task-removal/OEM swipe-clear path.
+     */
+    private void installProcessKillGuard(ClassLoader loader) {
+        Class<?> processClass = load(loader, "android.os.Process");
+        if (processClass == null) return;
+
+        for (Method method : processClass.getDeclaredMethods()) {
+            String name = method.getName();
+            if (!("sendSignal".equals(name)
+                    || "sendSignalQuiet".equals(name))
+                    || method.getReturnType() != void.class
+                    || method.getParameterCount() != 2
+                    || method.getParameterTypes()[0] != int.class
+                    || method.getParameterTypes()[1] != int.class) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+
+                hook(method).intercept(chain -> {
+                    if (!enabled()
+                            || !GuardConfig.bool(
+                                    ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL)) {
+                        return chain.proceed();
+                    }
+
+                    List<Object> args = chain.getArgs();
+                    if (args.size() < 2
+                            || !(args.get(0) instanceof Integer pid)
+                            || !(args.get(1) instanceof Integer signal)
+                            || signal != 9) {
+                        return chain.proceed();
+                    }
+
+                    String processName = readProcessName(pid);
+                    String targetPackage = targetPackageForProcess(processName);
+                    if (targetPackage == null) {
+                        return chain.proceed();
+                    }
+
+                    String stack = stackSummary();
+                    if (isExplicitStopOrUpdateStack(stack)) {
+                        diag("KILL_GUARD_PASS",
+                                "reason=explicit-stop-or-update"
+                                        + " pid=" + pid
+                                        + " process=" + processName
+                                        + " signal=" + signal
+                                        + " stack=" + stack);
+                        return chain.proceed();
+                    }
+
+                    if (!isTaskRemovalKillStack(stack)) {
+                        diag("KILL_GUARD_PASS",
+                                "reason=not-remove-task"
+                                        + " pid=" + pid
+                                        + " process=" + processName
+                                        + " signal=" + signal
+                                        + " stack=" + stack);
+                        return chain.proceed();
+                    }
+
+                    diag("KILL_GUARD_BLOCK",
+                            "pkg=" + targetPackage
+                                    + " pid=" + pid
+                                    + " process=" + processName
+                                    + " signal=" + signal
+                                    + " stack=" + stack);
+                    return null;
+                });
+
+                log(Log.INFO, TAG,
+                        "SYSTEM_SCOPE installed process kill guard "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG,
+                        "SYSTEM_SCOPE skipped process kill guard error=" + t);
+            }
+        }
+    }
+
+    private String targetPackageForProcess(String processName) {
+        if (processName == null || processName.isBlank()) return null;
+
+        for (String pkg : GuardConfig.targetPackages()) {
+            if (processName.equals(pkg)
+                    || processName.startsWith(pkg + ":")) {
+                return pkg;
+            }
+        }
+        return null;
+    }
+
+    private static String readProcessName(int pid) {
+        if (pid <= 0) return null;
+
+        byte[] buffer = new byte[512];
+        try (FileInputStream in =
+                     new FileInputStream("/proc/" + pid + "/cmdline")) {
+            int length = in.read(buffer);
+            if (length <= 0) return null;
+
+            int end = 0;
+            while (end < length && buffer[end] != 0) end++;
+            if (end <= 0) return null;
+
+            String value = new String(
+                    buffer,
+                    0,
+                    end,
+                    StandardCharsets.UTF_8).trim();
+            return value.isEmpty() ? null : value;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isTaskRemovalKillStack(String stack) {
+        if (stack == null) return false;
+
+        return stack.contains("killProcessesForRemovedTask")
+                || stack.contains("cleanUpRemovedTask")
+                || stack.contains("removeTask")
+                || stack.contains("SwipeUpClearAction")
+                || stack.contains("OplusClearSystemService")
+                || stack.contains("AthenaKiller")
+                || stack.contains("com.oplus.athena")
+                || stack.contains("com.coloros.athena");
+    }
+
+    private static boolean isExplicitStopOrUpdateStack(String stack) {
+        if (stack == null) return false;
+
+        return stack.contains("forceStopPackage")
+                || stack.contains("forceStopPackageLocked")
+                || stack.contains("PackageInstaller")
+                || stack.contains("PackageManagerService")
+                || stack.contains("PackageManagerShellCommand")
+                || stack.contains("deletePackage")
+                || stack.contains("installPackage");
     }
 
     private String[] resolvePackagesForUid(int uid) {

@@ -255,7 +255,7 @@ final class DiagnosticsManager {
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
-        out.append("31-logcat-filtered.txt: module/WCT/TaskSurface/ActivityTaskManager/target-focused view\n");
+        out.append("31-logcat-filtered.txt: module/WCT/kill-guard/TaskSurface/ActivityTaskManager/target-focused view\n");
         out.append("11-24: system state snapshots + LSPosed file/log capture\n");
         out.append("targets/: package/appops/standby/meminfo per protected app\n");
 
@@ -275,6 +275,7 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
+        keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
         keys.add(ConfigKeys.AUTO_CONTAINER);
         keys.add(ConfigKeys.CONTAINER_ALWAYS_ON_TOP);
         return keys;
@@ -292,6 +293,12 @@ final class DiagnosticsManager {
                 "TaskSurface",
                 "SurfaceControl",
                 "OplusHans",
+                "Athena",
+                "OplusClearSystemService",
+                "SwipeUpClearAction",
+                "KILL_GUARD",
+                "REMOVE_TASK_SERVICES_BLOCK",
+                "am_kill",
                 "AudioService",
                 "MediaSession",
                 "deviceidle",

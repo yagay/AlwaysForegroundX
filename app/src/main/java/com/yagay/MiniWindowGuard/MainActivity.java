@@ -206,6 +206,10 @@ public final class MainActivity extends Activity {
         addSwitch(card, "窗口态保持 Visible",
                 "仅窗口态强制可见；图标/隐藏态允许 Task 正常退到后台。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
+
+        addSwitch(card, "阻止任务划除强杀",
+                "仅拦截受保护 App 因 remove-task / Athena 划掉最近任务触发的 SIGKILL，并保留 removed-task 后台服务；普通强制停止和应用更新不拦截。",
+                ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
 
     private void addWindowCard(LinearLayout parent) {
