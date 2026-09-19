@@ -126,49 +126,73 @@ public final class GuardModule extends XposedModule {
 
             if ("getPackageProcessState".equals(name)
                     && method.getReturnType() == int.class) {
-                hookMethod(method, "AMS.getPackageProcessState", chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof String pkg
-                            && isTargetPackage(pkg)) {
-                        hit("AMS.getPackageProcessState TOP " + pkg);
-                        return ActivityManager.PROCESS_STATE_TOP;
-                    }
-                    return chain.proceed();
-                });
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                                && !args.isEmpty()
+                                && args.get(0) instanceof String pkg
+                                && isTargetPackage(pkg)) {
+                            hit("AMS.getPackageProcessState TOP " + pkg);
+                            return ActivityManager.PROCESS_STATE_TOP;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG, "SYSTEM_SCOPE installed AMS.getPackageProcessState");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG, "SYSTEM_SCOPE skipped AMS.getPackageProcessState error=" + t);
+                }
                 continue;
             }
 
             if ("getUidProcessState".equals(name)
                     && method.getReturnType() == int.class) {
-                hookMethod(method, "AMS.getUidProcessState", chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof Integer uid
-                            && isTargetUid(uid)) {
-                        hit("AMS.getUidProcessState TOP uid=" + uid);
-                        return ActivityManager.PROCESS_STATE_TOP;
-                    }
-                    return chain.proceed();
-                });
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                                && !args.isEmpty()
+                                && args.get(0) instanceof Integer uid
+                                && isTargetUid(uid)) {
+                            hit("AMS.getUidProcessState TOP uid=" + uid);
+                            return ActivityManager.PROCESS_STATE_TOP;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG, "SYSTEM_SCOPE installed AMS.getUidProcessState");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG, "SYSTEM_SCOPE skipped AMS.getUidProcessState error=" + t);
+                }
                 continue;
             }
 
             if ("isAppForeground".equals(name)
                     && method.getReturnType() == boolean.class) {
-                hookMethod(method, "AMS.isAppForeground", chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof Integer uid
-                            && isTargetUid(uid)) {
-                        hit("AMS.isAppForeground true uid=" + uid);
-                        return true;
-                    }
-                    return chain.proceed();
-                });
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+                    hook(method).intercept(chain -> {
+                        List<Object> args = chain.getArgs();
+                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                                && !args.isEmpty()
+                                && args.get(0) instanceof Integer uid
+                                && isTargetUid(uid)) {
+                            hit("AMS.isAppForeground true uid=" + uid);
+                            return true;
+                        }
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG, "SYSTEM_SCOPE installed AMS.isAppForeground");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG, "SYSTEM_SCOPE skipped AMS.isAppForeground error=" + t);
+                }
             }
         }
     }
@@ -184,17 +208,25 @@ public final class GuardModule extends XposedModule {
                 continue;
             }
 
-            hookMethod(method, "ATMS.hasResumedActivity", chain -> {
-                List<Object> args = chain.getArgs();
-                if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
-                        && !args.isEmpty()
-                        && args.get(0) instanceof Integer uid
-                        && isTargetUid(uid)) {
-                    hit("ATMS.hasResumedActivity true uid=" + uid);
-                    return true;
-                }
-                return chain.proceed();
-            });
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+                hook(method).intercept(chain -> {
+                    List<Object> args = chain.getArgs();
+                    if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
+                            && !args.isEmpty()
+                            && args.get(0) instanceof Integer uid
+                            && isTargetUid(uid)) {
+                        hit("ATMS.hasResumedActivity true uid=" + uid);
+                        return true;
+                    }
+                    return chain.proceed();
+                });
+                log(Log.INFO, TAG, "SYSTEM_SCOPE installed ATMS.hasResumedActivity");
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG, "SYSTEM_SCOPE skipped ATMS.hasResumedActivity error=" + t);
+            }
         }
     }
 
@@ -212,22 +244,30 @@ public final class GuardModule extends XposedModule {
                 continue;
             }
 
-            hookMethod(method, "ActivityRecord.shouldPauseActivity", chain -> {
-                if (!enabled()
-                        || !GuardConfig.bool(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED)) {
+            try {
+                method.setAccessible(true);
+                if (!installedHooks.add(method.toGenericString())) continue;
+                hook(method).intercept(chain -> {
+                    if (!enabled()
+                            || !GuardConfig.bool(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED)) {
+                        return chain.proceed();
+                    }
+
+                    Object activityRecord = chain.getThisObject();
+                    String pkg = activityPackage(activityRecord);
+                    if (!isTargetPackage(pkg)) return chain.proceed();
+
+                    if (isOplusZoomActiveFor(pkg)) {
+                        hit("ActivityRecord.keepResumed zoom=" + pkg);
+                        return false;
+                    }
                     return chain.proceed();
-                }
-
-                Object activityRecord = chain.getThisObject();
-                String pkg = activityPackage(activityRecord);
-                if (!isTargetPackage(pkg)) return chain.proceed();
-
-                if (isOplusZoomActiveFor(pkg)) {
-                    hit("ActivityRecord.keepResumed zoom=" + pkg);
-                    return false;
-                }
-                return chain.proceed();
-            });
+                });
+                log(Log.INFO, TAG, "SYSTEM_SCOPE installed ActivityRecord.shouldPauseActivity");
+            } catch (Throwable t) {
+                installedHooks.remove(method.toGenericString());
+                log(Log.WARN, TAG, "SYSTEM_SCOPE skipped ActivityRecord.shouldPauseActivity error=" + t);
+            }
         }
     }
 
@@ -246,28 +286,48 @@ public final class GuardModule extends XposedModule {
 
                 if (method.getReturnType() == boolean.class
                         && lower.contains("supportmultiresume")) {
-                    hookMethod(method, className + "." + method.getName(), chain -> {
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME)
-                                && containsTargetPackage(chain.getArgs())) {
-                            hit("OPlus supportMultiResume=true");
-                            return true;
-                        }
-                        return chain.proceed();
-                    });
+                    try {
+                        method.setAccessible(true);
+                        if (!installedHooks.add(method.toGenericString())) continue;
+                        hook(method).intercept(chain -> {
+                            if (GuardConfig.bool(ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME)
+                                    && containsTargetPackage(chain.getArgs())) {
+                                hit("OPlus supportMultiResume=true");
+                                return true;
+                            }
+                            return chain.proceed();
+                        });
+                        log(Log.INFO, TAG, "SYSTEM_SCOPE installed "
+                                + className + "." + method.getName());
+                    } catch (Throwable t) {
+                        installedHooks.remove(method.toGenericString());
+                        log(Log.WARN, TAG, "SYSTEM_SCOPE skipped "
+                                + className + "." + method.getName() + " error=" + t);
+                    }
                     continue;
                 }
 
                 if (method.getReturnType() == boolean.class
                         && (lower.contains("supportzoommode")
                         || lower.contains("supportzoomwindow"))) {
-                    hookMethod(method, className + "." + method.getName(), chain -> {
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT)
-                                && containsTargetPackage(chain.getArgs())) {
-                            hit("OPlus zoom support=true");
-                            return true;
-                        }
-                        return chain.proceed();
-                    });
+                    try {
+                        method.setAccessible(true);
+                        if (!installedHooks.add(method.toGenericString())) continue;
+                        hook(method).intercept(chain -> {
+                            if (GuardConfig.bool(ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT)
+                                    && containsTargetPackage(chain.getArgs())) {
+                                hit("OPlus zoom support=true");
+                                return true;
+                            }
+                            return chain.proceed();
+                        });
+                        log(Log.INFO, TAG, "SYSTEM_SCOPE installed "
+                                + className + "." + method.getName());
+                    } catch (Throwable t) {
+                        installedHooks.remove(method.toGenericString());
+                        log(Log.WARN, TAG, "SYSTEM_SCOPE skipped "
+                                + className + "." + method.getName() + " error=" + t);
+                    }
                 }
             }
         }
@@ -368,24 +428,6 @@ public final class GuardModule extends XposedModule {
             logOnce("zoom-state-error",
                     "SYSTEM_SCOPE zoom state query failed: " + t);
             return false;
-        }
-    }
-
-    private interface HookBody {
-        Object run(io.github.libxposed.api.XposedInterface.Chain chain) throws Throwable;
-    }
-
-    private void hookMethod(Method method, String label, HookBody body) {
-        String signature = method.toGenericString();
-        if (!installedHooks.add(signature)) return;
-
-        try {
-            method.setAccessible(true);
-            hook(method).intercept(body::run);
-            log(Log.INFO, TAG, "SYSTEM_SCOPE installed " + label);
-        } catch (Throwable t) {
-            installedHooks.remove(signature);
-            log(Log.WARN, TAG, "SYSTEM_SCOPE skipped " + label + " error=" + t);
         }
     }
 
