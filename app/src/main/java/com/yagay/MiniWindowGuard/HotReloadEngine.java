@@ -69,7 +69,7 @@ public final class HotReloadEngine {
     }
 
     public long versionCode() {
-        return BuildConfig.VERSION_CODE;
+        return 64L;
     }
 
     public int bootstrapApiRequired() {
