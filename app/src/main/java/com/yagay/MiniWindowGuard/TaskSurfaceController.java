@@ -82,6 +82,21 @@ final class TaskSurfaceController {
                 || isManagedPackage(packageName));
     }
 
+    String managedPackageForProcess(String processName) {
+        if (processName == null || processName.isBlank()) return null;
+
+        for (ManagedTask task : tasks.values()) {
+            if (task.state == ConfigKeys.STATE_RELEASED) continue;
+
+            String pkg = task.packageName;
+            if (processName.equals(pkg)
+                    || processName.startsWith(pkg + ":")) {
+                return pkg;
+            }
+        }
+        return null;
+    }
+
     boolean isManagedActivityRecord(Object activityRecord) {
         String pkg = activityPackage(activityRecord);
         return isManagedPackage(pkg);
