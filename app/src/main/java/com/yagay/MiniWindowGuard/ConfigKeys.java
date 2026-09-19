@@ -16,22 +16,26 @@ final class ConfigKeys {
 
     static final String SYSTEM_IMPORTANCE_TOP = "system_importance_top";
     static final String SYSTEM_HAS_RESUMED = "system_has_resumed";
-    static final String SYSTEM_KEEP_MINI_RESUMED = "system_keep_mini_resumed";
-    static final String SYSTEM_OPLUS_MULTI_RESUME = "system_oplus_multi_resume";
-    static final String SYSTEM_FORCE_ZOOM_SUPPORT = "system_force_zoom_support";
-    static final String SYSTEM_AUTO_SMALL_WINDOW = "system_auto_small_window";
+    static final String SYSTEM_KEEP_CONTAINER_RESUMED = "system_keep_container_resumed";
+    static final String SYSTEM_KEEP_CONTAINER_VISIBLE = "system_keep_container_visible";
 
-    static final String SMALL_WINDOW_FORM = "small_window_form";
-    static final String SMALL_WINDOW_WIDTH = "small_window_width";
-    static final String SMALL_WINDOW_HEIGHT = "small_window_height";
-    static final String AOSP_FREEFORM_FALLBACK = "aosp_freeform_fallback";
+    static final String AUTO_CONTAINER = "auto_container";
+    static final String CONTAINER_DEFAULT_STATE = "container_default_state";
+    static final String CONTAINER_WIDTH = "container_width";
+    static final String CONTAINER_HEIGHT = "container_height";
+    static final String CONTAINER_ALWAYS_ON_TOP = "container_always_on_top";
+
+    static final String CONTAINER_COMMAND_PACKAGE = "container_command_package";
+    static final String CONTAINER_COMMAND_STATE = "container_command_state";
+    static final String CONTAINER_COMMAND_SEQ = "container_command_seq";
 
     static final String DIAGNOSTICS_ACTIVE = "diagnostics_active";
     static final String DIAGNOSTICS_STARTED_AT = "diagnostics_started_at";
 
-    static final int FORM_WINDOW = 1;
-    static final int FORM_ICON = 2;
-    static final int FORM_HIDDEN = 3;
+    static final int STATE_WINDOW = 1;
+    static final int STATE_ICON = 2;
+    static final int STATE_HIDDEN = 3;
+    static final int STATE_RELEASED = 4;
 
     private ConfigKeys() {}
 
@@ -46,29 +50,29 @@ final class ConfigKeys {
                     ROOT_WAKELOCK,
                     SYSTEM_IMPORTANCE_TOP,
                     SYSTEM_HAS_RESUMED,
-                    SYSTEM_KEEP_MINI_RESUMED,
-                    SYSTEM_OPLUS_MULTI_RESUME,
-                    SYSTEM_FORCE_ZOOM_SUPPORT,
-                    SYSTEM_AUTO_SMALL_WINDOW,
-                    AOSP_FREEFORM_FALLBACK -> true;
+                    SYSTEM_KEEP_CONTAINER_RESUMED,
+                    SYSTEM_KEEP_CONTAINER_VISIBLE,
+                    AUTO_CONTAINER,
+                    CONTAINER_ALWAYS_ON_TOP -> true;
             default -> false;
         };
     }
 
     static int defaultInt(String key) {
         return switch (key) {
-            case SMALL_WINDOW_FORM -> FORM_WINDOW;
-            case SMALL_WINDOW_WIDTH -> 58;
-            case SMALL_WINDOW_HEIGHT -> 66;
+            case CONTAINER_DEFAULT_STATE -> STATE_WINDOW;
+            case CONTAINER_WIDTH -> 58;
+            case CONTAINER_HEIGHT -> 66;
             default -> 0;
         };
     }
 
-    static int sanitizeForm(int value) {
-        return value >= FORM_WINDOW && value <= FORM_HIDDEN ? value : FORM_WINDOW;
+    static int sanitizeState(int value) {
+        return value >= STATE_WINDOW && value <= STATE_RELEASED
+                ? value : STATE_WINDOW;
     }
 
     static int sanitizePercent(int value, int fallback) {
-        return value >= 30 && value <= 100 ? value : fallback;
+        return value >= 30 && value <= 95 ? value : fallback;
     }
 }
