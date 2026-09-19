@@ -43,7 +43,7 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class AlwaysForegroundModule extends XposedModule {
     private static final String TAG = "AlwaysForeground";
-    private static final String MODULE_PACKAGE = "com.jieei.alwaysforeground";
+    private static final String MODULE_PACKAGE = "com.yagay.alwaysforeground";
 
     private static final long BACKGROUND_CONFIRM_MS = 450L;
     // Give onStop/native player handoff enough time to run before generic fallback resumes.
