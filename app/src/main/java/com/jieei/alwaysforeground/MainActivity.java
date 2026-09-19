@@ -67,11 +67,11 @@ public final class MainActivity extends Activity {
         RadioGroup modes = new RadioGroup(this);
         modes.setOrientation(RadioGroup.VERTICAL);
         addMode(modes, ModeConfig.MODE_STANDARD, "普通模式",
-                "保持真实 Activity/窗口前后台状态，仅放宽应用侧后台限制判断。兼容性最高。", selectedMode);
+                "保持真实前后台状态，仅放宽基础后台限制。兼容性最高。", selectedMode);
         addMode(modes, ModeConfig.MODE_ENHANCED, "增强模式",
-                "在普通模式基础上，放宽待机、省电和电池优化查询，但不伪装窗口焦点或进程前台。", selectedMode);
-        addMode(modes, ModeConfig.MODE_STRONG, "强力模式",
-                "在增强模式基础上启用通用媒体连续播放：确认应用真正进入后台后，恢复由生命周期导致的播放器暂停；若应用自己启动后台播放器则自动让位。", selectedMode);
+                "在普通模式基础上，进一步放宽待机、省电和电池优化限制。", selectedMode);
+        addMode(modes, ModeConfig.MODE_STRONG, "虚拟前台",
+                "Root 解除系统后台限制，LSPosed 通用伪装前台查询，并维持小窗/Mini/隐藏态媒体连续运行；不再使用单独 App 专用 Hook。", selectedMode);
         modes.setOnCheckedChangeListener((group, checkedId) -> {
             if (!ModeConfig.isValid(checkedId)) return;
             boolean synced = AlwaysForegroundApp.setConfiguredMode(checkedId);
@@ -94,7 +94,7 @@ public final class MainActivity extends Activity {
         root.addView(windowHeading);
 
         TextView windowHelp = new TextView(this);
-        windowHelp.setText("强力模式下，后台应用自己启动本包页面时，优先通过 Root 调用系统/OPlus 小窗 API。三种形态都保留真实 Activity 生命周期，不伪装窗口焦点。");
+        windowHelp.setText("虚拟前台模式下，Root 调用系统/OPlus 小窗 API；自由小窗、图标和隐藏态都继续由 LSPosed 维持虚拟前台查询和媒体连续运行。");
         windowHelp.setTextSize(14);
         windowHelp.setTextColor(0xFF555555);
         windowHelp.setLineSpacing(0, 1.15f);
@@ -168,7 +168,7 @@ public final class MainActivity extends Activity {
         root.addView(diagHeading);
 
         TextView diagHelp = new TextView(this);
-        diagHelp.setText("开始诊断后，模块会记录真实 Activity 前后台切换、通用媒体连续播放决策，以及 MediaPlayer、AudioTrack、ExoPlayer/Media3、TTVideoEngine 的 pause/stop/release 调用链。ZIP 会同时保留候选 Hook 点和系统事件，方便判断是应用主动暂停、原生后台播放器接管，还是系统策略限制。");
+        diagHelp.setText("开始诊断后，模块会记录真实 Activity 前后台切换、VIRTUAL_FOREGROUND 状态、Root 策略、小窗路由和通用媒体连续播放决策，以及常见播放器 pause/stop/release 调用链。");
         diagHelp.setTextSize(14);
         diagHelp.setTextColor(0xFF555555);
         diagHelp.setLineSpacing(0, 1.15f);
