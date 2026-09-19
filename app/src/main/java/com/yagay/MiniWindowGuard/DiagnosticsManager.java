@@ -214,16 +214,22 @@ final class DiagnosticsManager {
             out.append(key).append('=')
                     .append(GuardApp.getBoolean(key)).append('\n');
         }
-        out.append(ConfigKeys.SMALL_WINDOW_FORM).append('=')
-                .append(GuardApp.getInt(ConfigKeys.SMALL_WINDOW_FORM)).append('\n');
-        out.append(ConfigKeys.SMALL_WINDOW_WIDTH).append('=')
-                .append(GuardApp.getInt(ConfigKeys.SMALL_WINDOW_WIDTH)).append('\n');
-        out.append(ConfigKeys.SMALL_WINDOW_HEIGHT).append('=')
-                .append(GuardApp.getInt(ConfigKeys.SMALL_WINDOW_HEIGHT)).append('\n');
+        out.append(ConfigKeys.CONTAINER_DEFAULT_STATE).append('=')
+                .append(GuardApp.getInt(ConfigKeys.CONTAINER_DEFAULT_STATE)).append('\n');
+        out.append(ConfigKeys.CONTAINER_WIDTH).append('=')
+                .append(GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH)).append('\n');
+        out.append(ConfigKeys.CONTAINER_HEIGHT).append('=')
+                .append(GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT)).append('\n');
+        out.append(ConfigKeys.CONTAINER_COMMAND_PACKAGE).append('=')
+                .append(GuardApp.getString(ConfigKeys.CONTAINER_COMMAND_PACKAGE)).append('\n');
+        out.append(ConfigKeys.CONTAINER_COMMAND_STATE).append('=')
+                .append(GuardApp.getInt(ConfigKeys.CONTAINER_COMMAND_STATE)).append('\n');
+        out.append(ConfigKeys.CONTAINER_COMMAND_SEQ).append('=')
+                .append(GuardApp.getInt(ConfigKeys.CONTAINER_COMMAND_SEQ)).append('\n');
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
-        out.append("31-logcat-filtered.txt: module/OPlus/ActivityTaskManager/target-focused view\n");
+        out.append("31-logcat-filtered.txt: module/TaskSurface/ActivityTaskManager/target-focused view\n");
         out.append("11-22: system state snapshots\n");
         out.append("targets/: package/appops/standby/meminfo per protected app\n");
 
@@ -241,11 +247,10 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.ROOT_WAKELOCK);
         keys.add(ConfigKeys.SYSTEM_IMPORTANCE_TOP);
         keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
-        keys.add(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED);
-        keys.add(ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME);
-        keys.add(ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT);
-        keys.add(ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW);
-        keys.add(ConfigKeys.AOSP_FREEFORM_FALLBACK);
+        keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
+        keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
+        keys.add(ConfigKeys.AUTO_CONTAINER);
+        keys.add(ConfigKeys.CONTAINER_ALWAYS_ON_TOP);
         return keys;
     }
 
@@ -256,9 +261,10 @@ final class DiagnosticsManager {
                 "ActivityTaskManager",
                 "ActivityManager",
                 "WindowManager",
-                "OplusZoom",
-                "ZoomWindow",
-                "CompactWindow",
+                "MiniWindowGuard",
+                "CONTAINER",
+                "TaskSurface",
+                "SurfaceControl",
                 "OplusHans",
                 "AudioService",
                 "MediaSession",
