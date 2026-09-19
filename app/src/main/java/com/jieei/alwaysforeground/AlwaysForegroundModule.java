@@ -46,6 +46,9 @@ public final class AlwaysForegroundModule extends XposedModule {
     private static final long CONTINUITY_RESUME_MS = 1000L;
     private static final long ASYNC_LIFECYCLE_CAUSE_MS = 350L;
     private static final long NATIVE_HANDOFF_GRACE_MS = 1800L;
+    // A module-triggered resume can synchronously/async echo back through app visibility
+    // callbacks and request pause again. Guard only the same resumed player for a short window.
+    private static final long CONTINUITY_ECHO_GUARD_MS = 1600L;
     private static final int MAX_HOOK_EVENTS = 160;
 
     private static final String[] PLAYER_CLASSES = {
@@ -63,10 +66,13 @@ public final class AlwaysForegroundModule extends XposedModule {
     private final Set<Integer> knownPlayingPlayers = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Integer, PendingResume> pendingResumes =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Long> continuityLeaseUntil =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> lastEndpointEvents = new ConcurrentHashMap<>();
     private final AtomicInteger hookEventCounter = new AtomicInteger();
     private final AtomicInteger transitionSerial = new AtomicInteger();
     private final ThreadLocal<Integer> lifecycleCauseDepth = ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Integer> pauseCascadeDepth = ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Boolean> tracingEndpoint = ThreadLocal.withInitial(() -> false);
     private final ThreadLocal<Boolean> selfContinuityResume =
             ThreadLocal.withInitial(() -> false);
@@ -210,6 +216,7 @@ public final class AlwaysForegroundModule extends XposedModule {
                     int serial = transitionSerial.incrementAndGet();
                     if (id != 0) resumedActivities.add(id);
                     appInBackground = false;
+                    continuityLeaseUntil.clear();
                     clearPendingResumes("activity-resumed", false);
                     Object result = chain.proceed();
                     logTransitionOnce("GENERIC_FOREGROUND serial=" + serial
@@ -365,6 +372,11 @@ public final class AlwaysForegroundModule extends XposedModule {
 
                 Object player = chain.getThisObject();
                 int playerId = player == null ? 0 : System.identityHashCode(player);
+
+                if (shouldSuppressContinuityEcho(playerId, sink)) {
+                    return null;
+                }
+
                 boolean lifecycle = TargetConfig.getMode() >= ModeConfig.MODE_STRONG
                         && isLifecycleTriggeredPause();
                 boolean wasPlaying = playerId != 0 && knownPlayingPlayers.contains(playerId);
@@ -399,6 +411,14 @@ public final class AlwaysForegroundModule extends XposedModule {
 
                 Object player = chain.getThisObject();
                 int playerId = player == null ? 0 : System.identityHashCode(player);
+
+                // If this is an immediate visibility/state echo caused by our own background
+                // resume, keep the player running. Real user/media-session/audio-focus pauses are
+                // still allowed by shouldSuppressContinuityEcho().
+                if (shouldSuppressContinuityEcho(playerId, sink)) {
+                    return null;
+                }
+
                 boolean lifecycle = TargetConfig.getMode() >= ModeConfig.MODE_STRONG
                         && isLifecycleTriggeredPause();
                 boolean wasPlaying = playerId != 0 && knownPlayingPlayers.contains(playerId);
@@ -407,9 +427,19 @@ public final class AlwaysForegroundModule extends XposedModule {
                     wasPlaying = Boolean.TRUE.equals(queried);
                 }
 
-                Object result = chain.proceed();
+                // Player wrappers commonly call an implementation object's pause(). Treat the
+                // entire nested cascade as one logical pause and queue only the outermost player.
+                int cascadeDepth = pauseCascadeDepth.get();
+                pauseCascadeDepth.set(cascadeDepth + 1);
+                Object result;
+                try {
+                    result = chain.proceed();
+                } finally {
+                    pauseCascadeDepth.set(cascadeDepth);
+                }
+
                 if (playerId != 0) knownPlayingPlayers.remove(playerId);
-                if (lifecycle && wasPlaying && player != null) {
+                if (cascadeDepth == 0 && lifecycle && wasPlaying && player != null) {
                     queuePendingResume(player, sink, false);
                 }
                 return result;
@@ -527,6 +557,10 @@ public final class AlwaysForegroundModule extends XposedModule {
         }
 
         boolean resumed = false;
+        // Install the short lease before invoking play/start because some engines dispatch their
+        // state callback immediately. If resume fails, the lease is removed below.
+        continuityLeaseUntil.put(playerId,
+                SystemClock.elapsedRealtime() + CONTINUITY_ECHO_GUARD_MS);
         selfContinuityResume.set(true);
         try {
             if (pending.setPlayWhenReady) {
@@ -551,10 +585,66 @@ public final class AlwaysForegroundModule extends XposedModule {
                     + " delayMs=" + (SystemClock.elapsedRealtime() - pending.queuedAt)
                     + " package=" + activePackage);
         } else {
+            continuityLeaseUntil.remove(playerId);
             log(Log.INFO, TAG, "GENERIC_CONTINUITY no compatible resume method"
                     + " sink=" + pending.sink
                     + " player=" + player.getClass().getName());
         }
+    }
+
+    private boolean shouldSuppressContinuityEcho(int playerId, String sink) {
+        if (playerId == 0
+                || TargetConfig.getMode() < ModeConfig.MODE_STRONG
+                || !appInBackground) {
+            return false;
+        }
+
+        Long until = continuityLeaseUntil.get(playerId);
+        if (until == null) return false;
+
+        long now = SystemClock.elapsedRealtime();
+        if (now > until) {
+            continuityLeaseUntil.remove(playerId, until);
+            return false;
+        }
+
+        if (isExplicitPlaybackInterruption()) {
+            continuityLeaseUntil.remove(playerId);
+            log(Log.INFO, TAG, "GENERIC_CONTINUITY echo pause allowed"
+                    + " sink=" + sink
+                    + " reason=explicit-media-or-audio-interruption"
+                    + " package=" + activePackage);
+            return false;
+        }
+
+        log(Log.INFO, TAG, "GENERIC_CONTINUITY echo pause suppressed"
+                + " sink=" + sink
+                + " remainingMs=" + Math.max(0L, until - now)
+                + " package=" + activePackage);
+        return true;
+    }
+
+    /**
+     * Do not fight deliberate user/media-session controls or audio-focus/telephony interruptions.
+     * Everything else inside the short post-resume lease is treated as an app visibility/state
+     * echo caused by the module's own resume.
+     */
+    private static boolean isExplicitPlaybackInterruption() {
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            String value = frame.getClassName() + "." + frame.getMethodName();
+            String lower = value.toLowerCase(java.util.Locale.ROOT);
+            if (lower.contains("audiofocus")
+                    || lower.contains("onaudiofocuschange")
+                    || lower.contains("mediasession")
+                    || lower.contains("mediabutton")
+                    || lower.contains("transportcontrol")
+                    || lower.contains("keyevent")
+                    || lower.contains("oncallstate")
+                    || lower.contains("telephony")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void logContinuityCancel(PendingResume pending, String reason) {
@@ -714,6 +804,7 @@ public final class AlwaysForegroundModule extends XposedModule {
                     int id = System.identityHashCode(player);
                     knownPlayingPlayers.remove(id);
                     pendingResumes.remove(id);
+                    continuityLeaseUntil.remove(id);
                 }
                 return result;
             });
