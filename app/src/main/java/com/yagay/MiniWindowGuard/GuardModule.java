@@ -61,6 +61,8 @@ public final class GuardModule extends XposedModule {
         Handler handler = new Handler(Looper.getMainLooper());
 
         Context context = resolveSystemContext(systemClassLoader);
+        GuardConfig.markEngineActive(resolveInstalledVersionCode(context));
+
         container = new TaskSurfaceController(
                 handler,
                 context,
@@ -386,6 +388,17 @@ public final class GuardModule extends XposedModule {
             logOnce("uid-resolve-" + uid,
                     "SYSTEM_SCOPE unable to resolve uid=" + uid + " error=" + t);
             return null;
+        }
+    }
+
+    private long resolveInstalledVersionCode(Context context) {
+        if (context == null) return 48L;
+        try {
+            return context.getPackageManager()
+                    .getPackageInfo("com.yagay.MiniWindowGuard", 0)
+                    .getLongVersionCode();
+        } catch (Throwable ignored) {
+            return 48L;
         }
     }
 
