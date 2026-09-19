@@ -345,7 +345,7 @@ final class OplusFlexibleWindowController {
                 sessions.get(taskId);
 
         if (session == null) {
-            if (!GuardConfig.foregroundPackage(
+            if (!wantsPackage(
                     pkg)) {
                 return;
             }
@@ -360,7 +360,12 @@ final class OplusFlexibleWindowController {
         } else if (pkg != null
                 && !pkg.equals(
                 session.packageName)) {
-            if (!GuardConfig.foregroundPackage(
+            setBackgroundNotification(
+                    session,
+                    false,
+                    "task-package-changed");
+
+            if (!wantsPackage(
                     pkg)) {
                 sessions.remove(
                         taskId,
@@ -460,6 +465,10 @@ final class OplusFlexibleWindowController {
 
         if (!taskRunning
                 || displayId < 0) {
+            setBackgroundNotification(
+                    session,
+                    false,
+                    "task-vanished");
             session.active = false;
             sessions.remove(
                     taskId,
