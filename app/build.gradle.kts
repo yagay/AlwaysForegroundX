@@ -7,7 +7,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.jieei.alwaysforeground"
+        applicationId = "com.yagay.alwaysforeground"
         minSdk = 31
         targetSdk = 37
         versionCode = 38
