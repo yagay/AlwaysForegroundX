@@ -2,6 +2,10 @@ package com.yagay.alwaysforeground;
 
 import android.content.SharedPreferences;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+
 final class GuardConfig {
     private static volatile SharedPreferences prefs;
 
@@ -47,37 +51,35 @@ final class GuardConfig {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
+    static Set<String> targetPackages() {
+        String raw = string(ConfigKeys.TARGET_PACKAGES);
+        if (raw.isBlank()) return Collections.emptySet();
+
+        HashSet<String> result = new HashSet<>();
+        for (String line : raw.split("\n")) {
+            String pkg = line.trim();
+            if (!pkg.isEmpty()) result.add(pkg);
+        }
+        return result;
+    }
+
+    static boolean isTargetPackage(String packageName) {
+        return packageName != null
+                && enabled()
+                && targetPackages().contains(packageName);
+    }
+
     static int windowForm() {
         return ConfigKeys.sanitizeForm(integer(ConfigKeys.SMALL_WINDOW_FORM));
     }
 
     static int windowWidth() {
         return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.SMALL_WINDOW_WIDTH),
-                ConfigKeys.defaultInt(ConfigKeys.SMALL_WINDOW_WIDTH));
+                integer(ConfigKeys.SMALL_WINDOW_WIDTH), 58);
     }
 
     static int windowHeight() {
         return ConfigKeys.sanitizePercent(
-                integer(ConfigKeys.SMALL_WINDOW_HEIGHT),
-                ConfigKeys.defaultInt(ConfigKeys.SMALL_WINDOW_HEIGHT));
-    }
-
-    static int backgroundConfirmMs() {
-        return ConfigKeys.sanitizeDelay(
-                integer(ConfigKeys.BACKGROUND_CONFIRM_MS),
-                ConfigKeys.DEFAULT_BACKGROUND_CONFIRM_MS);
-    }
-
-    static int mediaResumeDelayMs() {
-        return ConfigKeys.sanitizeDelay(
-                integer(ConfigKeys.MEDIA_RESUME_DELAY_MS),
-                ConfigKeys.DEFAULT_MEDIA_RESUME_DELAY_MS);
-    }
-
-    static int echoGuardMs() {
-        return ConfigKeys.sanitizeDelay(
-                integer(ConfigKeys.ECHO_GUARD_MS),
-                ConfigKeys.DEFAULT_ECHO_GUARD_MS);
+                integer(ConfigKeys.SMALL_WINDOW_HEIGHT), 66);
     }
 }

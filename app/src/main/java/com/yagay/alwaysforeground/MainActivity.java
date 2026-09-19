@@ -1,15 +1,13 @@
 package com.yagay.alwaysforeground;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.text.InputType;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -27,6 +25,7 @@ public final class MainActivity extends Activity {
 
     private TextView rootStatus;
     private TextView xposedStatus;
+    private TextView targetCount;
     private TextView widthLabel;
     private TextView heightLabel;
 
@@ -45,20 +44,16 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(18), dp(20), dp(18), dp(36));
         root.setBackgroundColor(0xFFF5F6F8);
-        scroll.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.addView(root);
 
         addHeader(root);
         addStatusCard(root);
-        addMasterCard(root);
+        addTargetCard(root);
         addRootCard(root);
-        addXposedCard(root);
-        addMediaCard(root);
+        addSystemCard(root);
         addWindowCard(root);
-        addAdvancedCard(root);
         addPermissionDetails(root);
-        addResetCard(root);
+        addMaintenanceCard(root);
 
         setContentView(scroll);
         refreshStatus();
@@ -85,7 +80,7 @@ public final class MainActivity extends Activity {
         parent.addView(title);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("MiniWindow Guard · Root + LSPosed 通用虚拟前台");
+        subtitle.setText("System Scope · Root + LSPosed");
         subtitle.setTextSize(15);
         subtitle.setTextColor(0xFF656A73);
         subtitle.setPadding(0, dp(6), 0, dp(16));
@@ -94,7 +89,7 @@ public final class MainActivity extends Activity {
 
     private void addStatusCard(LinearLayout parent) {
         LinearLayout card = card(parent, "运行状态",
-                "Root 只授予小窗守护；目标 App 只需要加入 LSPosed 作用域。");
+                "LSPosed 只需要给本模块勾选 Android/System Framework，不要再勾目标 App。");
 
         rootStatus = statusLine("Root：检测中…");
         card.addView(rootStatus);
@@ -102,168 +97,113 @@ public final class MainActivity extends Activity {
         xposedStatus = statusLine("LSPosed：检测中…");
         card.addView(xposedStatus);
 
-        TextView packageLine = statusLine("包名：com.yagay.alwaysforeground");
-        card.addView(packageLine);
+        card.addView(statusLine("LSPosed 作用域：android / System Framework"));
+        card.addView(statusLine("模块包名：com.yagay.alwaysforeground"));
 
-        TextView apiLine = statusLine("LSPosed API：102");
-        card.addView(apiLine);
+        addSwitch(card,
+                "启用小窗守护",
+                "关闭后 system_server Hook 仍加载，但不修改受保护 App 状态。",
+                ConfigKeys.MASTER_ENABLED);
 
-        Button check = button("重新检测 Root / LSPosed");
+        Button check = button("重新检测");
         check.setOnClickListener(v -> refreshStatus());
         card.addView(check);
     }
 
-    private void addMasterCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "总开关",
-                "关闭后，LSPosed Hook 保留但不修改目标 App 行为；Root 策略会在目标 App 下次启动/恢复时撤销。");
+    private void addTargetCard(LinearLayout parent) {
+        LinearLayout card = card(parent, "受保护应用",
+                "在这里选择 App。它们不需要加入 LSPosed 作用域，也不会被注入模块代码。");
 
-        addSwitch(card,
-                "启用小窗守护",
-                "总控制开关。",
-                ConfigKeys.MASTER_ENABLED);
+        targetCount = statusLine("");
+        card.addView(targetCount);
+
+        Button select = button("选择受保护应用");
+        select.setOnClickListener(v ->
+                startActivity(new Intent(this, TargetAppsActivity.class)));
+        card.addView(select);
+
+        Button applyRoot = button("重新应用 Root 策略");
+        applyRoot.setOnClickListener(v -> executor.execute(() -> {
+            RootPolicyManager.applyAll(this);
+            runOnUiThread(() -> Toast.makeText(
+                    this, "Root 策略已重新应用", Toast.LENGTH_SHORT).show());
+        }));
+        card.addView(applyRoot);
     }
 
     private void addRootCard(LinearLayout parent) {
         LinearLayout card = card(parent, "Root 系统保活",
-                "这些操作由小窗守护自己的 Root 进程执行，不给作用域 App Root 权限，也不修改 /system。");
+                "Root 只由小窗守护自己使用，按受保护包名/UID统一应用。");
 
-        addSwitch(card,
-                "Root 系统保活",
-                "允许对作用域 App 应用下面的系统策略。",
-                ConfigKeys.ROOT_KEEP_ALIVE);
-
-        addSwitch(card,
-                "Doze 白名单",
-                "使用 deviceidle whitelist，降低待机/息屏时被冻结的概率。",
-                ConfigKeys.ROOT_DOZE_WHITELIST);
-
-        addSwitch(card,
-                "保持 Active 待机桶",
-                "把目标 App 设为 active standby bucket，并清除 inactive 状态。",
-                ConfigKeys.ROOT_STANDBY_ACTIVE);
-
-        addSwitch(card,
-                "允许后台 AppOps",
-                "允许 RUN_IN_BACKGROUND / RUN_ANY_IN_BACKGROUND。",
-                ConfigKeys.ROOT_BACKGROUND_APPOPS);
-
-        addSwitch(card,
-                "后台网络白名单",
-                "加入 restrict-background whitelist，避免省流量策略切断后台网络。",
-                ConfigKeys.ROOT_NETWORK_WHITELIST);
-
-        addSwitch(card,
-                "允许 WakeLock",
-                "允许目标 App 在需要时继续持有 WakeLock。",
-                ConfigKeys.ROOT_WAKELOCK);
+        addSwitch(card, "Root 系统保活",
+                "总开关。", ConfigKeys.ROOT_KEEP_ALIVE);
+        addSwitch(card, "Doze 白名单",
+                "加入 deviceidle whitelist。", ConfigKeys.ROOT_DOZE_WHITELIST);
+        addSwitch(card, "保持 Active 待机桶",
+                "清除 inactive 并设为 active standby bucket。", ConfigKeys.ROOT_STANDBY_ACTIVE);
+        addSwitch(card, "允许后台 AppOps",
+                "允许 RUN_IN_BACKGROUND / RUN_ANY_IN_BACKGROUND。", ConfigKeys.ROOT_BACKGROUND_APPOPS);
+        addSwitch(card, "后台网络白名单",
+                "避免省流量策略切断后台网络。", ConfigKeys.ROOT_NETWORK_WHITELIST);
+        addSwitch(card, "允许 WakeLock",
+                "允许受保护 App 使用 WakeLock。", ConfigKeys.ROOT_WAKELOCK);
     }
 
-    private void addXposedCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "LSPosed 虚拟前台",
-                "只 Hook Android/Jetpack 通用接口；真实 Activity onPause/onStop 仍然执行，避免破坏系统状态机。");
+    private void addSystemCard(LinearLayout parent) {
+        LinearLayout card = card(parent, "System Framework 虚拟前台",
+                "这些 Hook 只运行在 system_server，不注入受保护 App。");
 
-        addSwitch(card,
-                "伪装进程前台重要性",
-                "getUidImportance / getPackageImportance / getMyMemoryState 等返回前台级状态。",
-                ConfigKeys.SPOOF_PROCESS_IMPORTANCE);
+        addSwitch(card, "系统进程状态返回 TOP",
+                "ActivityManagerService 对受保护包/UID返回 PROCESS_STATE_TOP。",
+                ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
-        addSwitch(card,
-                "伪装 ProcessLifecycleOwner",
-                "目标 App 在后台时，ProcessLifecycleOwner 查询保持 RESUMED。",
-                ConfigKeys.SPOOF_PROCESS_LIFECYCLE);
+        addSwitch(card, "系统视为存在 Resumed Activity",
+                "ActivityTaskManagerService.hasResumedActivity(uid) 返回 true。",
+                ConfigKeys.SYSTEM_HAS_RESUMED);
 
-        addSwitch(card,
-                "伪装窗口焦点",
-                "后台时 hasWindowFocus() 返回 true。兼容性较激进，某些 App 可能因此触发前台 UI。",
-                ConfigKeys.SPOOF_WINDOW_FOCUS);
+        addSwitch(card, "Mini/隐藏态保持 Resumed",
+                "仅当前 OPlus Zoom/Mini 任务属于受保护 App 时阻止系统发送 pause。",
+                ConfigKeys.SYSTEM_KEEP_MINI_RESUMED);
 
-        addSwitch(card,
-                "伪装亮屏状态",
-                "后台时 isInteractive()/isScreenOn() 返回 true。",
-                ConfigKeys.SPOOF_SCREEN_INTERACTIVE);
+        addSwitch(card, "强制 OPlus Multi-Resume",
+                "OPlus Compact/Zoom Window 对受保护 App统一允许 Multi-Resume。",
+                ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME);
 
-        addSwitch(card,
-                "伪装未锁屏",
-                "后台时 isKeyguardLocked()/isDeviceLocked() 返回 false。",
-                ConfigKeys.SPOOF_KEYGUARD);
-
-        addSwitch(card,
-                "忽略应用侧后台限制",
-                "isBackgroundRestricted() 返回 false。",
-                ConfigKeys.SPOOF_BACKGROUND_RESTRICTION);
-
-        addSwitch(card,
-                "忽略省电 / Doze 查询",
-                "应用侧查询到非省电、非 Doze、已忽略电池优化。",
-                ConfigKeys.SPOOF_POWER_STATE);
-    }
-
-    private void addMediaCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "媒体连续运行",
-                "用于处理 App 直接在 onPause/onStop 中暂停播放器的情况，仍保留用户手动暂停、Audio Focus、MediaSession 和来电中断。");
-
-        addSwitch(card,
-                "生命周期暂停自动恢复",
-                "只恢复被确认由 Activity 进入后台触发的播放器暂停。",
-                ConfigKeys.MEDIA_CONTINUITY);
-
-        addSwitch(card,
-                "恢复回声保护",
-                "恢复播放后短时间抑制由状态回调再次触发的 pause。",
-                ConfigKeys.MEDIA_ECHO_GUARD);
+        addSwitch(card, "强制允许 OPlus 小窗",
+                "厂商小窗支持检查包含受保护包时返回支持。",
+                ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT);
     }
 
     private void addWindowCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "系统小窗",
-                "后台 App 自己打开本包 Activity 时，优先通过 Root 调用 OPlus/ColorOS/OxygenOS 小窗；其他 ROM 可尝试 AOSP Freeform。");
+        LinearLayout card = card(parent, "小窗启动默认值",
+                "用于从小窗守护主动以 Root 打开受保护 App。系统手动开启的小窗仍使用系统自己的大小。");
 
-        addSwitch(card,
-                "后台页面自动转小窗",
-                "避免后台 App 自己启动 Activity 时直接抢占全屏。",
-                ConfigKeys.AUTO_SMALL_WINDOW);
-
-        addSwitch(card,
-                "AOSP Freeform 兜底",
-                "厂商小窗 API 不可用时，尝试 Android Freeform。",
+        addSwitch(card, "AOSP Freeform 兜底",
+                "OPlus 小窗 API 不可用时尝试 Android Freeform。",
                 ConfigKeys.AOSP_FREEFORM_FALLBACK);
-
-        TextView formTitle = label("默认形态");
-        formTitle.setPadding(0, dp(12), 0, dp(4));
-        card.addView(formTitle);
 
         RadioGroup forms = new RadioGroup(this);
         forms.setOrientation(RadioGroup.VERTICAL);
-        addForm(forms, ConfigKeys.FORM_WINDOW,
-                "自由小窗", "显示系统小窗，可按系统方式拖动/调整。");
-        addForm(forms, ConfigKeys.FORM_ICON,
-                "图标", "先进入系统小窗，再缩成 Mini Zoom/悬浮图标。");
-        addForm(forms, ConfigKeys.FORM_HIDDEN,
-                "最小化隐藏", "保持任务运行，再隐藏小窗和图标。");
-
-        int currentForm = ConfigKeys.sanitizeForm(
-                GuardApp.getInt(ConfigKeys.SMALL_WINDOW_FORM));
-        forms.check(300 + currentForm);
-        forms.setOnCheckedChangeListener((group, checkedId) -> {
-            int form = checkedId - 300;
-            GuardApp.putInt(
-                    ConfigKeys.SMALL_WINDOW_FORM,
-                    ConfigKeys.sanitizeForm(form));
-        });
+        addForm(forms, ConfigKeys.FORM_WINDOW, "自由小窗", "保持普通系统小窗。");
+        addForm(forms, ConfigKeys.FORM_ICON, "图标", "启动后缩成 Mini Zoom 图标。");
+        addForm(forms, ConfigKeys.FORM_HIDDEN, "隐藏", "启动后进入 Mini，再隐藏图标。");
+        forms.check(300 + ConfigKeys.sanitizeForm(
+                GuardApp.getInt(ConfigKeys.SMALL_WINDOW_FORM)));
+        forms.setOnCheckedChangeListener((group, checkedId) ->
+                GuardApp.putInt(ConfigKeys.SMALL_WINDOW_FORM,
+                        ConfigKeys.sanitizeForm(checkedId - 300)));
         card.addView(forms);
 
         int width = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.SMALL_WINDOW_WIDTH), 58);
-        widthLabel = label("小窗宽度：" + width + "%");
-        widthLabel.setPadding(0, dp(10), 0, 0);
+        widthLabel = label("默认宽度：" + width + "%");
         card.addView(widthLabel);
-
         SeekBar widthSeek = percentSeek(width);
         widthSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
-            public void onProgressChanged(
-                    SeekBar seekBar, int progress, boolean fromUser) {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 int value = progress + 30;
-                widthLabel.setText("小窗宽度：" + value + "%");
+                widthLabel.setText("默认宽度：" + value + "%");
                 if (fromUser) GuardApp.putInt(ConfigKeys.SMALL_WINDOW_WIDTH, value);
             }
         });
@@ -271,122 +211,72 @@ public final class MainActivity extends Activity {
 
         int height = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.SMALL_WINDOW_HEIGHT), 66);
-        heightLabel = label("小窗高度：" + height + "%");
-        heightLabel.setPadding(0, dp(8), 0, 0);
+        heightLabel = label("默认高度：" + height + "%");
         card.addView(heightLabel);
-
         SeekBar heightSeek = percentSeek(height);
         heightSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
-            public void onProgressChanged(
-                    SeekBar seekBar, int progress, boolean fromUser) {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 int value = progress + 30;
-                heightLabel.setText("小窗高度：" + value + "%");
+                heightLabel.setText("默认高度：" + value + "%");
                 if (fromUser) GuardApp.putInt(ConfigKeys.SMALL_WINDOW_HEIGHT, value);
             }
         });
         card.addView(heightSeek);
     }
 
-    private void addAdvancedCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "高级时序",
-                "只在出现兼容性问题时调整。范围 100–5000 ms。");
-
-        EditText background = numberInput(
-                "后台确认延迟",
-                GuardApp.getInt(ConfigKeys.BACKGROUND_CONFIRM_MS));
-        card.addView(background);
-
-        EditText resume = numberInput(
-                "媒体恢复延迟",
-                GuardApp.getInt(ConfigKeys.MEDIA_RESUME_DELAY_MS));
-        card.addView(resume);
-
-        EditText echo = numberInput(
-                "回声保护时间",
-                GuardApp.getInt(ConfigKeys.ECHO_GUARD_MS));
-        card.addView(echo);
-
-        Button save = button("保存高级参数");
-        save.setOnClickListener(v -> {
-            GuardApp.putInt(
-                    ConfigKeys.BACKGROUND_CONFIRM_MS,
-                    ConfigKeys.sanitizeDelay(
-                            parseInt(background),
-                            ConfigKeys.DEFAULT_BACKGROUND_CONFIRM_MS));
-            GuardApp.putInt(
-                    ConfigKeys.MEDIA_RESUME_DELAY_MS,
-                    ConfigKeys.sanitizeDelay(
-                            parseInt(resume),
-                            ConfigKeys.DEFAULT_MEDIA_RESUME_DELAY_MS));
-            GuardApp.putInt(
-                    ConfigKeys.ECHO_GUARD_MS,
-                    ConfigKeys.sanitizeDelay(
-                            parseInt(echo),
-                            ConfigKeys.DEFAULT_ECHO_GUARD_MS));
-            Toast.makeText(this, "高级参数已保存并同步", Toast.LENGTH_SHORT).show();
-        });
-        card.addView(save);
-    }
-
     private void addPermissionDetails(LinearLayout parent) {
-        LinearLayout card = card(parent, "Root / LSPosed 权限使用详情",
-                "这里列出模块会做什么，方便确认权限范围。");
+        LinearLayout card = card(parent, "权限使用详情",
+                "新架构不再维护推荐 Hook App 列表。");
 
-        card.addView(detailBlock(
-                "Root 权限",
-                "• Root 只由 com.yagay.alwaysforeground 使用。\n"
-                        + "• 不会把 su/root 权限转交给作用域 App。\n"
-                        + "• 用于 deviceidle 白名单、standby bucket、后台 AppOps、"
-                        + "后台网络白名单、WakeLock AppOp。\n"
-                        + "• 用于以 Root Binder 身份调用 OPlus 小窗 / Mini / hideZoomWindow。\n"
-                        + "• 不修改 /system，不刷入模块，不改目标 APK。"));
+        card.addView(detailBlock("LSPosed",
+                "• 作用域只选 Android/System Framework (android)。\n"
+                        + "• 不勾红果、视频 App、浏览器或其他目标 App。\n"
+                        + "• Hook 位于 ActivityManagerService、ActivityTaskManagerService、"
+                        + "ActivityRecord 和 OPlus 小窗系统服务。\n"
+                        + "• 目标 App 选择只在小窗守护内部保存。"));
 
-        card.addView(detailBlock(
-                "LSPosed 权限",
-                "• 只注入你在 LSPosed 作用域中选择的普通 App。\n"
-                        + "• 不需要把 Android/System Framework 加入作用域。\n"
-                        + "• Hook Android/Jetpack 通用前台查询和常见播放器接口。\n"
-                        + "• Activity 生命周期本身仍按系统真实状态运行。\n"
-                        + "• 设置变化会通过 libxposed RemotePreferences 同步。"));
+        card.addView(detailBlock("Root",
+                "• Root 只授予小窗守护。\n"
+                        + "• 根据内部受保护列表统一配置 Doze、待机桶、AppOps、网络和 WakeLock。\n"
+                        + "• 不修改目标 APK，不给目标 App su 权限，不修改 /system。"));
 
-        card.addView(detailBlock(
-                "建议作用域",
-                "只勾选确实需要小窗/后台持续运行的 App。不要把系统桌面、SystemUI、"
-                        + "系统框架或安全类 App 批量加入作用域。"));
+        card.addView(detailBlock("与旧架构的区别",
+                "• 删除 App 内 MediaPlayer/ExoPlayer/TTVideoEngine 等播放器 Hook。\n"
+                        + "• 删除针对单独 App 的 Activity/Fragment Hook。\n"
+                        + "• 不再需要“推荐 Hook 列表”。\n"
+                        + "• Mini 图标继续运行依靠 system_server 保持窗口任务 Resumed/Multi-Resume。"));
     }
 
-    private void addResetCard(LinearLayout parent) {
+    private void addMaintenanceCard(LinearLayout parent) {
         LinearLayout card = card(parent, "维护",
-                "恢复默认只重置小窗守护配置，不会卸载模块或修改 LSPosed 作用域。");
+                "修改 system_server Hook 设置后，重启手机最稳妥。受保护列表会通过 RemotePreferences 同步。");
 
-        Button sync = button("立即同步到 LSPosed");
-        sync.setOnClickListener(v -> {
-            boolean ok = GuardApp.syncAll();
-            Toast.makeText(
-                    this,
-                    ok ? "已同步" : "LSPosed 配置服务未连接",
-                    Toast.LENGTH_SHORT).show();
-            refreshStatus();
-        });
+        Button sync = button("立即同步 LSPosed 配置");
+        sync.setOnClickListener(v -> Toast.makeText(this,
+                GuardApp.syncAll() ? "已同步" : "LSPosed 配置服务未连接",
+                Toast.LENGTH_SHORT).show());
         card.addView(sync);
 
         Button reset = button("恢复默认设置");
         reset.setOnClickListener(v -> {
             GuardApp.resetDefaults();
-            Toast.makeText(this, "已恢复默认，重新打开页面查看", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "已恢复默认设置", Toast.LENGTH_SHORT).show();
             recreate();
         });
         card.addView(reset);
     }
 
     private void refreshStatus() {
+        if (targetCount != null) {
+            targetCount.setText("当前受保护：" + GuardApp.getTargetPackages().size() + " 个 App");
+        }
+
         if (xposedStatus != null) {
             boolean connected = GuardApp.isXposedServiceConnected();
-            xposedStatus.setText(
-                    connected
-                            ? "LSPosed：已连接 · " + GuardApp.getFrameworkName()
-                            : "LSPosed：配置服务未连接");
+            xposedStatus.setText(connected
+                    ? "LSPosed：已连接 · " + GuardApp.getFrameworkName()
+                    : "LSPosed：配置服务未连接");
             xposedStatus.setTextColor(connected ? 0xFF16794A : 0xFFB3261E);
         }
 
@@ -399,20 +289,13 @@ public final class MainActivity extends Activity {
             RootManager.RootStatus status = RootManager.checkAccess();
             runOnUiThread(() -> {
                 if (rootStatus == null) return;
-                rootStatus.setText(status.granted
-                        ? "Root：已授权"
-                        : "Root：未授权 / 不可用");
+                rootStatus.setText(status.granted ? "Root：已授权" : "Root：未授权 / 不可用");
                 rootStatus.setTextColor(status.granted ? 0xFF16794A : 0xFFB3261E);
             });
         });
     }
 
-    private void addSwitch(
-            LinearLayout parent,
-            String title,
-            String description,
-            String key
-    ) {
+    private void addSwitch(LinearLayout parent, String title, String description, String key) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -438,29 +321,19 @@ public final class MainActivity extends Activity {
         toggle.setChecked(GuardApp.getBoolean(key));
         toggle.setOnCheckedChangeListener((button, checked) -> {
             GuardApp.putBoolean(key, checked);
-            if (!GuardApp.isXposedServiceConnected()) {
-                Toast.makeText(
-                        this,
-                        "设置已保存；LSPosed 连接后自动同步",
-                        Toast.LENGTH_SHORT).show();
+            if (key.startsWith("root_")) {
+                executor.execute(() -> RootPolicyManager.applyAll(this));
             }
         });
         row.addView(toggle);
-
         parent.addView(row);
     }
 
-    private void addForm(
-            RadioGroup group,
-            int form,
-            String title,
-            String description
-    ) {
+    private void addForm(RadioGroup group, int form, String title, String description) {
         RadioButton radio = new RadioButton(this);
         radio.setId(300 + form);
         radio.setText(title + "\n" + description);
         radio.setTextSize(14.5f);
-        radio.setTextColor(0xFF202124);
         radio.setPadding(0, dp(5), 0, dp(6));
         group.addView(radio);
     }
@@ -472,30 +345,7 @@ public final class MainActivity extends Activity {
         return seek;
     }
 
-    private EditText numberInput(String hint, int value) {
-        EditText input = new EditText(this);
-        input.setHint(hint + " (ms)");
-        input.setText(String.valueOf(value));
-        input.setSingleLine(true);
-        input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input.setTextSize(14);
-        input.setPadding(0, dp(4), 0, dp(4));
-        return input;
-    }
-
-    private int parseInt(EditText input) {
-        try {
-            return Integer.parseInt(input.getText().toString().trim());
-        } catch (Throwable ignored) {
-            return 0;
-        }
-    }
-
-    private LinearLayout card(
-            LinearLayout parent,
-            String title,
-            String subtitle
-    ) {
+    private LinearLayout card(LinearLayout parent, String title, String subtitle) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
@@ -514,7 +364,6 @@ public final class MainActivity extends Activity {
         TextView heading = new TextView(this);
         heading.setText(title);
         heading.setTextSize(19);
-        heading.setTextColor(0xFF111318);
         heading.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         card.addView(heading);
 
@@ -524,15 +373,11 @@ public final class MainActivity extends Activity {
         sub.setTextColor(0xFF6C717A);
         sub.setPadding(0, dp(4), 0, dp(8));
         card.addView(sub);
-
         return card;
     }
 
     private TextView statusLine(String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(14.5f);
-        view.setTextColor(0xFF30343B);
+        TextView view = label(text);
         view.setPadding(0, dp(4), 0, dp(4));
         return view;
     }
@@ -562,12 +407,8 @@ public final class MainActivity extends Activity {
         return button;
     }
 
-    private abstract static class SimpleSeekListener
-            implements SeekBar.OnSeekBarChangeListener {
-        @Override
-        public void onStartTrackingTouch(SeekBar seekBar) {}
-
-        @Override
-        public void onStopTrackingTouch(SeekBar seekBar) {}
+    private abstract static class SimpleSeekListener implements SeekBar.OnSeekBarChangeListener {
+        @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+        @Override public void onStopTrackingTouch(SeekBar seekBar) {}
     }
 }
