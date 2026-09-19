@@ -1,17 +1,16 @@
 package com.yagay.MiniWindowGuard;
 
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.Binder;
 import android.os.Handler;
-import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.List;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -19,41 +18,26 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * System-scope engine.
+ * System-only engine.
  *
- * This module is loaded only into Android/System Framework (system_server). Target apps are never
- * injected. The protected package list comes from MiniWindow Guard's own UI.
+ * Target apps are never injected. The module runs only in android/system_server and directly
+ * manages their real Task + SurfaceControl through TaskSurfaceController.
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final String SYSTEM_PACKAGE = "android";
-    // android.app.PROCESS_STATE_TOP is hidden from the public SDK.
+
+    // android.app.ActivityManager.PROCESS_STATE_TOP is hidden from the public SDK.
     private static final int PROCESS_STATE_TOP = 2;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
     private final Set<String> firstHits = ConcurrentHashMap.newKeySet();
-    private final ConcurrentHashMap<Integer, String[]> uidPackages = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Integer, Long> flexibleWindowRequestedAt =
+    private final ConcurrentHashMap<Integer, String[]> uidPackages =
             new ConcurrentHashMap<>();
 
     private volatile ClassLoader systemClassLoader;
     private volatile Handler systemHandler;
-
-    private volatile Object oplusZoomManager;
-    private volatile Method getCurrentZoomWindowState;
-    private volatile Method startMiniZoomFromZoom;
-    private volatile Method hideZoomWindow;
-
-    private volatile Object oplusActivityTaskManager;
-    private volatile Method toggleFlexibleWindow;
-    private volatile Field zoomPkgField;
-    private volatile Field windowTypeField;
-    private volatile Field windowShownField;
-    private volatile Field zoomRectField;
-    private volatile Field cpnNameField;
-    private volatile Field cvActionFlagField;
-    private volatile Field lastExitMethodField;
-    private volatile Field zoomUserIdField;
+    private volatile TaskSurfaceController container;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -71,7 +55,6 @@ public final class GuardModule extends XposedModule {
     public void onPackageLoaded(XposedModuleInterface.PackageLoadedParam param) {
         if (!param.isFirstPackage()) return;
         if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
-
         log(Log.INFO, TAG, "SYSTEM_SCOPE android package loaded");
     }
 
@@ -83,17 +66,22 @@ public final class GuardModule extends XposedModule {
         systemClassLoader = param.getClassLoader();
         systemHandler = new Handler(Looper.getMainLooper());
 
+        Context context = resolveSystemContext(systemClassLoader);
+        container = new TaskSurfaceController(
+                systemHandler,
+                context,
+                this::containerLog);
+        container.start();
+
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
-        installOplusMultiResumeHooks(systemClassLoader);
-        prepareOplusZoomState(systemClassLoader);
-        prepareOplusFlexibleWindowApi(systemClassLoader);
 
-        log(Log.INFO, TAG, "SYSTEM_SCOPE system_server hooks ready");
+        log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready");
         diag("ENGINE_READY",
                 "targets=" + GuardConfig.targetPackages()
-                        + " hooks=" + installedHooks.size());
+                        + " hooks=" + installedHooks.size()
+                        + " systemContext=" + (context != null));
     }
 
     private boolean enabled() {
@@ -122,6 +110,188 @@ public final class GuardModule extends XposedModule {
         return false;
     }
 
+    private void installActivityManagerHooks(ClassLoader loader) {
+        Class<?> ams = load(loader, "com.android.server.am.ActivityManagerService");
+        if (ams == null) return;
+
+        for (Method method : ams.getDeclaredMethods()) {
+            String name = method.getName();
+
+            if ("getPackageProcessState".equals(name)
+                    && method.getReturnType() == int.class) {
+                install(method, "AMS.getPackageProcessState", chain -> {
+                    List<Object> args = chain.getArgs();
+                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                            && !args.isEmpty()
+                            && args.get(0) instanceof String pkg
+                            && isTargetPackage(pkg)) {
+                        diag("AMS_PACKAGE_STATE",
+                                "pkg=" + pkg + " forced=" + PROCESS_STATE_TOP);
+                        return PROCESS_STATE_TOP;
+                    }
+                    return chain.proceed();
+                });
+                continue;
+            }
+
+            if ("getUidProcessState".equals(name)
+                    && method.getReturnType() == int.class) {
+                install(method, "AMS.getUidProcessState", chain -> {
+                    List<Object> args = chain.getArgs();
+                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                            && !args.isEmpty()
+                            && args.get(0) instanceof Integer uid
+                            && isTargetUid(uid)) {
+                        diag("AMS_UID_STATE",
+                                "uid=" + uid
+                                        + " packages="
+                                        + Arrays.toString(resolvePackagesForUid(uid))
+                                        + " forced=" + PROCESS_STATE_TOP);
+                        return PROCESS_STATE_TOP;
+                    }
+                    return chain.proceed();
+                });
+                continue;
+            }
+
+            if ("isAppForeground".equals(name)
+                    && method.getReturnType() == boolean.class) {
+                install(method, "AMS.isAppForeground", chain -> {
+                    List<Object> args = chain.getArgs();
+                    if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                            && !args.isEmpty()
+                            && args.get(0) instanceof Integer uid
+                            && isTargetUid(uid)) {
+                        diag("AMS_FOREGROUND", "uid=" + uid + " forced=true");
+                        return true;
+                    }
+                    return chain.proceed();
+                });
+            }
+        }
+    }
+
+    private void installActivityTaskManagerHooks(ClassLoader loader) {
+        Class<?> atms = load(loader,
+                "com.android.server.wm.ActivityTaskManagerService");
+        if (atms == null) return;
+
+        for (Method method : atms.getDeclaredMethods()) {
+            if (!"hasResumedActivity".equals(method.getName())
+                    || method.getReturnType() != boolean.class) {
+                continue;
+            }
+
+            install(method, "ATMS.hasResumedActivity", chain -> {
+                List<Object> args = chain.getArgs();
+                if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
+                        && !args.isEmpty()
+                        && args.get(0) instanceof Integer uid
+                        && isTargetUid(uid)) {
+                    diag("ATMS_HAS_RESUMED",
+                            "uid=" + uid
+                                    + " packages="
+                                    + Arrays.toString(resolvePackagesForUid(uid))
+                                    + " forced=true");
+                    return true;
+                }
+                return chain.proceed();
+            });
+        }
+    }
+
+    private void installActivityRecordHooks(ClassLoader loader) {
+        Class<?> record = load(loader, "com.android.server.wm.ActivityRecord");
+        if (record == null) return;
+
+        for (Method method : record.getDeclaredMethods()) {
+            String name = method.getName();
+
+            if ("shouldPauseActivity".equals(name)
+                    && method.getReturnType() == boolean.class) {
+                install(method, "ActivityRecord.shouldPauseActivity", chain -> {
+                    TaskSurfaceController current = container;
+                    if (!enabled()
+                            || current == null
+                            || !GuardConfig.bool(
+                                    ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED)
+                            || !current.isManagedActivityRecord(chain.getThisObject())) {
+                        return chain.proceed();
+                    }
+
+                    String pkg = activityPackage(chain.getThisObject());
+                    int state = current.stateForPackage(pkg);
+                    if (state == ConfigKeys.STATE_RELEASED) {
+                        return chain.proceed();
+                    }
+
+                    diag("ACTIVITY_KEEP_RESUMED",
+                            "pkg=" + pkg
+                                    + " state=" + state
+                                    + " stack=" + stackSummary());
+                    return false;
+                });
+                continue;
+            }
+
+            if (("shouldBeVisible".equals(name)
+                    || "isVisibleRequested".equals(name))
+                    && method.getReturnType() == boolean.class) {
+                install(method, "ActivityRecord." + name, chain -> {
+                    TaskSurfaceController current = container;
+                    if (!enabled()
+                            || current == null
+                            || !GuardConfig.bool(
+                                    ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE)
+                            || !current.isManagedActivityRecord(chain.getThisObject())) {
+                        return chain.proceed();
+                    }
+
+                    String pkg = activityPackage(chain.getThisObject());
+                    int state = current.stateForPackage(pkg);
+                    if (state != ConfigKeys.STATE_RELEASED) {
+                        diag("ACTIVITY_KEEP_VISIBLE",
+                                "pkg=" + pkg
+                                        + " state=" + state
+                                        + " method=" + name);
+                        return true;
+                    }
+                    return chain.proceed();
+                });
+                continue;
+            }
+
+            if ("setState".equals(name)
+                    && method.getReturnType() == void.class
+                    && method.getParameterCount() >= 1) {
+                install(method, "ActivityRecord.setState", chain -> {
+                    Object result = chain.proceed();
+
+                    if (!enabled()
+                            || !GuardConfig.bool(ConfigKeys.AUTO_CONTAINER)) {
+                        return result;
+                    }
+
+                    List<Object> args = chain.getArgs();
+                    if (args.isEmpty()
+                            || !"RESUMED".equals(String.valueOf(args.get(0)))) {
+                        return result;
+                    }
+
+                    Object activityRecord = chain.getThisObject();
+                    String pkg = activityPackage(activityRecord);
+                    if (!isTargetPackage(pkg)) return result;
+
+                    TaskSurfaceController current = container;
+                    if (current != null) {
+                        current.capture(activityRecord, pkg);
+                    }
+                    return result;
+                });
+            }
+        }
+    }
+
     private String[] resolvePackagesForUid(int uid) {
         try {
             Class<?> appGlobals = Class.forName(
@@ -141,667 +311,57 @@ public final class GuardModule extends XposedModule {
         }
     }
 
-    private void installActivityManagerHooks(ClassLoader loader) {
-        Class<?> ams = load(loader, "com.android.server.am.ActivityManagerService");
-        if (ams == null) return;
-
-        for (Method method : ams.getDeclaredMethods()) {
-            String name = method.getName();
-
-            if ("getPackageProcessState".equals(name)
-                    && method.getReturnType() == int.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-                    hook(method).intercept(chain -> {
-                        List<Object> args = chain.getArgs();
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                                && !args.isEmpty()
-                                && args.get(0) instanceof String pkg
-                                && isTargetPackage(pkg)) {
-                            hit("AMS.getPackageProcessState TOP " + pkg);
-                            diag("AMS_PACKAGE_STATE",
-                                    "pkg=" + pkg + " forced=" + PROCESS_STATE_TOP
-                                            + " args=" + argsSummary(args));
-                            return PROCESS_STATE_TOP;
-                        }
-                        return chain.proceed();
-                    });
-                    log(Log.INFO, TAG, "SYSTEM_SCOPE installed AMS.getPackageProcessState");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG, "SYSTEM_SCOPE skipped AMS.getPackageProcessState error=" + t);
-                }
-                continue;
+    private Context resolveSystemContext(ClassLoader loader) {
+        try {
+            Class<?> activityThread = Class.forName(
+                    "android.app.ActivityThread", false, loader);
+            Method current = activityThread.getDeclaredMethod(
+                    "currentActivityThread");
+            current.setAccessible(true);
+            Object thread = current.invoke(null);
+            if (thread != null) {
+                Method getSystemContext =
+                        activityThread.getDeclaredMethod("getSystemContext");
+                getSystemContext.setAccessible(true);
+                Object value = getSystemContext.invoke(thread);
+                if (value instanceof Context) return (Context) value;
             }
-
-            if ("getUidProcessState".equals(name)
-                    && method.getReturnType() == int.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-                    hook(method).intercept(chain -> {
-                        List<Object> args = chain.getArgs();
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                                && !args.isEmpty()
-                                && args.get(0) instanceof Integer uid
-                                && isTargetUid(uid)) {
-                            hit("AMS.getUidProcessState TOP uid=" + uid);
-                            diag("AMS_UID_STATE",
-                                    "uid=" + uid
-                                            + " packages=" + Arrays.toString(resolvePackagesForUid(uid))
-                                            + " forced=" + PROCESS_STATE_TOP
-                                            + " args=" + argsSummary(args));
-                            return PROCESS_STATE_TOP;
-                        }
-                        return chain.proceed();
-                    });
-                    log(Log.INFO, TAG, "SYSTEM_SCOPE installed AMS.getUidProcessState");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG, "SYSTEM_SCOPE skipped AMS.getUidProcessState error=" + t);
-                }
-                continue;
-            }
-
-            if ("isAppForeground".equals(name)
-                    && method.getReturnType() == boolean.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-                    hook(method).intercept(chain -> {
-                        List<Object> args = chain.getArgs();
-                        if (GuardConfig.bool(ConfigKeys.SYSTEM_IMPORTANCE_TOP)
-                                && !args.isEmpty()
-                                && args.get(0) instanceof Integer uid
-                                && isTargetUid(uid)) {
-                            hit("AMS.isAppForeground true uid=" + uid);
-                            diag("AMS_FOREGROUND",
-                                    "uid=" + uid
-                                            + " packages=" + Arrays.toString(resolvePackagesForUid(uid))
-                                            + " forced=true"
-                                            + " args=" + argsSummary(args));
-                            return true;
-                        }
-                        return chain.proceed();
-                    });
-                    log(Log.INFO, TAG, "SYSTEM_SCOPE installed AMS.isAppForeground");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG, "SYSTEM_SCOPE skipped AMS.isAppForeground error=" + t);
-                }
-            }
+        } catch (Throwable t) {
+            diag("SYSTEM_CONTEXT_FAIL", String.valueOf(t));
         }
-    }
-
-    private void installActivityTaskManagerHooks(ClassLoader loader) {
-        Class<?> atms = load(loader,
-                "com.android.server.wm.ActivityTaskManagerService");
-        if (atms == null) return;
-
-        for (Method method : atms.getDeclaredMethods()) {
-            if (!"hasResumedActivity".equals(method.getName())
-                    || method.getReturnType() != boolean.class) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-                if (!installedHooks.add(method.toGenericString())) continue;
-                hook(method).intercept(chain -> {
-                    List<Object> args = chain.getArgs();
-                    if (GuardConfig.bool(ConfigKeys.SYSTEM_HAS_RESUMED)
-                            && !args.isEmpty()
-                            && args.get(0) instanceof Integer uid
-                            && isTargetUid(uid)) {
-                        hit("ATMS.hasResumedActivity true uid=" + uid);
-                        diag("ATMS_HAS_RESUMED",
-                                "uid=" + uid
-                                        + " packages=" + Arrays.toString(resolvePackagesForUid(uid))
-                                        + " forced=true"
-                                        + " args=" + argsSummary(args));
-                        return true;
-                    }
-                    return chain.proceed();
-                });
-                log(Log.INFO, TAG, "SYSTEM_SCOPE installed ATMS.hasResumedActivity");
-            } catch (Throwable t) {
-                installedHooks.remove(method.toGenericString());
-                log(Log.WARN, TAG, "SYSTEM_SCOPE skipped ATMS.hasResumedActivity error=" + t);
-            }
-        }
-    }
-
-    /**
-     * Keep an already-resumed protected Activity from being paused only while it belongs to the
-     * current OPlus Zoom/Mini task. This avoids globally suppressing Android lifecycle transitions.
-     */
-    private void installActivityRecordHooks(ClassLoader loader) {
-        Class<?> record = load(loader, "com.android.server.wm.ActivityRecord");
-        if (record == null) return;
-
-        for (Method method : record.getDeclaredMethods()) {
-            if ("shouldPauseActivity".equals(method.getName())
-                    && method.getReturnType() == boolean.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-                    hook(method).intercept(chain -> {
-                        if (!enabled()
-                                || !GuardConfig.bool(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED)) {
-                            return chain.proceed();
-                        }
-
-                        Object activityRecord = chain.getThisObject();
-                        String pkg = activityPackage(activityRecord);
-                        if (!isTargetPackage(pkg)) return chain.proceed();
-
-                        boolean zoomActive = isOplusZoomActiveFor(pkg);
-                        if (zoomActive) {
-                            hit("ActivityRecord.keepResumed zoom=" + pkg);
-                            diag("ACTIVITY_KEEP_RESUMED",
-                                    "pkg=" + pkg
-                                            + " record=" + compact(activityRecord)
-                                            + " decision=false"
-                                            + " stack=" + stackSummary());
-                            return false;
-                        }
-
-                        diag("ACTIVITY_PAUSE_ALLOWED",
-                                "pkg=" + pkg
-                                        + " zoomActive=false"
-                                        + " record=" + compact(activityRecord));
-                        return chain.proceed();
-                    });
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE installed ActivityRecord.shouldPauseActivity");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE skipped ActivityRecord.shouldPauseActivity error=" + t);
-                }
-                continue;
-            }
-
-            // ActivityRecord.setState(RESUMED, reason) is a stable system_server point after a
-            // task has actually become foreground. Convert protected fullscreen tasks into the
-            // OEM flexible window here, instead of requiring any hook inside the target app.
-            if ("setState".equals(method.getName())
-                    && method.getReturnType() == void.class
-                    && method.getParameterCount() >= 1) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-                    hook(method).intercept(chain -> {
-                        Object result = chain.proceed();
-
-                        if (!enabled()
-                                || !GuardConfig.bool(ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW)) {
-                            return result;
-                        }
-
-                        List<Object> args = chain.getArgs();
-                        if (args.isEmpty() || !"RESUMED".equals(String.valueOf(args.get(0)))) {
-                            return result;
-                        }
-
-                        Object activityRecord = chain.getThisObject();
-                        String pkg = activityPackage(activityRecord);
-                        if (!isTargetPackage(pkg)) return result;
-
-                        int taskId = activityTaskId(activityRecord);
-                        if (taskId < 0) {
-                            diag("AUTO_SMALL_WINDOW_SKIP",
-                                    "pkg=" + pkg + " reason=no-task-id");
-                            return result;
-                        }
-
-                        scheduleFlexibleWindow(taskId, pkg);
-                        return result;
-                    });
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE installed ActivityRecord.setState auto-small-window");
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE skipped ActivityRecord.setState error=" + t);
-                }
-            }
-        }
-    }
-
-    private void installOplusMultiResumeHooks(ClassLoader loader) {
-        String[] candidates = {
-                "com.android.server.wm.OplusCompactWindowManagerService",
-                "com.android.server.wm.OplusZoomWindowManagerService"
-        };
-
-        for (String className : candidates) {
-            Class<?> clazz = load(loader, className);
-            if (clazz == null) continue;
-
-            for (Method method : clazz.getDeclaredMethods()) {
-                String lower = method.getName().toLowerCase();
-
-                if (method.getReturnType() == boolean.class
-                        && lower.contains("supportmultiresume")) {
-                    try {
-                        method.setAccessible(true);
-                        if (!installedHooks.add(method.toGenericString())) continue;
-                        hook(method).intercept(chain -> {
-                            if (GuardConfig.bool(ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME)
-                                    && containsTargetPackage(chain.getArgs())) {
-                                hit("OPlus supportMultiResume=true");
-                                diag("OPLUS_MULTI_RESUME",
-                                        "method=" + method.getName()
-                                                + " forced=true"
-                                                + " args=" + argsSummary(chain.getArgs()));
-                                return true;
-                            }
-                            return chain.proceed();
-                        });
-                        log(Log.INFO, TAG, "SYSTEM_SCOPE installed "
-                                + className + "." + method.getName());
-                    } catch (Throwable t) {
-                        installedHooks.remove(method.toGenericString());
-                        log(Log.WARN, TAG, "SYSTEM_SCOPE skipped "
-                                + className + "." + method.getName() + " error=" + t);
-                    }
-                    continue;
-                }
-
-                if (method.getReturnType() == boolean.class
-                        && (lower.contains("supportzoommode")
-                        || lower.contains("supportzoomwindow"))) {
-                    try {
-                        method.setAccessible(true);
-                        if (!installedHooks.add(method.toGenericString())) continue;
-                        hook(method).intercept(chain -> {
-                            if (GuardConfig.bool(ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT)
-                                    && containsTargetPackage(chain.getArgs())) {
-                                hit("OPlus zoom support=true");
-                                diag("OPLUS_ZOOM_SUPPORT",
-                                        "method=" + method.getName()
-                                                + " forced=true"
-                                                + " args=" + argsSummary(chain.getArgs()));
-                                return true;
-                            }
-                            return chain.proceed();
-                        });
-                        log(Log.INFO, TAG, "SYSTEM_SCOPE installed "
-                                + className + "." + method.getName());
-                    } catch (Throwable t) {
-                        installedHooks.remove(method.toGenericString());
-                        log(Log.WARN, TAG, "SYSTEM_SCOPE skipped "
-                                + className + "." + method.getName() + " error=" + t);
-                    }
-                }
-            }
-        }
-    }
-
-    private boolean containsTargetPackage(List<Object> args) {
-        if (!enabled()) return false;
-        for (Object arg : args) {
-            if (arg instanceof String value && isTargetPackage(value)) return true;
-            if (arg instanceof ComponentName component
-                    && isTargetPackage(component.getPackageName())) {
-                return true;
-            }
-        }
-        return false;
+        return null;
     }
 
     private String activityPackage(Object activityRecord) {
         if (activityRecord == null) return null;
 
-        try {
-            Field field = findField(activityRecord.getClass(), "packageName");
-            if (field != null) {
-                field.setAccessible(true);
-                Object value = field.get(activityRecord);
-                if (value instanceof String) return (String) value;
-            }
-        } catch (Throwable ignored) {
-        }
+        Object value = fieldValue(activityRecord, "packageName");
+        if (value instanceof String) return (String) value;
 
-        try {
-            Field field = findField(activityRecord.getClass(), "mActivityComponent");
-            if (field != null) {
-                field.setAccessible(true);
-                Object value = field.get(activityRecord);
-                if (value instanceof ComponentName component) {
-                    return component.getPackageName();
-                }
-            }
-        } catch (Throwable ignored) {
+        Object component = fieldValue(activityRecord, "mActivityComponent");
+        if (component instanceof ComponentName) {
+            return ((ComponentName) component).getPackageName();
         }
-
         return null;
     }
 
-    private void prepareOplusZoomState(ClassLoader loader) {
-        try {
-            Class<?> managerClass = Class.forName(
-                    "com.oplus.zoomwindow.OplusZoomWindowManager",
-                    false,
-                    loader);
-            oplusZoomManager = managerClass.getMethod("getInstance").invoke(null);
-            getCurrentZoomWindowState =
-                    managerClass.getMethod("getCurrentZoomWindowState");
-            startMiniZoomFromZoom = optionalMethod(
-                    managerClass, "startMiniZoomFromZoom", int.class);
-            hideZoomWindow = optionalMethod(
-                    managerClass, "hideZoomWindow", int.class);
-
-            Class<?> infoClass = Class.forName(
-                    "com.oplus.zoomwindow.OplusZoomWindowInfo",
-                    false,
-                    loader);
-            zoomPkgField = infoClass.getField("zoomPkg");
-            windowTypeField = infoClass.getField("windowType");
-            windowShownField = infoClass.getField("windowShown");
-            zoomRectField = optionalField(infoClass, "zoomRect");
-            cpnNameField = optionalField(infoClass, "cpnName");
-            cvActionFlagField = optionalField(infoClass, "cvActionFlag");
-            lastExitMethodField = optionalField(infoClass, "lastExitMethod");
-            zoomUserIdField = optionalField(infoClass, "zoomUserId");
-
-            log(Log.INFO, TAG, "SYSTEM_SCOPE OPlus Zoom state API ready");
-            diag("OPLUS_API_READY", "infoClass=" + infoClass.getName());
-        } catch (Throwable t) {
-            log(Log.INFO, TAG,
-                    "SYSTEM_SCOPE OPlus Zoom state API unavailable: " + t);
-        }
+    private interface HookBody {
+        Object run(io.github.libxposed.api.XposedInterface.Chain chain)
+                throws Throwable;
     }
 
-    private void prepareOplusFlexibleWindowApi(ClassLoader loader) {
+    private void install(Method method, String label, HookBody body) {
+        String signature = method.toGenericString();
+        if (!installedHooks.add(signature)) return;
+
         try {
-            Class<?> clazz = Class.forName(
-                    "android.app.OplusActivityTaskManager",
-                    false,
-                    loader);
-            Object instance = clazz.getMethod("getInstance").invoke(null);
-
-            Method toggle = optionalMethod(
-                    clazz,
-                    "toggleFlexibleWindow",
-                    IBinder.class,
-                    int.class,
-                    boolean.class,
-                    boolean.class);
-
-            if (instance == null || toggle == null) {
-                log(Log.INFO, TAG,
-                        "SYSTEM_SCOPE OPlus flexible-window API unavailable");
-                return;
-            }
-
-            oplusActivityTaskManager = instance;
-            toggleFlexibleWindow = toggle;
-            log(Log.INFO, TAG,
-                    "SYSTEM_SCOPE OPlus flexible-window API ready");
-            diag("OPLUS_FLEX_API_READY", "method=" + toggle.toGenericString());
+            method.setAccessible(true);
+            hook(method).intercept(body::run);
+            log(Log.INFO, TAG, "SYSTEM_SCOPE installed " + label);
         } catch (Throwable t) {
-            log(Log.INFO, TAG,
-                    "SYSTEM_SCOPE OPlus flexible-window API unavailable: " + t);
-        }
-    }
-
-    private void scheduleFlexibleWindow(int taskId, String packageName) {
-        Handler handler = systemHandler;
-        if (handler == null) return;
-
-        long now = android.os.SystemClock.elapsedRealtime();
-        Long previous = flexibleWindowRequestedAt.get(taskId);
-        if (previous != null && now - previous < 2500L) {
-            return;
-        }
-        flexibleWindowRequestedAt.put(taskId, now);
-
-        diag("AUTO_SMALL_WINDOW_SCHEDULE",
-                "pkg=" + packageName
-                        + " taskId=" + taskId
-                        + " form=" + GuardConfig.windowForm());
-
-        handler.postDelayed(
-                () -> enterFlexibleWindow(taskId, packageName),
-                220L);
-    }
-
-    private void enterFlexibleWindow(int taskId, String packageName) {
-        if (!isTargetPackage(packageName)
-                || !GuardConfig.bool(ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW)) {
-            return;
-        }
-
-        // If the task is already in OPlus Zoom/Mini, don't toggle it again.
-        if (isOplusZoomActiveFor(packageName)) {
-            diag("AUTO_SMALL_WINDOW_ALREADY_ACTIVE",
-                    "pkg=" + packageName + " taskId=" + taskId);
-            applyRequestedWindowForm(packageName);
-            return;
-        }
-
-        Object manager = oplusActivityTaskManager;
-        Method toggle = toggleFlexibleWindow;
-        if (manager == null || toggle == null) {
-            diag("AUTO_SMALL_WINDOW_UNAVAILABLE",
-                    "pkg=" + packageName
-                            + " taskId=" + taskId
-                            + " reason=no-toggle-api");
-            return;
-        }
-
-        long identity = Binder.clearCallingIdentity();
-        try {
-            Object result = toggle.invoke(
-                    manager,
-                    null,
-                    taskId,
-                    true,
-                    true);
-
-            log(Log.INFO, TAG,
-                    "SYSTEM_SCOPE AUTO_SMALL_WINDOW"
-                            + " pkg=" + packageName
-                            + " taskId=" + taskId
-                            + " result=" + result);
-            diag("AUTO_SMALL_WINDOW_ENTER",
-                    "pkg=" + packageName
-                            + " taskId=" + taskId
-                            + " result=" + compact(result));
-
-            Handler handler = systemHandler;
-            if (handler != null) {
-                handler.postDelayed(
-                        () -> applyRequestedWindowForm(packageName),
-                        500L);
-            }
-        } catch (Throwable t) {
+            installedHooks.remove(signature);
             log(Log.WARN, TAG,
-                    "SYSTEM_SCOPE AUTO_SMALL_WINDOW failed"
-                            + " pkg=" + packageName
-                            + " taskId=" + taskId,
-                    t);
-            diag("AUTO_SMALL_WINDOW_FAILED",
-                    "pkg=" + packageName
-                            + " taskId=" + taskId
-                            + " error=" + compact(t));
-        } finally {
-            Binder.restoreCallingIdentity(identity);
-        }
-    }
-
-    private void applyRequestedWindowForm(String packageName) {
-        int form = GuardConfig.windowForm();
-        if (form == ConfigKeys.FORM_WINDOW) return;
-
-        Object manager = oplusZoomManager;
-        if (manager == null) {
-            diag("AUTO_SMALL_WINDOW_FORM_SKIP",
-                    "pkg=" + packageName + " reason=no-zoom-manager");
-            return;
-        }
-
-        long identity = Binder.clearCallingIdentity();
-        try {
-            if (form == ConfigKeys.FORM_ICON) {
-                Method mini = startMiniZoomFromZoom;
-                if (mini == null) {
-                    diag("AUTO_SMALL_WINDOW_FORM_SKIP",
-                            "pkg=" + packageName + " form=icon reason=no-mini-api");
-                    return;
-                }
-                Object result = mini.invoke(manager, 7);
-                diag("AUTO_SMALL_WINDOW_FORM",
-                        "pkg=" + packageName
-                                + " form=icon result=" + compact(result));
-                return;
-            }
-
-            if (form == ConfigKeys.FORM_HIDDEN) {
-                Method mini = startMiniZoomFromZoom;
-                if (mini != null) {
-                    try {
-                        mini.invoke(manager, 7);
-                    } catch (Throwable ignored) {
-                    }
-                }
-
-                Handler handler = systemHandler;
-                if (handler != null) {
-                    handler.postDelayed(() -> {
-                        long nestedIdentity = Binder.clearCallingIdentity();
-                        try {
-                            Method hide = hideZoomWindow;
-                            if (hide == null) {
-                                diag("AUTO_SMALL_WINDOW_FORM_SKIP",
-                                        "pkg=" + packageName
-                                                + " form=hidden reason=no-hide-api");
-                                return;
-                            }
-                            Object result = hide.invoke(manager, 2);
-                            diag("AUTO_SMALL_WINDOW_FORM",
-                                    "pkg=" + packageName
-                                            + " form=hidden result=" + compact(result));
-                        } catch (Throwable t) {
-                            diag("AUTO_SMALL_WINDOW_FORM_FAILED",
-                                    "pkg=" + packageName
-                                            + " form=hidden error=" + compact(t));
-                        } finally {
-                            Binder.restoreCallingIdentity(nestedIdentity);
-                        }
-                    }, 320L);
-                }
-            }
-        } catch (Throwable t) {
-            diag("AUTO_SMALL_WINDOW_FORM_FAILED",
-                    "pkg=" + packageName
-                            + " form=" + form
-                            + " error=" + compact(t));
-        } finally {
-            Binder.restoreCallingIdentity(identity);
-        }
-    }
-
-    private int activityTaskId(Object activityRecord) {
-        if (activityRecord == null) return -1;
-
-        try {
-            Method getTask = findMethod(activityRecord.getClass(), "getTask");
-            if (getTask != null) {
-                getTask.setAccessible(true);
-                Object task = getTask.invoke(activityRecord);
-                int id = taskId(task);
-                if (id >= 0) return id;
-            }
-        } catch (Throwable ignored) {
-        }
-
-        try {
-            Field taskField = findField(activityRecord.getClass(), "task");
-            if (taskField == null) {
-                taskField = findField(activityRecord.getClass(), "mTask");
-            }
-            if (taskField != null) {
-                taskField.setAccessible(true);
-                return taskId(taskField.get(activityRecord));
-            }
-        } catch (Throwable ignored) {
-        }
-
-        return -1;
-    }
-
-    private static int taskId(Object task) {
-        if (task == null) return -1;
-
-        try {
-            Method method = findMethod(task.getClass(), "getTaskId");
-            if (method != null) {
-                method.setAccessible(true);
-                Object value = method.invoke(task);
-                if (value instanceof Integer) return (Integer) value;
-            }
-        } catch (Throwable ignored) {
-        }
-
-        try {
-            Field field = findField(task.getClass(), "mTaskId");
-            if (field != null) {
-                field.setAccessible(true);
-                return field.getInt(task);
-            }
-        } catch (Throwable ignored) {
-        }
-
-        return -1;
-    }
-
-    private boolean isOplusZoomActiveFor(String packageName) {
-        try {
-            Object manager = oplusZoomManager;
-            Method getter = getCurrentZoomWindowState;
-            Field pkgField = zoomPkgField;
-            Field typeField = windowTypeField;
-            if (manager == null || getter == null || pkgField == null || typeField == null) {
-                return false;
-            }
-
-            Object info = getter.invoke(manager);
-            if (info == null) return false;
-
-            Object pkg = pkgField.get(info);
-            int type = typeField.getInt(info);
-            boolean shown = windowShownField != null && windowShownField.getBoolean(info);
-
-            // type > 0 covers Zoom/Mini state. Do not require windowShown so hidden Mini can remain
-            // protected while the current zoom task is still retained by the OEM service.
-            boolean active = packageName.equals(pkg) && type > 0;
-            String snapshot = "requested=" + packageName
-                    + " zoomPkg=" + pkg
-                    + " type=" + type
-                    + " shown=" + shown
-                    + " cpn=" + fieldValue(cpnNameField, info)
-                    + " rect=" + fieldValue(zoomRectField, info)
-                    + " cvActionFlag=" + fieldValue(cvActionFlagField, info)
-                    + " lastExitMethod=" + fieldValue(lastExitMethodField, info)
-                    + " zoomUserId=" + fieldValue(zoomUserIdField, info)
-                    + " active=" + active;
-
-            diag("OPLUS_ZOOM_STATE", snapshot);
-
-            if (active) {
-                logOnce("zoom-state-" + packageName + "-" + type + "-" + shown,
-                        "SYSTEM_SCOPE zoom active package=" + packageName
-                                + " type=" + type + " shown=" + shown);
-            }
-            return active;
-        } catch (Throwable t) {
-            logOnce("zoom-state-error",
-                    "SYSTEM_SCOPE zoom state query failed: " + t);
-            return false;
+                    "SYSTEM_SCOPE skipped " + label + " error=" + t);
         }
     }
 
@@ -815,51 +375,17 @@ public final class GuardModule extends XposedModule {
         }
     }
 
-    private static Field optionalField(Class<?> type, String name) {
-        try {
-            Field field = type.getField(name);
-            field.setAccessible(true);
-            return field;
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
+    private static Object fieldValue(Object receiver, String name) {
+        if (receiver == null) return null;
+        Field field = findField(receiver.getClass(), name);
+        if (field == null) return null;
 
-    private static Object fieldValue(Field field, Object receiver) {
-        if (field == null || receiver == null) return null;
         try {
+            field.setAccessible(true);
             return field.get(receiver);
         } catch (Throwable ignored) {
             return null;
         }
-    }
-
-    private static Method optionalMethod(
-            Class<?> type,
-            String name,
-            Class<?>... parameterTypes
-    ) {
-        try {
-            Method method = type.getMethod(name, parameterTypes);
-            method.setAccessible(true);
-            return method;
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
-    private static Method findMethod(Class<?> type, String name) {
-        Class<?> current = type;
-        while (current != null) {
-            for (Method method : current.getDeclaredMethods()) {
-                if (name.equals(method.getName())
-                        && method.getParameterCount() == 0) {
-                    return method;
-                }
-            }
-            current = current.getSuperclass();
-        }
-        return null;
     }
 
     private static Field findField(Class<?> type, String name) {
@@ -878,9 +404,18 @@ public final class GuardModule extends XposedModule {
         return GuardConfig.bool(ConfigKeys.DIAGNOSTICS_ACTIVE);
     }
 
+    private void containerLog(String event, String detail) {
+        String message = "CONTAINER"
+                + " event=" + event
+                + " detail=" + detail;
+        log(Log.INFO, TAG, message);
+        if (diagnosticsActive()) {
+            Log.i(TAG, "DIAG_SYS " + message);
+        }
+    }
+
     private void diag(String event, String detail) {
         if (!diagnosticsActive()) return;
-
         String message = "DIAG_SYS"
                 + " event=" + event
                 + " thread=" + Thread.currentThread().getName()
@@ -889,60 +424,24 @@ public final class GuardModule extends XposedModule {
         log(Log.INFO, TAG, message);
     }
 
-    private static String argsSummary(List<Object> args) {
-        if (args == null || args.isEmpty()) return "[]";
-        StringBuilder out = new StringBuilder("[");
-        for (int i = 0; i < args.size(); i++) {
-            if (i > 0) out.append(", ");
-            out.append(compact(args.get(i)));
-            if (out.length() > 1200) {
-                out.append("...");
-                break;
-            }
-        }
-        return out.append(']').toString();
-    }
-
     private static String stackSummary() {
         StringBuilder out = new StringBuilder();
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         int added = 0;
+
         for (StackTraceElement frame : stack) {
             String cls = frame.getClassName();
             if (cls.equals(Thread.class.getName())
                     || cls.equals(GuardModule.class.getName())) {
                 continue;
             }
+
             if (added++ > 0) out.append(" <- ");
             out.append(cls).append('.').append(frame.getMethodName())
                     .append(':').append(frame.getLineNumber());
             if (added >= 10 || out.length() > 1600) break;
         }
         return out.toString();
-    }
-
-    private static String compact(Object value) {
-        if (value == null) return "null";
-        String text;
-        try {
-            text = String.valueOf(value);
-        } catch (Throwable t) {
-            text = value.getClass().getName();
-        }
-        text = text.replace('\n', ' ').replace('\r', ' ');
-        return text.length() <= 900 ? text : text.substring(0, 900) + "...";
-    }
-
-    private void hit(String message) {
-        if (diagnosticsActive()) {
-            diag("HOOK_HIT", message);
-            return;
-        }
-
-        String key = "hit-" + message;
-        if (firstHits.add(key)) {
-            log(Log.INFO, TAG, "SYSTEM_SCOPE HIT " + message);
-        }
     }
 
     private void logOnce(String key, String message) {
