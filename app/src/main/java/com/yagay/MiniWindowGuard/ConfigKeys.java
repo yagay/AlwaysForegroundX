@@ -18,6 +18,8 @@ final class ConfigKeys {
             "system_block_remove_kill";
 
     static final String AUTO_CONTAINER = "auto_container";
+    static final String NATIVE_FREEFORM_ENGINE =
+            "native_freeform_engine";
 
     static final String FIXED_INTERNAL_DISPLAY =
             "fixed_internal_display";
@@ -59,6 +61,7 @@ final class ConfigKeys {
                     SYSTEM_KEEP_CONTAINER_VISIBLE,
                     SYSTEM_BLOCK_REMOVE_KILL,
                     AUTO_CONTAINER,
+                    NATIVE_FREEFORM_ENGINE,
                     FIXED_INTERNAL_DISPLAY -> true;
             default -> false;
         };
