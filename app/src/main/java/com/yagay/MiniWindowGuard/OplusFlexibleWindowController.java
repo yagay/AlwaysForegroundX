@@ -693,6 +693,42 @@ final class OplusFlexibleWindowController {
                         + " reason=focused");
     }
 
+    boolean shouldBlockBackgroundStop(
+            Object task,
+            boolean finishing
+    ) {
+        Session session =
+                sessionForTask(task);
+
+        if (session == null
+                || !session.active
+                || !GuardConfig.backgroundPlaybackPackage(
+                session.packageName)) {
+            return false;
+        }
+
+        if (finishing) {
+            session.backgroundProtected = false;
+            return false;
+        }
+
+        if (!session.backgroundProtected) {
+            return false;
+        }
+
+        session.taskObject = task;
+        session.lastSeenElapsed =
+                SystemClock.elapsedRealtime();
+
+        log(
+                "BACKGROUND_STOP_SUPPRESS",
+                "pkg=" + session.packageName
+                        + " taskId="
+                        + session.taskId);
+
+        return true;
+    }
+
     boolean shouldSuppressRecentsPause(
             Object task
     ) {
