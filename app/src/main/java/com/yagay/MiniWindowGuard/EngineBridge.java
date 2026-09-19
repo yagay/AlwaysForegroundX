@@ -325,6 +325,33 @@ final class EngineBridge {
                 taskInfo);
     }
 
+    void onOplusFlexibleEvent(
+            int taskId,
+            int event
+    ) {
+        safeInvoke(
+                currentEngine(),
+                "onOplusFlexibleEvent",
+                new Class<?>[]{
+                        int.class,
+                        int.class
+                },
+                taskId,
+                event);
+    }
+
+    boolean shouldSuppressRecentsPause(
+            Object task
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldSuppressRecentsPause",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
     void preArmLockKeepAlive(String reason) {
         safeInvoke(
                 currentEngine(),

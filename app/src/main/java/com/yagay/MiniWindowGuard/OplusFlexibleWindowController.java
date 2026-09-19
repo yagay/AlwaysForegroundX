@@ -26,6 +26,8 @@ final class OplusFlexibleWindowController {
     }
 
     private static final long UNLOCK_GRACE_MS = 2500L;
+    private static final int EVENT_MINIMIZE_TO_FLOAT_HANDLE = 2002;
+    private static final int EVENT_EXIT_TO_BACK = 2003;
 
     private final Handler handler;
     private final Logger logger;
@@ -392,6 +394,51 @@ final class OplusFlexibleWindowController {
                         + session.lockKeepAlive);
     }
 
+    void onOplusFlexibleEvent(
+            int taskId,
+            int event
+    ) {
+        if (!running || taskId < 0) {
+            return;
+        }
+
+        Session session =
+                sessions.get(taskId);
+
+        if (session == null
+                || !session.active
+                || !GuardConfig.foregroundPackage(
+                session.packageName)) {
+            return;
+        }
+
+        if (event
+                == EVENT_MINIMIZE_TO_FLOAT_HANDLE) {
+            session.edgeMinimizeRequested = true;
+            session.edgeHung = true;
+            session.lastSeenElapsed =
+                    SystemClock.elapsedRealtime();
+
+            log(
+                    "OPLUS_EDGE_MINIMIZE_REQUEST",
+                    "pkg=" + session.packageName
+                            + " taskId=" + taskId
+                            + " event=" + event);
+            return;
+        }
+
+        if (event == EVENT_EXIT_TO_BACK) {
+            session.edgeMinimizeRequested = false;
+            session.edgeHung = false;
+
+            log(
+                    "OPLUS_EDGE_MINIMIZE_CANCEL",
+                    "pkg=" + session.packageName
+                            + " taskId=" + taskId
+                            + " event=" + event);
+        }
+    }
+
     void preArmLockKeepAlive(
             String reason
     ) {
@@ -486,6 +533,37 @@ final class OplusFlexibleWindowController {
                 UNLOCK_GRACE_MS);
     }
 
+    boolean shouldSuppressRecentsPause(
+            Object task
+    ) {
+        Session session =
+                sessionForTask(task);
+
+        if (session == null
+                || !session.active
+                || !GuardConfig.foregroundPackage(
+                session.packageName)
+                || (!session.edgeMinimizeRequested
+                && !session.edgeHung)) {
+            return false;
+        }
+
+        session.edgeHung = true;
+        session.taskObject = task;
+        session.lastSeenElapsed =
+                SystemClock.elapsedRealtime();
+
+        log(
+                "OPLUS_EDGE_PAUSE_SUPPRESS",
+                "pkg=" + session.packageName
+                        + " taskId="
+                        + session.taskId
+                        + " minimizeRequested="
+                        + session.edgeMinimizeRequested);
+
+        return true;
+    }
+
     boolean shouldHoldEdgeTask(Object task) {
         Session session =
                 sessionForTask(task);
@@ -501,6 +579,7 @@ final class OplusFlexibleWindowController {
         }
 
         session.edgeHung = true;
+        session.edgeMinimizeRequested = false;
         session.taskObject = task;
         session.lastSeenElapsed =
                 SystemClock.elapsedRealtime();
@@ -525,7 +604,8 @@ final class OplusFlexibleWindowController {
         }
 
         if (!isInFloatingList(
-                session.taskId)) {
+                session.taskId)
+                && !session.edgeMinimizeRequested) {
             session.edgeHung = false;
 
             log(
@@ -552,8 +632,10 @@ final class OplusFlexibleWindowController {
                 && GuardConfig
                 .foregroundPackage(
                         session.packageName)
-                && (session.lockKeepAlive
-                || session.edgeHung);
+                && (isNativeOplusWindow(session)
+                || session.lockKeepAlive
+                || session.edgeHung
+                || session.edgeMinimizeRequested);
     }
 
     private Session sessionForTask(Object task) {
@@ -605,7 +687,8 @@ final class OplusFlexibleWindowController {
                         session.taskId);
 
         if (!floating
-                && session.edgeHung) {
+                && session.edgeHung
+                && !session.edgeMinimizeRequested) {
             session.edgeHung = false;
         }
 
@@ -1172,6 +1255,7 @@ final class OplusFlexibleWindowController {
 
         volatile boolean active = true;
         volatile boolean oemReportedFlexible;
+        volatile boolean edgeMinimizeRequested;
         volatile boolean edgeHung;
         volatile boolean lockKeepAlive;
 

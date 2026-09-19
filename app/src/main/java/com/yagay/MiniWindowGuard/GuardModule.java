@@ -43,11 +43,6 @@ public final class GuardModule extends XposedModule {
     private final ConcurrentHashMap<Integer, String[]> uidPackages =
             new ConcurrentHashMap<>();
 
-    // True only while OPlus FlexibleTaskController is executing its own
-    // screen-lock transition on the current system_server thread.
-    private final ThreadLocal<Boolean> oplusScreenLockTransition =
-            ThreadLocal.withInitial(() -> false);
-
     private volatile ClassLoader systemClassLoader;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
@@ -223,6 +218,7 @@ public final class GuardModule extends XposedModule {
                 "com.android.server.wm.FlexibleTaskController");
 
         installLegacyZoomSupportHook(loader);
+        installOplusFlexibleEventHook(loader);
 
         Class<?> service =
                 load(
@@ -410,6 +406,97 @@ public final class GuardModule extends XposedModule {
      * Some ColorOS/OxygenOS branches still consult the older Zoom config
      * before FlexibleWindow. Force support only for the requested app.
      */
+    private void installOplusFlexibleEventHook(
+            ClassLoader loader
+    ) {
+        Class<?> controller =
+                load(
+                        loader,
+                        "com.android.server.wm.FlexibleTaskController");
+
+        if (controller == null) return;
+
+        for (Method method :
+                controller.getDeclaredMethods()) {
+            if (!"notifyFlexibleTaskEvent"
+                    .equals(method.getName())) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                if (!installedHooks.add(
+                        method.toGenericString())) {
+                    continue;
+                }
+
+                hook(method).intercept(chain -> {
+                    List<Object> args =
+                            chain.getArgs();
+
+                    int event = -1;
+
+                    for (Object arg : args) {
+                        if (arg instanceof Integer value
+                                && (value == 2002
+                                || value == 2003)) {
+                            event = value;
+                            break;
+                        }
+                    }
+
+                    if (event != -1) {
+                        Object task =
+                                findTaskArg(args);
+
+                        int id =
+                                task == null
+                                        ? -1
+                                        : taskId(task);
+
+                        if (id < 0) {
+                            for (Object arg : args) {
+                                if (arg instanceof Integer value
+                                        && value > 0
+                                        && value != event) {
+                                    id = value;
+                                    break;
+                                }
+                            }
+                        }
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && id >= 0) {
+                            current.onOplusFlexibleEvent(
+                                    id,
+                                    event);
+
+                            diag(
+                                    "OPLUS_FLEX_EVENT",
+                                    "taskId=" + id
+                                            + " event="
+                                            + event);
+                        }
+                    }
+
+                    return chain.proceed();
+                });
+
+                log(
+                        Log.INFO,
+                        TAG,
+                        "SYSTEM_SCOPE installed OPlus flexible event hook "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        method.toGenericString());
+            }
+        }
+    }
+
     private void installLegacyZoomSupportHook(
             ClassLoader loader
     ) {
@@ -468,6 +555,96 @@ public final class GuardModule extends XposedModule {
     private void installOplusEdgeKeepaliveHooks(
             ClassLoader loader
     ) {
+        Class<?> pauseTaskFragment =
+                load(
+                        loader,
+                        "com.android.server.wm.TaskFragment");
+
+        if (pauseTaskFragment != null) {
+            for (Method method :
+                    pauseTaskFragment.getDeclaredMethods()) {
+                if (!"startPausing"
+                        .equals(method.getName())
+                        || method.getReturnType()
+                        != boolean.class) {
+                    continue;
+                }
+
+                boolean hasReason = false;
+
+                for (Class<?> parameter :
+                        method.getParameterTypes()) {
+                    if (parameter == String.class) {
+                        hasReason = true;
+                        break;
+                    }
+                }
+
+                if (!hasReason) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        String reason = null;
+
+                        for (Object arg :
+                                chain.getArgs()) {
+                            if (arg instanceof String) {
+                                reason = (String) arg;
+                            }
+                        }
+
+                        if (reason != null
+                                && reason.contains(
+                                "pauseInRecentsAnim")) {
+                            Object task =
+                                    taskFromContainer(
+                                            chain.getThisObject());
+
+                            EngineBridge current = engine;
+
+                            if (current != null
+                                    && task != null
+                                    && current
+                                    .shouldSuppressRecentsPause(
+                                            task)) {
+                                diag(
+                                        "OPLUS_EDGE_PAUSE_BLOCK",
+                                        "taskId="
+                                                + taskId(task)
+                                                + " pkg="
+                                                + packageFromObject(
+                                                task)
+                                                + " reason="
+                                                + reason);
+
+                                return false;
+                            }
+                        }
+
+                        return chain.proceed();
+                    });
+
+                    log(
+                            Log.INFO,
+                            TAG,
+                            "SYSTEM_SCOPE installed recents pause guard "
+                                    + method.toGenericString());
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
         Class<?> taskExt =
                 load(
                         loader,
@@ -716,18 +893,7 @@ public final class GuardModule extends XposedModule {
                                         "source=onScreenLockedChanged");
                             }
 
-                            boolean previous =
-                                    Boolean.TRUE.equals(
-                                            oplusScreenLockTransition.get());
-
-                            oplusScreenLockTransition.set(true);
-
-                            try {
-                                return chain.proceed();
-                            } finally {
-                                oplusScreenLockTransition.set(
-                                        previous);
-                            }
+                            return chain.proceed();
                         });
 
                         continue;
@@ -826,11 +992,6 @@ public final class GuardModule extends XposedModule {
                     }
 
                     hook(method).intercept(chain -> {
-                        if (!Boolean.TRUE.equals(
-                                oplusScreenLockTransition.get())) {
-                            return chain.proceed();
-                        }
-
                         if (visibilityMethod) {
                             Boolean visible = null;
 
@@ -856,11 +1017,19 @@ public final class GuardModule extends XposedModule {
                                 activityPackage(
                                         activityRecord);
 
+                        Object task =
+                                invokeNoArg(
+                                        activityRecord,
+                                        "getTask");
+
                         EngineBridge current = engine;
 
                         if (current != null
-                                && current.isManagedPackage(
-                                pkg)) {
+                                && task != null
+                                && current.shouldKeepTaskAwake(
+                                task)
+                                && isSleepingActivity(
+                                activityRecord)) {
                             diag(
                                     "OPLUS_LOCK_VISIBILITY_BLOCK",
                                     "method=" + name
@@ -907,6 +1076,13 @@ public final class GuardModule extends XposedModule {
                     }
 
                     hook(method).intercept(chain -> {
+                        for (Object arg :
+                                chain.getArgs()) {
+                            if (Boolean.TRUE.equals(arg)) {
+                                return chain.proceed();
+                            }
+                        }
+
                         Object task =
                                 taskFromContainer(
                                         chain.getThisObject());
@@ -2253,6 +2429,37 @@ public final class GuardModule extends XposedModule {
                     true);
         } catch (Throwable ignored) {
         }
+    }
+
+    private static boolean isSleepingActivity(
+            Object activityRecord
+    ) {
+        Object taskFragment =
+                invokeNoArg(
+                        activityRecord,
+                        "getTaskFragment");
+
+        Object sleeping =
+                invokeNoArg(
+                        taskFragment,
+                        "shouldSleepActivities");
+
+        if (sleeping instanceof Boolean) {
+            return (Boolean) sleeping;
+        }
+
+        Object displayContent =
+                fieldValue(
+                        activityRecord,
+                        "mDisplayContent");
+
+        sleeping =
+                invokeNoArg(
+                        displayContent,
+                        "isSleeping");
+
+        return Boolean.TRUE.equals(
+                sleeping);
     }
 
     private static Object taskFromContainer(

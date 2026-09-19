@@ -138,6 +138,27 @@ public final class HotReloadEngine {
         }
     }
 
+    public void onOplusFlexibleEvent(
+            int taskId,
+            int event
+    ) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onOplusFlexibleEvent(
+                    taskId,
+                    event);
+        }
+    }
+
+    public boolean shouldSuppressRecentsPause(
+            Object task
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldSuppressRecentsPause(
+                task);
+    }
+
     public void preArmLockKeepAlive(String reason) {
         OplusFlexibleWindowController current = controller;
         if (current != null) {

@@ -1,5 +1,23 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.2.0 — 状态驱动生命周期守护
+
+5.2.0 不再依赖“锁屏前提前几毫秒”或“动画结束后再补救”的时序方案。
+
+核心改动：
+
+- 锁屏：只要任务仍是“始终前台白名单 + 真实 OPlus FlexibleWindow”，`TaskFragment.sleepIfPossible()` 从第一次睡眠请求开始就保持该 Activity，不等待 `onScreenLockedChanged`；
+- 锁屏可见性：按任务真实 sleeping 状态判断，不再依赖同线程 `ThreadLocal`；
+- 侧边小图标：监听 OPlus `notifyFlexibleTaskEvent`，仅 `event=2002`（缩成 FloatHandle）进入 MINIMIZING 状态；
+- 仅在 MINIMIZING/EDGE_HIDDEN 状态拦截 `startPausing(..., "pauseInRecentsAnim")`；
+- `event=2003`（真实退到后台/关闭路径）会取消侧边保活，不阻止正常 pause/stop；
+- 关机 `shuttingDown=true` 时完全放行，不干扰系统正常关机；
+- 继续保留现有 kill/freezer/stopUid/importance 保护。
+
+这套逻辑依赖“当前任务状态 + OPlus 明确事件语义”，不依赖毫秒延迟。
+
+> 5.2.0 修改了 system_server Bootstrap Hook，安装后需要完整重启一次。
+
 ## 5.1.1 — 锁屏继续播放修复
 
 5.1.1 保持 5.1.0 的 OPlus 小窗白名单架构不变，只修正锁屏保活时序。
