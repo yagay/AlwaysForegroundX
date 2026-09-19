@@ -17,62 +17,48 @@ final class RootManager {
     private RootManager() {}
 
     static RootStatus checkAccess() {
-        java.lang.Process process = null;
-        try {
-            process = new ProcessBuilder("su", "-c", "id")
-                    .redirectErrorStream(true)
-                    .start();
-            StringBuilder out = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (out.length() < 512) {
-                        if (out.length() > 0) out.append(' ');
-                        out.append(line);
-                    }
-                }
-            }
-            int exit = process.waitFor();
-            boolean granted = exit == 0 && out.toString().contains("uid=0");
-            return new RootStatus(granted, out.toString().trim());
-        } catch (Throwable t) {
-            return new RootStatus(false, t.getClass().getSimpleName() + ": " + t.getMessage());
-        } finally {
-            if (process != null) process.destroy();
-        }
+        String output = capture("id", 4096);
+        boolean granted = output.startsWith("[exit=0]") && output.contains("uid=0");
+        return new RootStatus(granted, output);
     }
 
     static boolean run(String command, StringBuilder detail) {
+        String output = capture(command, 8192);
+        boolean ok = output.startsWith("[exit=0]");
+        if (detail != null) detail.append(output);
+        return ok;
+    }
+
+    static String capture(String command, int maxChars) {
         java.lang.Process process = null;
+        StringBuilder out = new StringBuilder();
+
         try {
             process = new ProcessBuilder("su", "-c", command)
                     .redirectErrorStream(true)
                     .start();
-            StringBuilder out = new StringBuilder();
+
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (out.length() < 1024) {
-                        if (out.length() > 0) out.append(" | ");
-                        out.append(line);
+                    if (out.length() < maxChars) {
+                        int remain = maxChars - out.length();
+                        String append = line.length() > remain
+                                ? line.substring(0, remain)
+                                : line;
+                        out.append(append).append('\n');
                     }
                 }
             }
+
             int exit = process.waitFor();
-            if (detail != null) {
-                detail.append("exit=").append(exit);
-                if (out.length() > 0) detail.append(" ").append(out);
-            }
-            return exit == 0;
+            String body = out.toString();
+            if (body.length() > maxChars) body = body.substring(0, maxChars);
+            return "[exit=" + exit + "]\n" + body;
         } catch (Throwable t) {
-            if (detail != null) {
-                detail.append(t.getClass().getSimpleName())
-                        .append(": ")
-                        .append(t.getMessage());
-            }
-            return false;
+            return "[exception=" + t.getClass().getName() + "] "
+                    + t.getMessage() + "\n" + out;
         } finally {
             if (process != null) process.destroy();
         }

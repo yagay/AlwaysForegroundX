@@ -7,6 +7,7 @@ import android.util.Log;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -36,6 +37,11 @@ public final class GuardModule extends XposedModule {
     private volatile Field zoomPkgField;
     private volatile Field windowTypeField;
     private volatile Field windowShownField;
+    private volatile Field zoomRectField;
+    private volatile Field cpnNameField;
+    private volatile Field cvActionFlagField;
+    private volatile Field lastExitMethodField;
+    private volatile Field zoomUserIdField;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -71,6 +77,9 @@ public final class GuardModule extends XposedModule {
         prepareOplusZoomState(systemClassLoader);
 
         log(Log.INFO, TAG, "SYSTEM_SCOPE system_server hooks ready");
+        diag("ENGINE_READY",
+                "targets=" + GuardConfig.targetPackages()
+                        + " hooks=" + installedHooks.size());
     }
 
     private boolean enabled() {
@@ -137,6 +146,9 @@ public final class GuardModule extends XposedModule {
                                 && args.get(0) instanceof String pkg
                                 && isTargetPackage(pkg)) {
                             hit("AMS.getPackageProcessState TOP " + pkg);
+                            diag("AMS_PACKAGE_STATE",
+                                    "pkg=" + pkg + " forced=" + PROCESS_STATE_TOP
+                                            + " args=" + argsSummary(args));
                             return PROCESS_STATE_TOP;
                         }
                         return chain.proceed();
@@ -161,6 +173,11 @@ public final class GuardModule extends XposedModule {
                                 && args.get(0) instanceof Integer uid
                                 && isTargetUid(uid)) {
                             hit("AMS.getUidProcessState TOP uid=" + uid);
+                            diag("AMS_UID_STATE",
+                                    "uid=" + uid
+                                            + " packages=" + Arrays.toString(resolvePackagesForUid(uid))
+                                            + " forced=" + PROCESS_STATE_TOP
+                                            + " args=" + argsSummary(args));
                             return PROCESS_STATE_TOP;
                         }
                         return chain.proceed();
@@ -185,6 +202,11 @@ public final class GuardModule extends XposedModule {
                                 && args.get(0) instanceof Integer uid
                                 && isTargetUid(uid)) {
                             hit("AMS.isAppForeground true uid=" + uid);
+                            diag("AMS_FOREGROUND",
+                                    "uid=" + uid
+                                            + " packages=" + Arrays.toString(resolvePackagesForUid(uid))
+                                            + " forced=true"
+                                            + " args=" + argsSummary(args));
                             return true;
                         }
                         return chain.proceed();
@@ -219,6 +241,11 @@ public final class GuardModule extends XposedModule {
                             && args.get(0) instanceof Integer uid
                             && isTargetUid(uid)) {
                         hit("ATMS.hasResumedActivity true uid=" + uid);
+                        diag("ATMS_HAS_RESUMED",
+                                "uid=" + uid
+                                        + " packages=" + Arrays.toString(resolvePackagesForUid(uid))
+                                        + " forced=true"
+                                        + " args=" + argsSummary(args));
                         return true;
                     }
                     return chain.proceed();
@@ -258,10 +285,21 @@ public final class GuardModule extends XposedModule {
                     String pkg = activityPackage(activityRecord);
                     if (!isTargetPackage(pkg)) return chain.proceed();
 
-                    if (isOplusZoomActiveFor(pkg)) {
+                    boolean zoomActive = isOplusZoomActiveFor(pkg);
+                    if (zoomActive) {
                         hit("ActivityRecord.keepResumed zoom=" + pkg);
+                        diag("ACTIVITY_KEEP_RESUMED",
+                                "pkg=" + pkg
+                                        + " record=" + compact(activityRecord)
+                                        + " decision=false"
+                                        + " stack=" + stackSummary());
                         return false;
                     }
+
+                    diag("ACTIVITY_PAUSE_ALLOWED",
+                            "pkg=" + pkg
+                                    + " zoomActive=false"
+                                    + " record=" + compact(activityRecord));
                     return chain.proceed();
                 });
                 log(Log.INFO, TAG, "SYSTEM_SCOPE installed ActivityRecord.shouldPauseActivity");
@@ -294,6 +332,10 @@ public final class GuardModule extends XposedModule {
                             if (GuardConfig.bool(ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME)
                                     && containsTargetPackage(chain.getArgs())) {
                                 hit("OPlus supportMultiResume=true");
+                                diag("OPLUS_MULTI_RESUME",
+                                        "method=" + method.getName()
+                                                + " forced=true"
+                                                + " args=" + argsSummary(chain.getArgs()));
                                 return true;
                             }
                             return chain.proceed();
@@ -318,6 +360,10 @@ public final class GuardModule extends XposedModule {
                             if (GuardConfig.bool(ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT)
                                     && containsTargetPackage(chain.getArgs())) {
                                 hit("OPlus zoom support=true");
+                                diag("OPLUS_ZOOM_SUPPORT",
+                                        "method=" + method.getName()
+                                                + " forced=true"
+                                                + " args=" + argsSummary(chain.getArgs()));
                                 return true;
                             }
                             return chain.proceed();
@@ -391,8 +437,14 @@ public final class GuardModule extends XposedModule {
             zoomPkgField = infoClass.getField("zoomPkg");
             windowTypeField = infoClass.getField("windowType");
             windowShownField = infoClass.getField("windowShown");
+            zoomRectField = optionalField(infoClass, "zoomRect");
+            cpnNameField = optionalField(infoClass, "cpnName");
+            cvActionFlagField = optionalField(infoClass, "cvActionFlag");
+            lastExitMethodField = optionalField(infoClass, "lastExitMethod");
+            zoomUserIdField = optionalField(infoClass, "zoomUserId");
 
             log(Log.INFO, TAG, "SYSTEM_SCOPE OPlus Zoom state API ready");
+            diag("OPLUS_API_READY", "infoClass=" + infoClass.getName());
         } catch (Throwable t) {
             log(Log.INFO, TAG,
                     "SYSTEM_SCOPE OPlus Zoom state API unavailable: " + t);
@@ -419,6 +471,19 @@ public final class GuardModule extends XposedModule {
             // type > 0 covers Zoom/Mini state. Do not require windowShown so hidden Mini can remain
             // protected while the current zoom task is still retained by the OEM service.
             boolean active = packageName.equals(pkg) && type > 0;
+            String snapshot = "requested=" + packageName
+                    + " zoomPkg=" + pkg
+                    + " type=" + type
+                    + " shown=" + shown
+                    + " cpn=" + fieldValue(cpnNameField, info)
+                    + " rect=" + fieldValue(zoomRectField, info)
+                    + " cvActionFlag=" + fieldValue(cvActionFlagField, info)
+                    + " lastExitMethod=" + fieldValue(lastExitMethodField, info)
+                    + " zoomUserId=" + fieldValue(zoomUserIdField, info)
+                    + " active=" + active;
+
+            diag("OPLUS_ZOOM_STATE", snapshot);
+
             if (active) {
                 logOnce("zoom-state-" + packageName + "-" + type + "-" + shown,
                         "SYSTEM_SCOPE zoom active package=" + packageName
@@ -442,6 +507,25 @@ public final class GuardModule extends XposedModule {
         }
     }
 
+    private static Field optionalField(Class<?> type, String name) {
+        try {
+            Field field = type.getField(name);
+            field.setAccessible(true);
+            return field;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Object fieldValue(Field field, Object receiver) {
+        if (field == null || receiver == null) return null;
+        try {
+            return field.get(receiver);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static Field findField(Class<?> type, String name) {
         Class<?> current = type;
         while (current != null) {
@@ -454,7 +538,71 @@ public final class GuardModule extends XposedModule {
         return null;
     }
 
+    private boolean diagnosticsActive() {
+        return GuardConfig.bool(ConfigKeys.DIAGNOSTICS_ACTIVE);
+    }
+
+    private void diag(String event, String detail) {
+        if (!diagnosticsActive()) return;
+
+        String message = "DIAG_SYS"
+                + " event=" + event
+                + " thread=" + Thread.currentThread().getName()
+                + " detail=" + detail;
+        Log.i(TAG, message);
+        log(Log.INFO, TAG, message);
+    }
+
+    private static String argsSummary(List<Object> args) {
+        if (args == null || args.isEmpty()) return "[]";
+        StringBuilder out = new StringBuilder("[");
+        for (int i = 0; i < args.size(); i++) {
+            if (i > 0) out.append(", ");
+            out.append(compact(args.get(i)));
+            if (out.length() > 1200) {
+                out.append("...");
+                break;
+            }
+        }
+        return out.append(']').toString();
+    }
+
+    private static String stackSummary() {
+        StringBuilder out = new StringBuilder();
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        int added = 0;
+        for (StackTraceElement frame : stack) {
+            String cls = frame.getClassName();
+            if (cls.equals(Thread.class.getName())
+                    || cls.equals(GuardModule.class.getName())) {
+                continue;
+            }
+            if (added++ > 0) out.append(" <- ");
+            out.append(cls).append('.').append(frame.getMethodName())
+                    .append(':').append(frame.getLineNumber());
+            if (added >= 10 || out.length() > 1600) break;
+        }
+        return out.toString();
+    }
+
+    private static String compact(Object value) {
+        if (value == null) return "null";
+        String text;
+        try {
+            text = String.valueOf(value);
+        } catch (Throwable t) {
+            text = value.getClass().getName();
+        }
+        text = text.replace('\n', ' ').replace('\r', ' ');
+        return text.length() <= 900 ? text : text.substring(0, 900) + "...";
+    }
+
     private void hit(String message) {
+        if (diagnosticsActive()) {
+            diag("HOOK_HIT", message);
+            return;
+        }
+
         String key = "hit-" + message;
         if (firstHits.add(key)) {
             log(Log.INFO, TAG, "SYSTEM_SCOPE HIT " + message);

@@ -27,7 +27,8 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_KEEP_MINI_RESUMED,
             ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME,
             ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT,
-            ConfigKeys.AOSP_FREEFORM_FALLBACK
+            ConfigKeys.AOSP_FREEFORM_FALLBACK,
+            ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
     private static final String[] INT_KEYS = {
@@ -154,6 +155,9 @@ public final class GuardApp extends Application {
             editor.putString(
                     ConfigKeys.TARGET_PACKAGES,
                     getString(ConfigKeys.TARGET_PACKAGES));
+            editor.putString(
+                    ConfigKeys.DIAGNOSTICS_STARTED_AT,
+                    getString(ConfigKeys.DIAGNOSTICS_STARTED_AT));
             return editor.commit();
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync remote preferences", t);
