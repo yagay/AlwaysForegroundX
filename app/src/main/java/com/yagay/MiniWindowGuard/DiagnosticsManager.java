@@ -82,6 +82,11 @@ final class DiagnosticsManager {
             writeText(new File(workDir, "00-summary.txt"),
                     buildSummary(context, targets));
 
+            File crash = CrashStore.getFile(context);
+            if (crash != null) {
+                copyFile(crash, new File(workDir, "00-last-crash.txt"));
+            }
+
             writeText(new File(workDir, "01-root-status.txt"),
                     RootManager.capture("id", 16_384));
 
@@ -300,6 +305,17 @@ final class DiagnosticsManager {
     private static void writeText(File file, String text) throws Exception {
         try (FileOutputStream out = new FileOutputStream(file)) {
             out.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static void copyFile(File source, File target) throws Exception {
+        try (BufferedInputStream in = new BufferedInputStream(new FileInputStream(source));
+             BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(target))) {
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                out.write(buffer, 0, read);
+            }
         }
     }
 

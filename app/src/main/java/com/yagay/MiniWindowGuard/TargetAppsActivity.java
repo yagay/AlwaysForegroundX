@@ -2,43 +2,71 @@ package com.yagay.MiniWindowGuard;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.ResolveInfo;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
+import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class TargetAppsActivity extends Activity {
-    private final Map<String, CheckBox> rows = new LinkedHashMap<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private Set<String> original;
+    private final ArrayList<AppItem> allApps = new ArrayList<>();
+    private final ArrayList<AppItem> filteredApps = new ArrayList<>();
+    private final LinkedHashSet<String> selected = new LinkedHashSet<>();
+
+    private AppAdapter adapter;
+    private TextView countView;
+    private ProgressBar progress;
+    private EditText search;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        original = new LinkedHashSet<>(GuardApp.getTargetPackages());
 
-        ScrollView scroll = new ScrollView(this);
+        try {
+            selected.addAll(GuardApp.getTargetPackages());
+            buildUi();
+            loadAppsAsync();
+        } catch (Throwable t) {
+            CrashStore.record(this, "TargetAppsActivity.onCreate", t);
+            showFatal(t);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        executor.shutdownNow();
+        super.onDestroy();
+    }
+
+    private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(18), dp(18), dp(28));
-        scroll.addView(root);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+        root.setBackgroundColor(0xFFF5F6F8);
 
         TextView title = new TextView(this);
         title.setText("受保护应用");
@@ -48,130 +76,402 @@ public final class TargetAppsActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("这里只是小窗守护自己的保护名单，不是 LSPosed 作用域。"
-                + "每个 App 右侧“小窗”按钮会按首页设置的自由小窗 / 图标 / 隐藏形态启动。");
-        help.setTextSize(14);
-        help.setPadding(0, dp(6), 0, dp(12));
+                + "LSPosed 仍只需要选择 Android/System Framework。");
+        help.setTextSize(13.5f);
+        help.setTextColor(0xFF666A73);
+        help.setPadding(0, dp(4), 0, dp(10));
         root.addView(help);
+
+        search = new EditText(this);
+        search.setSingleLine(true);
+        search.setHint("搜索应用名或包名");
+        search.setTextSize(14);
+        root.addView(search, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
 
         Button all = new Button(this);
         all.setText("全选");
-        all.setOnClickListener(v -> rows.values().forEach(c -> c.setChecked(true)));
+        all.setAllCaps(false);
+        all.setOnClickListener(v -> {
+            for (AppItem item : filteredApps) selected.add(item.packageName);
+            if (adapter != null) adapter.notifyDataSetChanged();
+            refreshCount();
+        });
         actions.addView(all, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         Button none = new Button(this);
-        none.setText("全部取消");
-        none.setOnClickListener(v -> rows.values().forEach(c -> c.setChecked(false)));
+        none.setText("取消当前");
+        none.setAllCaps(false);
+        none.setOnClickListener(v -> {
+            for (AppItem item : filteredApps) selected.remove(item.packageName);
+            if (adapter != null) adapter.notifyDataSetChanged();
+            refreshCount();
+        });
         actions.addView(none, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         root.addView(actions);
 
-        for (AppItem app : loadLaunchableApps()) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(0, dp(3), 0, dp(3));
+        countView = new TextView(this);
+        countView.setTextSize(13.5f);
+        countView.setTextColor(0xFF3F444C);
+        countView.setPadding(0, dp(4), 0, dp(6));
+        root.addView(countView);
 
-            CheckBox box = new CheckBox(this);
-            box.setText(app.label + "\n" + app.packageName);
-            box.setTextSize(14);
-            box.setChecked(original.contains(app.packageName));
-            row.addView(box, new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            rows.put(app.packageName, box);
+        progress = new ProgressBar(this);
+        progress.setIndeterminate(true);
+        root.addView(progress, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
-            Button launch = new Button(this);
-            launch.setText("小窗");
-            launch.setAllCaps(false);
-            launch.setOnClickListener(v -> {
-                launch.setEnabled(false);
-                executor.execute(() -> {
-                    boolean ok = WindowLauncher.launch(this, app.packageName);
-                    runOnUiThread(() -> {
-                        launch.setEnabled(true);
-                        Toast.makeText(this,
-                                ok ? "已请求系统小窗" : "小窗启动失败，请检查 Root/系统支持",
-                                Toast.LENGTH_SHORT).show();
-                    });
-                });
-            });
-            row.addView(launch);
-
-            root.addView(row, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
-        }
+        ListView list = new ListView(this);
+        list.setDividerHeight(1);
+        adapter = new AppAdapter();
+        list.setAdapter(adapter);
+        root.addView(list, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f));
 
         Button save = new Button(this);
         save.setText("保存保护名单并应用 Root 策略");
-        save.setOnClickListener(v -> save());
+        save.setAllCaps(false);
+        save.setOnClickListener(v -> saveSelection());
         root.addView(save);
 
-        setContentView(scroll);
+        setContentView(root);
+
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(
+                    CharSequence s, int start, int count, int after) {}
+
+            @Override public void onTextChanged(
+                    CharSequence s, int start, int before, int count) {
+                applyFilter(s == null ? "" : s.toString());
+            }
+
+            @Override public void afterTextChanged(Editable s) {}
+        });
+
+        refreshCount();
     }
 
-    @Override
-    protected void onDestroy() {
-        executor.shutdownNow();
-        super.onDestroy();
-    }
-
-    private void save() {
-        LinkedHashSet<String> selected = new LinkedHashSet<>();
-        for (Map.Entry<String, CheckBox> entry : rows.entrySet()) {
-            if (entry.getValue().isChecked()) selected.add(entry.getKey());
-        }
-
-        Set<String> before = new LinkedHashSet<>(original);
-        GuardApp.setTargetPackages(selected);
-        original = new LinkedHashSet<>(selected);
-
+    private void loadAppsAsync() {
+        progress.setVisibility(View.VISIBLE);
         executor.execute(() -> {
-            RootPolicyManager.reconcile(this, before, selected);
+            ArrayList<AppItem> loaded = new ArrayList<>();
+            Throwable failure = null;
+
+            try {
+                PackageManager pm = getPackageManager();
+                List<ApplicationInfo> infos;
+
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    infos = pm.getInstalledApplications(
+                            PackageManager.ApplicationInfoFlags.of(0));
+                } else {
+                    infos = pm.getInstalledApplications(0);
+                }
+
+                for (ApplicationInfo info : infos) {
+                    if (Thread.currentThread().isInterrupted()) return;
+                    if (info == null || info.packageName == null) continue;
+                    if (getPackageName().equals(info.packageName)) continue;
+
+                    String label;
+                    try {
+                        CharSequence labelCs = info.loadLabel(pm);
+                        label = labelCs == null
+                                ? info.packageName
+                                : labelCs.toString().trim();
+                        if (label.isEmpty()) label = info.packageName;
+                    } catch (Throwable ignored) {
+                        label = info.packageName;
+                    }
+
+                    boolean system = (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+                    loaded.add(new AppItem(label, info.packageName, system));
+                }
+
+                for (String pkg : selected) {
+                    boolean present = false;
+                    for (AppItem item : loaded) {
+                        if (item.packageName.equals(pkg)) {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if (!present) loaded.add(new AppItem(pkg, pkg, false));
+                }
+
+                loaded.sort(Comparator
+                        .comparing((AppItem a) -> a.label, String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing(a -> a.packageName));
+            } catch (Throwable t) {
+                failure = t;
+            }
+
+            Throwable finalFailure = failure;
             runOnUiThread(() -> {
-                Toast.makeText(this,
-                        "已保存 " + selected.size() + " 个受保护应用",
-                        Toast.LENGTH_SHORT).show();
-                finish();
+                if (isFinishing() || isDestroyed()) return;
+
+                progress.setVisibility(View.GONE);
+
+                if (finalFailure != null) {
+                    CrashStore.record(this, "TargetAppsActivity.loadApps", finalFailure);
+                    Toast.makeText(
+                            this,
+                            "读取应用列表失败：" + finalFailure.getClass().getSimpleName(),
+                            Toast.LENGTH_LONG).show();
+                }
+
+                allApps.clear();
+                allApps.addAll(loaded);
+                applyFilter(search == null ? "" : search.getText().toString());
             });
         });
     }
 
-    private List<AppItem> loadLaunchableApps() {
-        Intent launcher = new Intent(Intent.ACTION_MAIN);
-        launcher.addCategory(Intent.CATEGORY_LAUNCHER);
+    private void applyFilter(String raw) {
+        String query = raw == null
+                ? ""
+                : raw.trim().toLowerCase(Locale.ROOT);
 
-        List<ResolveInfo> resolved = getPackageManager().queryIntentActivities(launcher, 0);
-        Map<String, AppItem> unique = new LinkedHashMap<>();
-
-        for (ResolveInfo info : resolved) {
-            if (info.activityInfo == null) continue;
-            String pkg = info.activityInfo.packageName;
-            if (pkg == null || pkg.equals(getPackageName())) continue;
-
-            CharSequence labelCs = info.loadLabel(getPackageManager());
-            String label = labelCs == null ? pkg : labelCs.toString();
-            unique.putIfAbsent(pkg, new AppItem(label, pkg));
+        filteredApps.clear();
+        if (query.isEmpty()) {
+            filteredApps.addAll(allApps);
+        } else {
+            for (AppItem item : allApps) {
+                if (item.label.toLowerCase(Locale.ROOT).contains(query)
+                        || item.packageName.toLowerCase(Locale.ROOT).contains(query)) {
+                    filteredApps.add(item);
+                }
+            }
         }
 
-        for (String pkg : original) {
-            unique.putIfAbsent(pkg, new AppItem(pkg, pkg));
-        }
+        if (adapter != null) adapter.notifyDataSetChanged();
+        refreshCount();
+    }
 
-        ArrayList<AppItem> result = new ArrayList<>(unique.values());
-        result.sort(Comparator
-                .comparing((AppItem a) -> a.label, String.CASE_INSENSITIVE_ORDER)
-                .thenComparing(a -> a.packageName));
-        return result;
+    private void refreshCount() {
+        if (countView == null) return;
+        countView.setText("已选 " + selected.size()
+                + " 个 · 当前显示 " + filteredApps.size()
+                + " 个");
+    }
+
+    private void saveSelection() {
+        Set<String> before = new LinkedHashSet<>(GuardApp.getTargetPackages());
+        Set<String> after = new LinkedHashSet<>(selected);
+
+        GuardApp.setTargetPackages(after);
+
+        executor.execute(() -> {
+            try {
+                RootPolicyManager.reconcile(this, before, after);
+                runOnUiThread(() -> {
+                    Toast.makeText(this,
+                            "已保存 " + after.size() + " 个受保护应用",
+                            Toast.LENGTH_SHORT).show();
+                    finish();
+                });
+            } catch (Throwable t) {
+                CrashStore.record(this, "TargetAppsActivity.saveSelection", t);
+                runOnUiThread(() -> Toast.makeText(
+                        this,
+                        "保存成功，但应用 Root 策略失败："
+                                + t.getClass().getSimpleName(),
+                        Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    private void launchSmallWindow(AppItem item, Button button) {
+        button.setEnabled(false);
+        executor.execute(() -> {
+            boolean ok = false;
+            Throwable failure = null;
+
+            try {
+                ok = WindowLauncher.launch(this, item.packageName);
+            } catch (Throwable t) {
+                failure = t;
+                CrashStore.record(this,
+                        "TargetAppsActivity.launchSmallWindow:" + item.packageName,
+                        t);
+            }
+
+            boolean finalOk = ok;
+            Throwable finalFailure = failure;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                button.setEnabled(true);
+                Toast.makeText(
+                        this,
+                        finalFailure != null
+                                ? "小窗启动异常："
+                                    + finalFailure.getClass().getSimpleName()
+                                : (finalOk
+                                    ? "已请求系统小窗"
+                                    : "小窗启动失败，请检查 Root/系统支持"),
+                        Toast.LENGTH_SHORT).show();
+            });
+        });
+    }
+
+    private void showFatal(Throwable t) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(18), dp(18), dp(18));
+
+        TextView title = new TextView(this);
+        title.setText("受保护应用页面启动失败");
+        title.setTextSize(22);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        root.addView(title);
+
+        TextView detail = new TextView(this);
+        detail.setText(t.getClass().getName() + "\n"
+                + String.valueOf(t.getMessage())
+                + "\n\n错误已写入诊断崩溃日志。");
+        detail.setTextSize(14);
+        detail.setPadding(0, dp(10), 0, dp(10));
+        root.addView(detail);
+
+        Button close = new Button(this);
+        close.setText("返回");
+        close.setOnClickListener(v -> finish());
+        root.addView(close);
+
+        setContentView(root);
     }
 
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private record AppItem(String label, String packageName) {}
+    private final class AppAdapter extends BaseAdapter {
+        @Override
+        public int getCount() {
+            return filteredApps.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return filteredApps.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return filteredApps.get(position).packageName.hashCode();
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            RowHolder holder;
+            if (convertView instanceof LinearLayout) {
+                Object tag = convertView.getTag();
+                if (tag instanceof RowHolder) {
+                    holder = (RowHolder) tag;
+                } else {
+                    holder = createRow();
+                    convertView = holder.root;
+                }
+            } else {
+                holder = createRow();
+                convertView = holder.root;
+            }
+
+            AppItem item = filteredApps.get(position);
+            holder.title.setText(item.label);
+            holder.subtitle.setText(item.packageName
+                    + (item.system ? " · 系统应用" : ""));
+            holder.check.setOnCheckedChangeListener(null);
+            holder.check.setChecked(selected.contains(item.packageName));
+            holder.check.setOnCheckedChangeListener((buttonView, isChecked) -> {
+                if (isChecked) selected.add(item.packageName);
+                else selected.remove(item.packageName);
+                refreshCount();
+            });
+
+            holder.launch.setOnClickListener(
+                    v -> launchSmallWindow(item, holder.launch));
+
+            return convertView;
+        }
+
+        private RowHolder createRow() {
+            LinearLayout row = new LinearLayout(TargetAppsActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(6), 0, dp(6));
+
+            CheckBox check = new CheckBox(TargetAppsActivity.this);
+            row.addView(check);
+
+            LinearLayout texts = new LinearLayout(TargetAppsActivity.this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+
+            TextView title = new TextView(TargetAppsActivity.this);
+            title.setTextSize(15);
+            title.setTextColor(0xFF202124);
+            texts.addView(title);
+
+            TextView subtitle = new TextView(TargetAppsActivity.this);
+            subtitle.setTextSize(12);
+            subtitle.setTextColor(0xFF70757A);
+            texts.addView(subtitle);
+
+            row.addView(texts, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            Button launch = new Button(TargetAppsActivity.this);
+            launch.setText("小窗");
+            launch.setAllCaps(false);
+            row.addView(launch);
+
+            RowHolder holder = new RowHolder(row, check, title, subtitle, launch);
+            row.setTag(holder);
+            return holder;
+        }
+    }
+
+    private static final class RowHolder {
+        final LinearLayout root;
+        final CheckBox check;
+        final TextView title;
+        final TextView subtitle;
+        final Button launch;
+
+        RowHolder(
+                LinearLayout root,
+                CheckBox check,
+                TextView title,
+                TextView subtitle,
+                Button launch
+        ) {
+            this.root = root;
+            this.check = check;
+            this.title = title;
+            this.subtitle = subtitle;
+            this.launch = launch;
+        }
+    }
+
+    private static final class AppItem {
+        final String label;
+        final String packageName;
+        final boolean system;
+
+        AppItem(String label, String packageName, boolean system) {
+            this.label = label;
+            this.packageName = packageName;
+            this.system = system;
+        }
+    }
 }

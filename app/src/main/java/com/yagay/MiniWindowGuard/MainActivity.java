@@ -122,8 +122,17 @@ public final class MainActivity extends Activity {
         card.addView(targetCount);
 
         Button select = button("选择受保护应用");
-        select.setOnClickListener(v ->
-                startActivity(new Intent(this, TargetAppsActivity.class)));
+        select.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(this, TargetAppsActivity.class));
+            } catch (Throwable t) {
+                CrashStore.record(this, "MainActivity.openTargetApps", t);
+                Toast.makeText(
+                        this,
+                        "打开应用列表失败：" + t.getClass().getSimpleName(),
+                        Toast.LENGTH_LONG).show();
+            }
+        });
         card.addView(select);
 
         Button applyRoot = button("重新应用 Root 策略");
