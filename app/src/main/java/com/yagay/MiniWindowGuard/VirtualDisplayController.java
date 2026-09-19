@@ -188,10 +188,45 @@ final class VirtualDisplayController {
             return;
         }
 
+        int initialState = packageName.equals(pendingPackage)
+                ? pendingState
+                : ConfigKeys.STATE_WINDOW;
+
+        captureInternal(
+                activityRecord,
+                packageName,
+                initialState,
+                false);
+    }
+
+    void captureFallback(
+            Object activityRecord,
+            String packageName,
+            int initialState
+    ) {
+        captureInternal(
+                activityRecord,
+                packageName,
+                ConfigKeys.sanitizeState(initialState),
+                true);
+    }
+
+    private void captureInternal(
+            Object activityRecord,
+            String packageName,
+            int initialState,
+            boolean fallback
+    ) {
+        if (activityRecord == null || packageName == null) {
+            return;
+        }
+
         Object task = activityTask(activityRecord);
         if (task == null) {
             log("VD_CAPTURE_SKIP",
-                    "pkg=" + packageName + " reason=no-task");
+                    "pkg=" + packageName
+                            + " reason=no-task"
+                            + " fallback=" + fallback);
             return;
         }
 
@@ -202,7 +237,9 @@ final class VirtualDisplayController {
         int id = taskId(task);
         if (id < 0) {
             log("VD_CAPTURE_SKIP",
-                    "pkg=" + packageName + " reason=no-task-id");
+                    "pkg=" + packageName
+                            + " reason=no-task-id"
+                            + " fallback=" + fallback);
             return;
         }
 
@@ -211,10 +248,6 @@ final class VirtualDisplayController {
             existing.lastSeenElapsed = SystemClock.elapsedRealtime();
             return;
         }
-
-        int initialState = packageName.equals(pendingPackage)
-                ? pendingState
-                : ConfigKeys.STATE_WINDOW;
 
         Session session = new Session(
                 id,
@@ -233,7 +266,8 @@ final class VirtualDisplayController {
                 "pkg=" + packageName
                         + " taskId=" + id
                         + " originalDisplay=" + session.originalDisplayId
-                        + " state=" + initialState);
+                        + " state=" + initialState
+                        + " fallback=" + fallback);
 
         handler.post(() -> openSession(session));
     }
