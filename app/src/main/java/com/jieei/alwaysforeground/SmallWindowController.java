@@ -5,12 +5,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Bundle;
-import android.os.Process;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 
 /**
@@ -81,27 +78,27 @@ final class SmallWindowController {
                 return LaunchResult.no("intent-uri-too-large:" + uri.length());
             }
 
+            String token = TargetConfig.getRootBridgeToken();
+            if (token == null || token.isEmpty()) {
+                return LaunchResult.no("root-bridge-token-unavailable");
+            }
+
             int userId = Math.max(0, context.getApplicationInfo().uid / 100000);
-            String command =
-                    "APK=$(pm path com.jieei.alwaysforeground | head -n1 | cut -d: -f2); "
-                    + "[ -n \"$APK\" ] || exit 91; "
-                    + "CLASSPATH=\"$APK\" app_process /system/bin "
-                    + "com.jieei.alwaysforeground.RootSmallWindowBridge "
-                    + shellQuote(uri) + " "
-                    + userId + " "
-                    + shellQuote(context.getPackageName()) + " "
-                    + form + " "
-                    + widthPercent + " "
-                    + heightPercent;
+            Intent request = new Intent(RootSmallWindowReceiver.ACTION);
+            request.setClassName(
+                    "com.jieei.alwaysforeground",
+                    "com.jieei.alwaysforeground.RootSmallWindowReceiver");
+            request.putExtra(RootSmallWindowReceiver.EXTRA_TOKEN, token);
+            request.putExtra(RootSmallWindowReceiver.EXTRA_INTENT_URI, uri);
+            request.putExtra(RootSmallWindowReceiver.EXTRA_USER_ID, userId);
+            request.putExtra(RootSmallWindowReceiver.EXTRA_CALLER, context.getPackageName());
+            request.putExtra(RootSmallWindowReceiver.EXTRA_FORM, form);
+            request.putExtra(RootSmallWindowReceiver.EXTRA_WIDTH, widthPercent);
+            request.putExtra(RootSmallWindowReceiver.EXTRA_HEIGHT, heightPercent);
 
-            Process process = Runtime.getRuntime().exec(new String[]{"su", "-c", command});
+            context.sendBroadcast(request);
 
-            Thread reader = new Thread(() -> readRootOutput(process, context.getPackageName()),
-                    "AFX-RootSmallWindow");
-            reader.setDaemon(true);
-            reader.start();
-
-            Log.i(TAG, "GENERIC_SMALL_WINDOW root dispatched"
+            Log.i(TAG, "GENERIC_SMALL_WINDOW bridge dispatched"
                     + " form=" + form
                     + " width=" + widthPercent
                     + " height=" + heightPercent
@@ -110,38 +107,15 @@ final class SmallWindowController {
 
             return new LaunchResult(
                     true,
-                    "root_oplus",
+                    "root_bridge",
                     "form=" + form + ",size=" + widthPercent + "x" + heightPercent);
         } catch (Throwable t) {
             Throwable root = unwrap(t);
             Log.i(TAG, "GENERIC_SMALL_WINDOW backend unavailable"
-                    + " backend=root_oplus"
+                    + " backend=root_bridge"
                     + " package=" + context.getPackageName()
                     + " error=" + root);
             return LaunchResult.no(root.toString());
-        }
-    }
-
-    private static void readRootOutput(Process process, String packageName) {
-        try (BufferedReader stdout = new BufferedReader(
-                new InputStreamReader(process.getInputStream()));
-             BufferedReader stderr = new BufferedReader(
-                     new InputStreamReader(process.getErrorStream()))) {
-            String line;
-            while ((line = stdout.readLine()) != null) {
-                Log.i(TAG, "GENERIC_SMALL_WINDOW root " + line
-                        + " package=" + packageName);
-            }
-            while ((line = stderr.readLine()) != null) {
-                Log.w(TAG, "GENERIC_SMALL_WINDOW root stderr=" + line
-                        + " package=" + packageName);
-            }
-            int exit = process.waitFor();
-            Log.i(TAG, "GENERIC_SMALL_WINDOW root exit=" + exit
-                    + " package=" + packageName);
-        } catch (Throwable t) {
-            Log.w(TAG, "GENERIC_SMALL_WINDOW root read failed package="
-                    + packageName, t);
         }
     }
 
