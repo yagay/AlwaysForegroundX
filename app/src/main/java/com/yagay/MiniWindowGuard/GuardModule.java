@@ -43,6 +43,11 @@ public final class GuardModule extends XposedModule {
     private final ConcurrentHashMap<Integer, String[]> uidPackages =
             new ConcurrentHashMap<>();
 
+    // True only while OPlus FlexibleTaskController is executing its own
+    // screen-lock transition on the current system_server thread.
+    private final ThreadLocal<Boolean> oplusScreenLockTransition =
+            ThreadLocal.withInitial(() -> false);
+
     private volatile ClassLoader systemClassLoader;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
@@ -676,8 +681,12 @@ public final class GuardModule extends XposedModule {
         if (flexible != null) {
             for (Method method :
                     flexible.getDeclaredMethods()) {
+                String name = method.getName();
+
                 if (!"notifyKeyguardStateChanged"
-                        .equals(method.getName())) {
+                        .equals(name)
+                        && !"onScreenLockedChanged"
+                        .equals(name)) {
                     continue;
                 }
 
@@ -686,6 +695,41 @@ public final class GuardModule extends XposedModule {
 
                     if (!installedHooks.add(
                             method.toGenericString())) {
+                        continue;
+                    }
+
+                    if ("onScreenLockedChanged"
+                            .equals(name)) {
+                        hook(method).intercept(chain -> {
+                            EngineBridge current = engine;
+
+                            if (current != null) {
+                                // OPlus reaches this callback before it hides the
+                                // flexible Activity. Arm keepalive here so all
+                                // downstream sleep/freeze hooks see the protected
+                                // state in the same lock transaction.
+                                current.preArmLockKeepAlive(
+                                        "FlexibleTaskController.onScreenLockedChanged");
+
+                                diag(
+                                        "OPLUS_LOCK_PREARM",
+                                        "source=onScreenLockedChanged");
+                            }
+
+                            boolean previous =
+                                    Boolean.TRUE.equals(
+                                            oplusScreenLockTransition.get());
+
+                            oplusScreenLockTransition.set(true);
+
+                            try {
+                                return chain.proceed();
+                            } finally {
+                                oplusScreenLockTransition.set(
+                                        previous);
+                            }
+                        });
+
                         continue;
                     }
 
@@ -718,6 +762,8 @@ public final class GuardModule extends XposedModule {
 
                         if (current != null
                                 && showing != null) {
+                            // Keep as a second OPlus-native signal. The early
+                            // onScreenLockedChanged hook already armed the task.
                             current.onKeyguardStateChanged(
                                     showing);
 
@@ -732,6 +778,107 @@ public final class GuardModule extends XposedModule {
                 } catch (Throwable t) {
                     installedHooks.remove(
                             method.toGenericString());
+                }
+            }
+        }
+
+        // OPlus itself hides the flexible Activity inside
+        // FlexibleTaskController.onScreenLockedChanged. For an always-foreground
+        // OPlus task, suppress only those exact visibility calls while the OEM
+        // lock callback is on this thread. This is deliberately NOT a global
+        // Activity lifecycle override.
+        Class<?> lockActivityRecord =
+                load(
+                        loader,
+                        "com.android.server.wm.ActivityRecord");
+
+        if (lockActivityRecord != null) {
+            for (Method method :
+                    lockActivityRecord.getDeclaredMethods()) {
+                String name = method.getName();
+
+                boolean visibilityMethod =
+                        "setVisibility".equals(name)
+                                && method.getReturnType()
+                                == void.class
+                                && method.getParameterCount()
+                                >= 1;
+
+                boolean makeInvisibleMethod =
+                        "makeInvisible".equals(name)
+                                && method.getReturnType()
+                                == void.class;
+
+                if (!visibilityMethod
+                        && !makeInvisibleMethod) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    String hookKey =
+                            "lock-visibility:"
+                                    + method.toGenericString();
+
+                    if (!installedHooks.add(hookKey)) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        if (!Boolean.TRUE.equals(
+                                oplusScreenLockTransition.get())) {
+                            return chain.proceed();
+                        }
+
+                        if (visibilityMethod) {
+                            Boolean visible = null;
+
+                            for (Object arg :
+                                    chain.getArgs()) {
+                                if (arg instanceof Boolean) {
+                                    visible =
+                                            (Boolean) arg;
+                                    break;
+                                }
+                            }
+
+                            if (!Boolean.FALSE.equals(
+                                    visible)) {
+                                return chain.proceed();
+                            }
+                        }
+
+                        Object activityRecord =
+                                chain.getThisObject();
+
+                        String pkg =
+                                activityPackage(
+                                        activityRecord);
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && current.isManagedPackage(
+                                pkg)) {
+                            diag(
+                                    "OPLUS_LOCK_VISIBILITY_BLOCK",
+                                    "method=" + name
+                                            + " pkg=" + pkg
+                                            + " activity="
+                                            + fieldValue(
+                                            activityRecord,
+                                            "mActivityComponent"));
+
+                            return null;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            "lock-visibility:"
+                                    + method.toGenericString());
                 }
             }
         }
