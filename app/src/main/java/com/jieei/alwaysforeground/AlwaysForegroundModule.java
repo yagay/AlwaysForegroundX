@@ -222,7 +222,11 @@ public final class AlwaysForegroundModule extends XposedModule {
                     }
                 }
 
-                int serial = transitionSerial.incrementAndGet();
+                // onPause starts a new foreground->background transition. onStop belongs to
+                // the same transition and must not invalidate a resume queued during onPause.
+                int serial = event == 2
+                        ? transitionSerial.incrementAndGet()
+                        : transitionSerial.get();
                 int depth = lifecycleCauseDepth.get();
                 lifecycleCauseDepth.set(depth + 1);
                 try {
