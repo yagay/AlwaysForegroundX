@@ -185,11 +185,15 @@ public final class MainActivity extends Activity {
         addSwitch(card, "强制允许 OPlus 小窗",
                 "厂商小窗支持检查包含受保护包时返回支持。",
                 ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT);
+
+        addSwitch(card, "受保护 App 启动自动进入系统小窗",
+                "Activity 在 system_server 进入 RESUMED 后，直接把现有 task 切成 OPlus Flexible Window；不需要 App 内 Hook，也不需要手动点“小窗”。",
+                ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW);
     }
 
     private void addWindowCard(LinearLayout parent) {
-        LinearLayout card = card(parent, "小窗启动默认值",
-                "用于从小窗守护主动以 Root 打开受保护 App。系统手动开启的小窗仍使用系统自己的大小。");
+        LinearLayout card = card(parent, "系统小窗形态",
+                "受保护 App 正常启动后会由 system_server 自动切成系统小窗；这里决定进入自由小窗、Mini 图标或隐藏形态。");
 
         addSwitch(card, "AOSP Freeform 兜底",
                 "OPlus 小窗 API 不可用时尝试 Android Freeform。",
