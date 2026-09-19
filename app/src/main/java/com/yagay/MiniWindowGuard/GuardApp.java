@@ -5,7 +5,9 @@ import android.content.SharedPreferences;
 import android.util.Log;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -109,32 +111,51 @@ public final class GuardApp extends Application {
         }
     }
 
-    static long getLoadedEngineVersionCode() {
+    static List<String> getFrameworkScope() {
         XposedService current = service;
-        if (current == null) return -1L;
+        if (current == null) return Collections.emptyList();
         try {
-            return current.getRemotePreferences(ConfigKeys.REMOTE_GROUP)
-                    .getLong(ConfigKeys.ENGINE_VERSION_CODE, -1L);
-        } catch (Throwable ignored) {
-            return -1L;
+            List<String> scope = current.getScope();
+            return scope == null ? Collections.emptyList() : scope;
+        } catch (Throwable t) {
+            Log.w(TAG, "Failed to read LSPosed scope", t);
+            return Collections.emptyList();
         }
     }
 
+    static boolean hasSystemScope() {
+        return getFrameworkScope().contains("system");
+    }
+
+    static EngineStatusProvider.Status getEngineStatus() {
+        GuardApp app = instance;
+        return EngineStatusProvider.read(app);
+    }
+
+    static long getLoadedEngineVersionCode() {
+        return getEngineStatus().versionCode;
+    }
+
     static long getEngineStartedAt() {
-        XposedService current = service;
-        if (current == null) return 0L;
-        try {
-            return current.getRemotePreferences(ConfigKeys.REMOTE_GROUP)
-                    .getLong(ConfigKeys.ENGINE_STARTED_AT, 0L);
-        } catch (Throwable ignored) {
-            return 0L;
-        }
+        return getEngineStatus().startedAt;
+    }
+
+    static int getEnginePid() {
+        return getEngineStatus().pid;
+    }
+
+    static int getEngineHookCount() {
+        return getEngineStatus().hookCount;
     }
 
     static boolean isSystemEngineCurrent() {
         long expected = getExpectedVersionCode();
-        long loaded = getLoadedEngineVersionCode();
-        return expected > 0 && loaded == expected;
+        EngineStatusProvider.Status status = getEngineStatus();
+        return service != null
+                && hasSystemScope()
+                && expected > 0
+                && status.versionCode == expected
+                && status.isFromCurrentBoot();
     }
 
     static String getFrameworkName() {
