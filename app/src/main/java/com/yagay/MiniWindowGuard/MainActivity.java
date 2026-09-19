@@ -97,8 +97,17 @@ public final class MainActivity extends Activity {
         addSwitch(
                 card,
                 "启用小窗守护",
-                "关闭后不创建 VirtualDisplay，也不应用始终前台保护。",
+                "关闭后不创建小窗，也不应用始终前台保护。",
                 ConfigKeys.MASTER_ENABLED);
+
+        addSwitch(
+                card,
+                "优先使用系统原生小窗（推荐）",
+                "默认让 Task 保持在原 display，直接切换 FREEFORM 并调整 Task bounds。"
+                        + "这样视频 SurfaceView、MediaCodec、焦点和输入都继续由系统窗口栈处理。"
+                        + "如果原生 freeform 在当前系统不可用，会自动回退到 VirtualDisplay。"
+                        + "修改这个选项后点击下面的“立即重新加载 System Engine”生效。",
+                ConfigKeys.NATIVE_FREEFORM_ENGINE);
 
         addSwitch(
                 card,
@@ -140,10 +149,10 @@ public final class MainActivity extends Activity {
     private void addLauncherCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
-                "VirtualDisplay 小窗",
-                "完全重写的 system_server VirtualDisplay 引擎："
-                        + "使用稳定 TextureView Surface，Surface 就绪后再迁移 Task；"
-                        + "不使用原开源项目窗口实现源码。");
+                "小窗引擎",
+                "默认使用 Native Freeform：Task 保持在原 display，"
+                        + "直接由 WindowManager 管理 bounds 和窗口模式。"
+                        + "VirtualDisplay 保留为自动兼容后备。");
 
         Button openApps = button("选择应用并打开小窗");
         openApps.setOnClickListener(v -> {
@@ -165,19 +174,24 @@ public final class MainActivity extends Activity {
         card.addView(openApps);
 
         card.addView(detailBlock(
-                "窗口操作",
-                "标题栏直接提供返回、缩小成图标、隐藏和关闭；"
-                        + "不再使用旧三点菜单。图标/隐藏只把宿主窗口移出屏幕，"
-                        + "VirtualDisplay 与 TextureView Surface 保持存活，点击恢复控件即可还原。"));
+                "原生模式",
+                "原生模式不再创建 TextureView 宿主，也不把 Task 搬到副屏。"
+                        + "系统自己的 freeform/Flexible Window 负责视频 Surface、窗口裁切、"
+                        + "焦点和输入。缩放行为因此更接近系统自带小窗。"));
+
+        card.addView(detailBlock(
+                "兼容后备",
+                "如果当前 ROM 拒绝 FREEFORM 或 Task bounds 没有真正生效，"
+                        + "引擎会记录 NATIVE_FREEFORM_FAILED，并自动切到现有 VirtualDisplay。"));
     }
 
     private void addForegroundCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
                 "始终前台",
-                "只保留 MiniWindowGuard 原来的前台保护思路。"
-                        + "VirtualDisplay 负责显示，system_server 负责让容器中的 App"
-                        + "保持前台级进程状态和 Activity 生命周期。");
+                "显示引擎和前台保护彼此独立。"
+                        + "无论使用 Native Freeform 还是 VirtualDisplay，system_server 都继续让"
+                        + "受管 App 保持前台级进程状态和 Activity 生命周期。");
 
         addSwitch(
                 card,
