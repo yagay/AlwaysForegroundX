@@ -414,8 +414,14 @@ final class VirtualDisplayController {
         private WindowManager.LayoutParams windowParams;
         private WindowManager.LayoutParams restoreParams;
 
+        // Visible host window size on display 0.
         private int contentWidth;
         private int contentHeight;
+
+        // Logical/render size seen by the target app on the VirtualDisplay.
+        private int displayWidth;
+        private int displayHeight;
+
         private int titleHeight;
 
         private int savedWindowX;
@@ -468,27 +474,58 @@ final class VirtualDisplayController {
                 densityDpi = Math.max(160, metrics.densityDpi);
                 titleHeight = dp(42);
 
+                int outerMinWidth =
+                        dp(GuardConfig.outerMinWidthDp());
+                int outerMinHeight =
+                        dp(GuardConfig.outerMinHeightDp());
+
                 contentWidth = clamp(
                         metrics.widthPixels
                                 * GuardConfig.containerWidth()
                                 / 100,
-                        dp(260),
-                        Math.max(dp(260),
-                                metrics.widthPixels - dp(20)));
+                        outerMinWidth,
+                        Math.max(
+                                outerMinWidth,
+                                metrics.widthPixels - dp(12)));
 
                 contentHeight = clamp(
                         metrics.heightPixels
                                 * GuardConfig.containerHeight()
                                 / 100,
-                        dp(320),
-                        Math.max(dp(320),
-                                metrics.heightPixels - dp(110)));
+                        outerMinHeight,
+                        Math.max(
+                                outerMinHeight,
+                                metrics.heightPixels - dp(90)));
+
+                if (GuardConfig.fixedInternalDisplay()) {
+                    int scale =
+                            GuardConfig.internalDisplayScale();
+
+                    // Keep the target app on a stable, known-good internal
+                    // canvas. The visible host can be much smaller/larger.
+                    displayWidth = clamp(
+                            metrics.widthPixels * scale / 100,
+                            dp(260),
+                            Math.max(
+                                    dp(260),
+                                    metrics.widthPixels - dp(20)));
+
+                    displayHeight = clamp(
+                            metrics.heightPixels * scale / 100,
+                            dp(320),
+                            Math.max(
+                                    dp(320),
+                                    metrics.heightPixels - dp(110)));
+                } else {
+                    displayWidth = contentWidth;
+                    displayHeight = contentHeight;
+                }
 
                 virtualDisplay =
                         displayManager.createVirtualDisplay(
                                 "MiniWindowGuard-" + session.taskId,
-                                contentWidth,
-                                contentHeight,
+                                displayWidth,
+                                displayHeight,
                                 densityDpi,
                                 null,
                                 VIRTUAL_DISPLAY_FLAGS);
@@ -510,8 +547,12 @@ final class VirtualDisplayController {
                         "pkg=" + session.packageName
                                 + " taskId=" + session.taskId
                                 + " displayId=" + displayId
-                                + " size=" + contentWidth
+                                + " host=" + contentWidth
                                 + "x" + contentHeight
+                                + " internal=" + displayWidth
+                                + "x" + displayHeight
+                                + " fixedInternal="
+                                + GuardConfig.fixedInternalDisplay()
                                 + " density=" + densityDpi
                                 + " flags=" + VIRTUAL_DISPLAY_FLAGS
                                 + " renderer=TextureView"
@@ -585,7 +626,7 @@ final class VirtualDisplayController {
             titleBar.addView(
                     back,
                     new LinearLayout.LayoutParams(
-                            titleHeight,
+                            dp(34),
                             titleHeight));
 
             titleBar.addView(
@@ -598,19 +639,19 @@ final class VirtualDisplayController {
             titleBar.addView(
                     minimize,
                     new LinearLayout.LayoutParams(
-                            titleHeight,
+                            dp(34),
                             titleHeight));
 
             titleBar.addView(
                     hide,
                     new LinearLayout.LayoutParams(
-                            titleHeight,
+                            dp(34),
                             titleHeight));
 
             titleBar.addView(
                     close,
                     new LinearLayout.LayoutParams(
-                            titleHeight,
+                            dp(34),
                             titleHeight));
 
             FrameLayout content =
@@ -925,9 +966,9 @@ final class VirtualDisplayController {
                                     + Math.round(
                                     event.getRawX()
                                             - resizeStartRawX),
-                            dp(240),
+                            dp(GuardConfig.outerMinWidthDp()),
                             Math.max(
-                                    dp(240),
+                                    dp(GuardConfig.outerMinWidthDp()),
                                     metrics.widthPixels - dp(12)));
 
                     contentHeight = clamp(
@@ -935,9 +976,9 @@ final class VirtualDisplayController {
                                     + Math.round(
                                     event.getRawY()
                                             - resizeStartRawY),
-                            dp(280),
+                            dp(GuardConfig.outerMinHeightDp()),
                             Math.max(
-                                    dp(280),
+                                    dp(GuardConfig.outerMinHeightDp()),
                                     metrics.heightPixels - dp(90)));
 
                     // Preview only. TextureView scales the last VirtualDisplay frame.
@@ -986,7 +1027,21 @@ final class VirtualDisplayController {
                 return;
             }
 
+            if (GuardConfig.fixedInternalDisplay()) {
+                log("VD_HOST_RESIZE_ONLY",
+                        "pkg=" + session.packageName
+                                + " displayId=" + displayId
+                                + " host=" + contentWidth
+                                + "x" + contentHeight
+                                + " internal=" + displayWidth
+                                + "x" + displayHeight);
+                return;
+            }
+
             try {
+                displayWidth = Math.max(1, contentWidth);
+                displayHeight = Math.max(1, contentHeight);
+
                 SurfaceTexture texture =
                         textureView == null
                                 ? null
@@ -994,20 +1049,20 @@ final class VirtualDisplayController {
 
                 if (texture != null) {
                     texture.setDefaultBufferSize(
-                            Math.max(1, contentWidth),
-                            Math.max(1, contentHeight));
+                            displayWidth,
+                            displayHeight);
                 }
 
                 virtualDisplay.resize(
-                        Math.max(1, contentWidth),
-                        Math.max(1, contentHeight),
+                        displayWidth,
+                        displayHeight,
                         densityDpi);
 
                 log("VD_RESIZE_COMMIT",
                         "pkg=" + session.packageName
                                 + " displayId=" + displayId
-                                + " size=" + contentWidth
-                                + "x" + contentHeight);
+                                + " internal=" + displayWidth
+                                + "x" + displayHeight);
             } catch (Throwable t) {
                 log("VD_RESIZE_ERROR",
                         "pkg=" + session.packageName
@@ -1071,6 +1126,20 @@ final class VirtualDisplayController {
                 MotionEvent.PointerCoords coord =
                         new MotionEvent.PointerCoords();
                 source.getPointerCoords(i, coord);
+
+                float scaleX =
+                        contentWidth > 0
+                                ? (float) displayWidth
+                                / (float) contentWidth
+                                : 1f;
+                float scaleY =
+                        contentHeight > 0
+                                ? (float) displayHeight
+                                / (float) contentHeight
+                                : 1f;
+
+                coord.x *= scaleX;
+                coord.y *= scaleY;
                 coords[i] = coord;
             }
 
@@ -1117,8 +1186,12 @@ final class VirtualDisplayController {
                     log("VD_INPUT_DOWN",
                             "pkg=" + session.packageName
                                     + " displayId=" + displayId
-                                    + " x=" + source.getX()
-                                    + " y=" + source.getY());
+                                    + " hostX=" + source.getX()
+                                    + " hostY=" + source.getY()
+                                    + " internal="
+                                    + displayWidth + "x" + displayHeight
+                                    + " host="
+                                    + contentWidth + "x" + contentHeight);
                 }
 
                 return true;
@@ -1248,8 +1321,8 @@ final class VirtualDisplayController {
 
             try {
                 texture.setDefaultBufferSize(
-                        Math.max(1, contentWidth),
-                        Math.max(1, contentHeight));
+                        Math.max(1, displayWidth),
+                        Math.max(1, displayHeight));
 
                 if (renderSurface != null) {
                     try {
@@ -1268,7 +1341,9 @@ final class VirtualDisplayController {
                                 + " displayId=" + displayId
                                 + " texture=" + width
                                 + "x" + height
-                                + " buffer=" + contentWidth
+                                + " buffer=" + displayWidth
+                                + "x" + displayHeight
+                                + " host=" + contentWidth
                                 + "x" + contentHeight);
 
                 if (!taskMoved) {
