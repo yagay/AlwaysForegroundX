@@ -6,8 +6,9 @@ import android.os.UserManager;
 import android.util.Log;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.Set;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -21,21 +22,21 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_IMPORTANCE_TOP,
             ConfigKeys.SYSTEM_HAS_RESUMED,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
-            ConfigKeys.OPLUS_FORCE_SUPPORT,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
     private static final String[] INT_KEYS = {
-            ConfigKeys.ENGINE_RELOAD_SEQ,
-            ConfigKeys.OPLUS_COMMAND_STATE,
-            ConfigKeys.OPLUS_COMMAND_SEQ
+            ConfigKeys.ENGINE_RELOAD_SEQ
+    };
+
+    private static final String[] STRING_SET_KEYS = {
+            ConfigKeys.FOREGROUND_PACKAGES,
+            ConfigKeys.FORCE_SUPPORT_PACKAGES
     };
 
     private static volatile GuardApp instance;
     private static volatile XposedService service;
     private static volatile String frameworkName = "";
-    private static final AtomicInteger commandSeq =
-            new AtomicInteger();
 
     @Override
     protected void attachBaseContext(android.content.Context base) {
@@ -47,14 +48,6 @@ public final class GuardApp extends Application {
     public void onCreate() {
         super.onCreate();
         installCrashHandler();
-
-        if (isUserUnlocked()) {
-            commandSeq.set(localPrefs().getInt(
-                    ConfigKeys.OPLUS_COMMAND_SEQ,
-                    0));
-        } else {
-            commandSeq.set(0);
-        }
 
         XposedServiceHelper.registerListener(
                 new XposedServiceHelper.OnServiceListener() {
@@ -313,51 +306,40 @@ public final class GuardApp extends Application {
         syncAll();
     }
 
-    static int getOplusState() {
-        return ConfigKeys.sanitizeState(
-                getInt(
-                        ConfigKeys.OPLUS_COMMAND_STATE));
+    static Set<String> getStringSet(String key) {
+        Set<String> value =
+                localPrefs().getStringSet(
+                        key,
+                        Collections.emptySet());
+        return value == null
+                ? Collections.emptySet()
+                : Collections.unmodifiableSet(
+                new HashSet<>(value));
     }
 
-    static String getOplusPackage() {
-        return getString(
-                ConfigKeys.OPLUS_COMMAND_PACKAGE);
-    }
-
-    static void sendOplusCommand(
-            String packageName,
-            int state
+    static void putStringSet(
+            String key,
+            Set<String> value
     ) {
-        int safeState =
-                ConfigKeys.sanitizeState(state);
-
-        if (isUserUnlocked()) {
-            commandSeq.accumulateAndGet(
-                    getInt(
-                            ConfigKeys.OPLUS_COMMAND_SEQ),
-                    Math::max);
-        }
-
-        int seq = commandSeq.incrementAndGet();
-
         localPrefs()
                 .edit()
-                .putString(
-                        ConfigKeys.OPLUS_COMMAND_PACKAGE,
-                        packageName == null
-                                ? ""
-                                : packageName)
-                .putInt(
-                        ConfigKeys.OPLUS_COMMAND_STATE,
-                        safeState)
-                .putInt(
-                        ConfigKeys.OPLUS_COMMAND_SEQ,
-                        seq)
+                .putStringSet(
+                        key,
+                        value == null
+                                ? Collections.emptySet()
+                                : new HashSet<>(value))
                 .apply();
-
         syncAll();
     }
 
+    static boolean packageSelected(
+            String key,
+            String packageName
+    ) {
+        return packageName != null
+                && getStringSet(key)
+                .contains(packageName);
+    }
 
     static boolean requestEngineReload() {
         int seq = getInt(ConfigKeys.ENGINE_RELOAD_SEQ) + 1;
@@ -374,7 +356,6 @@ public final class GuardApp extends Application {
 
     static void resetDefaults() {
         localPrefs().edit().clear().commit();
-        commandSeq.set(0);
         syncAll();
     }
 
@@ -403,10 +384,12 @@ public final class GuardApp extends Application {
                         getInt(key));
             }
 
-            editor.putString(
-                    ConfigKeys.OPLUS_COMMAND_PACKAGE,
-                    getString(
-                            ConfigKeys.OPLUS_COMMAND_PACKAGE));
+            for (String key : STRING_SET_KEYS) {
+                editor.putStringSet(
+                        key,
+                        new HashSet<>(
+                                getStringSet(key)));
+            }
 
             editor.putString(
                     ConfigKeys.DIAGNOSTICS_STARTED_AT,
