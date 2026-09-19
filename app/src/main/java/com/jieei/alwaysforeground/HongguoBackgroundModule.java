@@ -43,6 +43,7 @@ public final class HongguoBackgroundModule extends XposedModule {
             "com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment";
     private static final String SERIES_LIFECYCLE_OBSERVER =
             "com.dragon.read.component.shortvideo.impl.v2.ShortSeriesSingleFragment$g";
+    private static final String NATIVE_BACKGROUND_PLAYER = "z05.b";
 
     private static final String[] PLAYER_CLASSES = {
             "com.ss.ttvideoengine.TTVideoEngine",
@@ -65,7 +66,10 @@ public final class HongguoBackgroundModule extends XposedModule {
     private volatile boolean firstEpisodeBlockedLogged;
     private volatile boolean firstLandscapeBlockedLogged;
     private volatile boolean firstGenericBlockedLogged;
-    private volatile boolean firstEpisodeP0BlockedLogged;
+    private volatile boolean firstNativeHandoffLogged;
+    private volatile boolean firstNativeResumeLogged;
+    private volatile boolean firstNativeCompleteLogged;
+    private volatile boolean firstNativeNextLogged;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -89,13 +93,12 @@ public final class HongguoBackgroundModule extends XposedModule {
 
         ClassLoader classLoader = param.getClassLoader();
 
-        // Primary, version-resistant path.
+        // Primary strategy: let Hongguo's own series background player own episode continuity.
         installActivityBackgroundTracking();
-        installSeriesBackgroundAutoplayVisibility(classLoader);
+        installNativeSeriesBackgroundDiagnostics(classLoader);
         installStablePlayerEndpoints(classLoader);
 
-        // Current-version compatibility fallbacks.
-        installEpisodeLifecyclePauseFallback(classLoader);
+        // Compatibility fallback for feed/home paths that do not use the native series handoff.
         installPauseOnlyAdapterFallback(classLoader);
 
         log(Log.INFO, TAG, "INSTALLED Hongguo resilient background-play strategy"
@@ -146,39 +149,102 @@ public final class HongguoBackgroundModule extends XposedModule {
     }
 
     /**
-     * Red Fruit 7.3.5.32 series autoplay gate.
+     * Red Fruit 7.3.5.32 has a native series-background handoff:
      *
-     * ShortSeriesSingleFragment implements the short-video page controller. Its no-arg boolean
-     * y4() is logged by the adapter as mPageController.isPageInVisible(). After r5() advances
-     * ViewPager2 to the next episode, background playback will not auto-start if this returns
-     * false. Spoof only this page-visibility query while the app is genuinely backgrounded.
+     * ShortSeriesSingleFragment$g.a (context invisible)
+     *   -> ShortSeriesSingleFragment.P0()      // pause/detach UI player
+     *   -> ShortSeriesSingleFragment.gh()      // move series/player state to z05.b
+     *   -> z05.b.resume()
      *
-     * Unlike ActivityRecordHelper.isForeground(), this does not start/raise an Activity and does
-     * not change navigation. It only keeps the already-open series page eligible for autoplay.
+     * Once handed off, completion is:
+     *   z05.b.U1(...) -> z05.b.playNext()
+     *
+     * These hooks are observation-only. They intentionally never change return values or block
+     * execution; they provide upgrade diagnostics while preserving Hongguo's own background
+     * episode engine.
      */
-    private void installSeriesBackgroundAutoplayVisibility(ClassLoader classLoader) {
+    private void installNativeSeriesBackgroundDiagnostics(ClassLoader classLoader) {
         try {
-            Class<?> clazz = classLoader.loadClass(SERIES_FRAGMENT);
-            Method method = clazz.getDeclaredMethod("y4");
-            if (method.getParameterCount() != 0 || method.getReturnType() != boolean.class) {
-                log(Log.WARN, TAG, "SKIPPED Hongguo series visibility gate: unexpected signature "
-                        + method);
-                return;
-            }
-
-            method.setAccessible(true);
-            hook(method).intercept(chain -> {
-                if (getMode() >= ModeConfig.MODE_STRONG && activityPaused) {
-                    return true;
+            Class<?> fragment = classLoader.loadClass(SERIES_FRAGMENT);
+            Method handoff = fragment.getDeclaredMethod("gh");
+            handoff.setAccessible(true);
+            hook(handoff).intercept(chain -> {
+                Object result = chain.proceed();
+                if (getMode() >= ModeConfig.MODE_STRONG && !firstNativeHandoffLogged) {
+                    firstNativeHandoffLogged = true;
+                    log(Log.INFO, TAG, "HIT Hongguo native series handoff "
+                            + SERIES_FRAGMENT + ".gh");
                 }
-                return chain.proceed();
+                return result;
             });
-
-            log(Log.INFO, TAG, "INSTALLED Hongguo series background autoplay visibility "
-                    + SERIES_FRAGMENT + ".y4");
+            log(Log.INFO, TAG, "INSTALLED Hongguo native series handoff observer "
+                    + SERIES_FRAGMENT + ".gh");
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "SKIPPED Hongguo series background autoplay visibility: " + t, t);
+            log(Log.INFO, TAG, "SKIPPED Hongguo native series handoff observer: " + t);
         }
+
+        try {
+            Class<?> background = classLoader.loadClass(NATIVE_BACKGROUND_PLAYER);
+            hookNativeBackgroundMethod(background, "resume", 0);
+            hookNativeBackgroundMethod(background, "U1", 1);
+            hookNativeBackgroundMethod(background, "playNext", 0);
+        } catch (Throwable t) {
+            log(Log.INFO, TAG, "SKIPPED Hongguo native background player observers: " + t);
+        }
+    }
+
+    private void hookNativeBackgroundMethod(Class<?> clazz, String name, int parameterCount) {
+        for (Method method : clazz.getDeclaredMethods()) {
+            if (!name.equals(method.getName())) continue;
+            if (method.getParameterCount() != parameterCount) continue;
+            try {
+                method.setAccessible(true);
+                hook(method).intercept(chain -> {
+                    if (getMode() >= ModeConfig.MODE_STRONG) {
+                        if ("resume".equals(name) && !firstNativeResumeLogged) {
+                            firstNativeResumeLogged = true;
+                            log(Log.INFO, TAG, "HIT Hongguo native background player resume");
+                        } else if ("U1".equals(name) && !firstNativeCompleteLogged) {
+                            firstNativeCompleteLogged = true;
+                            log(Log.INFO, TAG, "HIT Hongguo native background episode complete");
+                        } else if ("playNext".equals(name) && !firstNativeNextLogged) {
+                            firstNativeNextLogged = true;
+                            log(Log.INFO, TAG, "HIT Hongguo native background playNext");
+                        }
+                    }
+                    return chain.proceed();
+                });
+                log(Log.INFO, TAG, "INSTALLED Hongguo native background observer "
+                        + NATIVE_BACKGROUND_PLAYER + "." + name);
+            } catch (Throwable t) {
+                log(Log.INFO, TAG, "SKIPPED Hongguo native background observer "
+                        + NATIVE_BACKGROUND_PLAYER + "." + name + ": " + t);
+            }
+        }
+    }
+
+    /**
+     * True only for the deliberate series-page handoff from the UI player to z05.b.
+     * Any pause on this stack MUST be allowed; blocking it leaves the UI player alive and prevents
+     * z05.b from becoming the owner that can play subsequent episodes in the background.
+     */
+    private static boolean isNativeSeriesHandoffPause() {
+        boolean contextInvisible = false;
+        boolean uiPause = false;
+
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            String cls = frame.getClassName();
+            String method = frame.getMethodName();
+
+            if (SERIES_LIFECYCLE_OBSERVER.equals(cls) && "a".equals(method)) {
+                contextInvisible = true;
+            }
+            if (SERIES_FRAGMENT.equals(cls) && "P0".equals(method)) {
+                uiPause = true;
+            }
+        }
+
+        return contextInvisible && uiPause;
     }
 
     /**
@@ -258,6 +324,11 @@ public final class HongguoBackgroundModule extends XposedModule {
                     }
                 }
 
+                // Never suppress Hongguo's own series UI -> z05.b handoff pause.
+                if (isNativeSeriesHandoffPause()) {
+                    return chain.proceed();
+                }
+
                 int explicitPath = backgroundPausePath();
                 boolean stableBackgroundCause = isRecentBackgroundTransition();
 
@@ -329,49 +400,6 @@ public final class HongguoBackgroundModule extends XposedModule {
     }
 
     /**
-     * Red Fruit 7.3.5.32 fallback:
-     * ShortSeriesSingleFragment$g.a / onStop -> P0 -> adapter -> player.pause().
-     *
-     * Kept intentionally as a fallback. If P0 is renamed later, the stable lifecycle/player
-     * strategy above continues to work.
-     */
-    private void installEpisodeLifecyclePauseFallback(ClassLoader classLoader) {
-        try {
-            Class<?> clazz = classLoader.loadClass(SERIES_FRAGMENT);
-            Method method = clazz.getDeclaredMethod("P0");
-            if (method.getParameterCount() != 0 || method.getReturnType() != void.class) {
-                return;
-            }
-
-            method.setAccessible(true);
-            hook(method).intercept(chain -> {
-                if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
-
-                int source = episodeP0BackgroundSource();
-                // P0 is also used while replacing an episode Fragment. Never block it solely
-                // because its caller is onStop/lifecycle; require the app-level background
-                // transition marker so autoplay/next-episode remains intact.
-                if (!isRecentBackgroundTransition()) {
-                    return chain.proceed();
-                }
-
-                if (!firstEpisodeP0BlockedLogged) {
-                    firstEpisodeP0BlockedLogged = true;
-                    log(Log.INFO, TAG, "HIT Hongguo episode P0 fallback blocked"
-                            + " source=" + source
-                            + " package=" + HONGGUO_PACKAGE);
-                }
-                return null;
-            });
-
-            log(Log.INFO, TAG, "INSTALLED Hongguo episode P0 fallback "
-                    + SERIES_FRAGMENT + ".P0");
-        } catch (Throwable t) {
-            log(Log.INFO, TAG, "SKIPPED Hongguo episode P0 fallback: " + t);
-        }
-    }
-
-    /**
      * Secondary fallback for current builds where adapter.a.x() is a pause-only method.
      */
     private void installPauseOnlyAdapterFallback(ClassLoader classLoader) {
@@ -385,6 +413,12 @@ public final class HongguoBackgroundModule extends XposedModule {
             method.setAccessible(true);
             hook(method).intercept(chain -> {
                 if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
+
+                // The series background handoff intentionally pauses the UI adapter before
+                // transferring ownership to z05.b. Let that pause happen.
+                if (isNativeSeriesHandoffPause()) {
+                    return chain.proceed();
+                }
 
                 int path = backgroundPausePath();
                 // adapter.a.x() is reached during normal episode replacement too. Restrict this
@@ -498,32 +532,6 @@ public final class HongguoBackgroundModule extends XposedModule {
         if (landscapePause && (fragmentPause || fragmentStop)) return 3;
         if ((fragmentPause || fragmentStop) && shortVideoLifecycle) return 4;
 
-        return 0;
-    }
-
-    /**
-     * @return 0 = unrelated P0 call, 1 = lifecycle observer, 2 = Fragment.onStop.
-     */
-    private static int episodeP0BackgroundSource() {
-        boolean lifecyclePause = false;
-        boolean fragmentStop = false;
-
-        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
-            String cls = frame.getClassName();
-            String method = frame.getMethodName();
-
-            if ((SERIES_LIFECYCLE_OBSERVER.equals(cls) && "a".equals(method))
-                    || ("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))) {
-                lifecyclePause = true;
-            }
-
-            if (SERIES_FRAGMENT.equals(cls) && "onStop".equals(method)) {
-                fragmentStop = true;
-            }
-        }
-
-        if (lifecyclePause) return 1;
-        if (fragmentStop) return 2;
         return 0;
     }
 
