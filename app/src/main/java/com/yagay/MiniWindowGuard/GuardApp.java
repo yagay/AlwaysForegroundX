@@ -24,7 +24,8 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
             ConfigKeys.AUTO_CONTAINER,
-            ConfigKeys.FIXED_INTERNAL_DISPLAY,
+            ConfigKeys.SAFE_INITIAL_DISPLAY,
+            ConfigKeys.FOLLOW_WINDOW_AFTER_START,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
@@ -32,6 +33,7 @@ public final class GuardApp extends Application {
             ConfigKeys.CONTAINER_WIDTH,
             ConfigKeys.CONTAINER_HEIGHT,
             ConfigKeys.INTERNAL_DISPLAY_SCALE,
+            ConfigKeys.STARTUP_SETTLE_MS,
             ConfigKeys.OUTER_MIN_WIDTH_DP,
             ConfigKeys.OUTER_MIN_HEIGHT_DP,
             ConfigKeys.ENGINE_RELOAD_SEQ,
