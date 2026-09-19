@@ -58,14 +58,14 @@ final class DiagnosticsManager {
         Log.i(TAG, "DIAG_SESSION START"
                 + " epochMs=" + started
                 + " package=" + GuardApp.getString(
-                        ConfigKeys.CONTAINER_COMMAND_PACKAGE));
+                        ConfigKeys.OPLUS_COMMAND_PACKAGE));
     }
 
     static void stopSession() {
         Log.i(TAG, "DIAG_SESSION STOP"
                 + " epochMs=" + System.currentTimeMillis()
                 + " package=" + GuardApp.getString(
-                        ConfigKeys.CONTAINER_COMMAND_PACKAGE));
+                        ConfigKeys.OPLUS_COMMAND_PACKAGE));
         GuardApp.putBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE, false);
     }
 
@@ -263,22 +263,19 @@ final class DiagnosticsManager {
         }
         out.append(ConfigKeys.ENGINE_RELOAD_SEQ).append('=')
                 .append(GuardApp.getInt(ConfigKeys.ENGINE_RELOAD_SEQ)).append('\n');
-        out.append(ConfigKeys.CONTAINER_WIDTH).append('=')
-                .append(GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH)).append('\n');
-        out.append(ConfigKeys.CONTAINER_HEIGHT).append('=')
-                .append(GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT)).append('\n');
-        out.append(ConfigKeys.CONTAINER_COMMAND_PACKAGE).append('=')
-                .append(GuardApp.getString(ConfigKeys.CONTAINER_COMMAND_PACKAGE)).append('\n');
-        out.append(ConfigKeys.CONTAINER_COMMAND_STATE).append('=')
-                .append(GuardApp.getInt(ConfigKeys.CONTAINER_COMMAND_STATE)).append('\n');
-        out.append(ConfigKeys.CONTAINER_COMMAND_SEQ).append('=')
-                .append(GuardApp.getInt(ConfigKeys.CONTAINER_COMMAND_SEQ)).append('\n');
+
+        out.append(ConfigKeys.OPLUS_COMMAND_PACKAGE).append('=')
+                .append(GuardApp.getString(ConfigKeys.OPLUS_COMMAND_PACKAGE)).append('\n');
+        out.append(ConfigKeys.OPLUS_COMMAND_STATE).append('=')
+                .append(GuardApp.getInt(ConfigKeys.OPLUS_COMMAND_STATE)).append('\n');
+        out.append(ConfigKeys.OPLUS_COMMAND_SEQ).append('=')
+                .append(GuardApp.getInt(ConfigKeys.OPLUS_COMMAND_SEQ)).append('\n');
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
-        out.append("31-logcat-filtered.txt: VirtualDisplay/surface/input/focus/lifecycle/audio focused view\n");
+        out.append("31-logcat-filtered.txt: OPlus FlexibleWindow/task/foreground/cleanup focused view\n");
         out.append("11-24: system state snapshots + LSPosed file/log capture\n");
-        out.append("targets/: package/appops/standby/meminfo for the last window package\n");
+        out.append("targets/: package/appops/standby/meminfo for the last OPlus window package\n");
 
         return out.toString();
     }
@@ -289,11 +286,8 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.ENGINE_AUTO_RELOAD);
         keys.add(ConfigKeys.SYSTEM_IMPORTANCE_TOP);
         keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
-        keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
-        keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
-        keys.add(ConfigKeys.AUTO_CONTAINER);
-        keys.add(ConfigKeys.OPLUS_SYSTEM_WINDOW);
+        keys.add(ConfigKeys.OPLUS_FORCE_SUPPORT);
         return keys;
     }
 
@@ -308,28 +302,16 @@ final class DiagnosticsManager {
                 "ActivityManager",
                 "WindowManager",
                 "MiniWindowGuard",
-                "CONTAINER",
-                "VirtualDisplay",
-                "VD_",
                 "OPLUS_",
                 "OplusActivityTaskManager",
                 "FlexibleWindowManager",
                 "FlexibleWindowManagerService",
                 "FlexibleTaskController",
                 "FlexibleWindowUtils",
-                "VD_FOCUS",
-                "VD_INPUT_DOWN",
-                "VD_SURFACE_READY",
-                "VD_SURFACE_LOST",
-                "DisplayManager",
-                "DisplayDevice",
-                "moveRootTaskToDisplay",
+                "FloatHandleController",
+                "OplusFlexibleWindowMinimizedManagerHelper",
+                "TaskOrganizerController",
                 "InputDispatcher",
-                "InputManager",
-                "OWN_FOCUS",
-                "FLAG_OWN_FOCUS",
-                "NOT_FOCUSABLE",
-                "TaskSurface",
                 "SurfaceControl",
                 "OplusHans",
                 "Athena",
@@ -373,7 +355,7 @@ final class DiagnosticsManager {
     private static Set<String> diagnosticPackages() {
         LinkedHashSet<String> result = new LinkedHashSet<>();
         String pkg = GuardApp.getString(
-                ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+                ConfigKeys.OPLUS_COMMAND_PACKAGE);
         if (pkg != null && !pkg.isBlank()) {
             result.add(pkg.trim());
         }
