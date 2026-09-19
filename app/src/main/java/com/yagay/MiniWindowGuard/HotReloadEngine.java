@@ -6,27 +6,20 @@ import android.os.Handler;
 import android.util.Log;
 
 /**
- * Dynamically loaded engine body.
+ * Dynamically loaded OPlus flexible-window engine.
  *
- * This class intentionally has no dependency on libxposed APIs. The fixed
- * system_server bootstrap loads it from the currently installed APK and calls
- * it only through reflection, so replacing the APK can replace this engine
- * without restarting system_server.
+ * Window creation, rendering, resize, minimize and input are all owned by
+ * OxygenOS/ColorOS. MiniWindowGuard only requests/observes the OEM window and
+ * exposes its live state to the fixed system_server bootstrap.
  */
 public final class HotReloadEngine {
     private static final String TAG = "MiniWindowGuardEngine";
     private static final int BOOTSTRAP_API_REQUIRED = 1;
 
-    private Handler handler;
-    private Context context;
-    private SharedPreferences prefs;
-    private OplusFlexibleWindowController oplusContainer;
-    private VirtualDisplayController virtualContainer;
-    private volatile boolean usingOplus;
+    private OplusFlexibleWindowController controller;
     private volatile boolean started;
 
-    public HotReloadEngine() {
-    }
+    public HotReloadEngine() {}
 
     public synchronized void start(
             Handler handler,
@@ -35,58 +28,36 @@ public final class HotReloadEngine {
     ) {
         if (started) return;
 
-        this.handler = handler;
-        this.context = context;
-        this.prefs = prefs;
-
         GuardConfig.initialize(prefs);
 
-        usingOplus =
-                GuardConfig.useOplusSystemWindow();
-
-        if (usingOplus) {
-            oplusContainer =
-                    new OplusFlexibleWindowController(
-                            handler,
-                            context,
-                            this::engineLog);
-            oplusContainer.start();
-        } else {
-            virtualContainer =
-                    new VirtualDisplayController(
-                            handler,
-                            context,
-                            this::engineLog);
-            virtualContainer.start();
-        }
+        controller = new OplusFlexibleWindowController(
+                handler,
+                context,
+                this::engineLog);
+        controller.start();
 
         started = true;
 
-        engineLog("ENGINE_START",
+        engineLog(
+                "ENGINE_START",
                 "version=" + versionCode()
+                        + " backend=OPlusFlexibleWindow"
                         + " bootstrapApiRequired="
-                        + bootstrapApiRequired()
-                        + " backend="
-                        + (usingOplus
-                        ? "OPlusFlexibleWindow"
-                        : "VirtualDisplay"));
+                        + bootstrapApiRequired());
     }
 
     public synchronized void stop() {
         if (!started) return;
 
         try {
-            if (oplusContainer != null) {
-                oplusContainer.shutdown();
-            }
-            if (virtualContainer != null) {
-                virtualContainer.shutdown();
+            if (controller != null) {
+                controller.shutdown();
             }
         } finally {
-            oplusContainer = null;
-            virtualContainer = null;
+            controller = null;
             started = false;
-            engineLog("ENGINE_STOP",
+            engineLog(
+                    "ENGINE_STOP",
                     "version=" + versionCode());
         }
     }
@@ -111,96 +82,29 @@ public final class HotReloadEngine {
         return GuardConfig.bool(key);
     }
 
-    public boolean isManagedPackage(String packageName) {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            return current != null
-                    && current.isManagedPackage(
-                    packageName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
-        return current != null
-                && current.isManagedPackage(
-                packageName);
-    }
-
-    public boolean isManagedTopActivityRecord(
-            Object activityRecord
-    ) {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            return current != null
-                    && current.isManagedTopActivityRecord(
-                    activityRecord);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
-        return current != null
-                && current.isManagedTopActivityRecord(
-                activityRecord);
-    }
-
-    public int stateForPackage(String packageName) {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            return current == null
-                    ? ConfigKeys.STATE_RELEASED
-                    : current.stateForPackage(
-                    packageName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
-        return current == null
-                ? ConfigKeys.STATE_RELEASED
-                : current.stateForPackage(
-                packageName);
-    }
-
     public boolean wantsPackage(String packageName) {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            return current != null
-                    && current.wantsPackage(
-                    packageName);
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+        OplusFlexibleWindowController current = controller;
         return current != null
-                && current.wantsPackage(
-                packageName);
+                && current.wantsPackage(packageName);
+    }
+
+    public boolean isKnownPackage(String packageName) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isKnownPackage(packageName);
+    }
+
+    public boolean isManagedPackage(String packageName) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isProtectedPackage(packageName);
     }
 
     public void capture(
             Object activityRecord,
             String packageName
     ) {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            if (current != null) {
-                current.capture(
-                        activityRecord,
-                        packageName);
-            }
-            return;
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+        OplusFlexibleWindowController current = controller;
         if (current != null) {
             current.capture(
                     activityRecord,
@@ -208,48 +112,39 @@ public final class HotReloadEngine {
         }
     }
 
-    public String managedPackageForProcess(
-            String processName
-    ) {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            return current == null
-                    ? null
-                    : current.managedPackageForProcess(
-                    processName);
+    public void onOplusTaskInfoChanged(Object taskInfo) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onOplusTaskInfoChanged(taskInfo);
         }
+    }
 
-        VirtualDisplayController current =
-                virtualContainer;
+    public void onOplusTaskVanished(Object taskInfo) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onOplusTaskVanished(taskInfo);
+        }
+    }
 
+    public String managedPackageForProcess(String processName) {
+        OplusFlexibleWindowController current = controller;
         return current == null
                 ? null
-                : current.managedPackageForProcess(
+                : current.protectedPackageForProcess(
                 processName);
     }
 
     public int activeSessionCount() {
-        if (usingOplus) {
-            OplusFlexibleWindowController current =
-                    oplusContainer;
-            return current == null
-                    ? 0
-                    : current.activeSessionCount();
-        }
-
-        VirtualDisplayController current =
-                virtualContainer;
-
+        OplusFlexibleWindowController current = controller;
         return current == null
                 ? 0
                 : current.activeSessionCount();
     }
 
     private void engineLog(String event, String detail) {
-        Log.i(TAG,
-                event
-                        + " "
+        Log.i(
+                TAG,
+                event + " "
                         + (detail == null ? "" : detail));
     }
 }
