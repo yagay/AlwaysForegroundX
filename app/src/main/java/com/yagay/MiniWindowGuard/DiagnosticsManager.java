@@ -263,6 +263,12 @@ final class DiagnosticsManager {
         }
         out.append(ConfigKeys.ENGINE_RELOAD_SEQ).append('=')
                 .append(GuardApp.getInt(ConfigKeys.ENGINE_RELOAD_SEQ)).append('\n');
+        out.append(ConfigKeys.INTERNAL_DISPLAY_SCALE).append('=')
+                .append(GuardApp.getInt(ConfigKeys.INTERNAL_DISPLAY_SCALE)).append('\n');
+        out.append(ConfigKeys.OUTER_MIN_WIDTH_DP).append('=')
+                .append(GuardApp.getInt(ConfigKeys.OUTER_MIN_WIDTH_DP)).append('\n');
+        out.append(ConfigKeys.OUTER_MIN_HEIGHT_DP).append('=')
+                .append(GuardApp.getInt(ConfigKeys.OUTER_MIN_HEIGHT_DP)).append('\n');
         out.append(ConfigKeys.CONTAINER_WIDTH).append('=')
                 .append(GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH)).append('\n');
         out.append(ConfigKeys.CONTAINER_HEIGHT).append('=')
@@ -293,6 +299,7 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
         keys.add(ConfigKeys.AUTO_CONTAINER);
+        keys.add(ConfigKeys.FIXED_INTERNAL_DISPLAY);
         return keys;
     }
 
