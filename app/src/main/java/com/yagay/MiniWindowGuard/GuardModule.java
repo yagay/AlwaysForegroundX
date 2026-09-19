@@ -57,7 +57,7 @@ public final class GuardModule extends XposedModule {
         systemClassLoader = param.getClassLoader();
         Handler handler = new Handler(Looper.getMainLooper());
 
-        Context context = resolveSystemContext(systemClassLoader);
+        Context context = resolveSystemUiContext(systemClassLoader);
 
         container = new TaskSurfaceController(
                 handler,
@@ -68,17 +68,16 @@ public final class GuardModule extends XposedModule {
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
-        installTaskFreeformHooks(systemClassLoader);
         installTaskFragmentHooks(systemClassLoader);
         installWindowTokenHooks(systemClassLoader);
         installRemovedTaskServiceGuard(systemClassLoader);
         installProcessKillGuard(systemClassLoader);
 
-        log(Log.INFO, TAG, "SYSTEM_SCOPE TaskSurface engine ready in system_server");
+        log(Log.INFO, TAG, "SYSTEM_SCOPE VirtualDisplay engine ready in system_server");
         diag("ENGINE_READY",
-                "targets=" + GuardConfig.targetPackages()
+                "backend=VirtualDisplay"
                         + " hooks=" + installedHooks.size()
-                        + " systemContext=" + (context != null));
+                        + " systemUiContext=" + (context != null));
 
         scheduleEngineHeartbeat(handler);
     }
@@ -88,9 +87,11 @@ public final class GuardModule extends XposedModule {
     }
 
     private boolean isTargetPackage(String packageName) {
+        TaskSurfaceController current = container;
         return packageName != null
                 && enabled()
-                && GuardConfig.isTargetPackage(packageName);
+                && current != null
+                && current.isManagedPackage(packageName);
     }
 
     private boolean isTargetUid(int uid) {
@@ -104,7 +105,7 @@ public final class GuardModule extends XposedModule {
         if (packages == null) return false;
 
         for (String pkg : packages) {
-            if (GuardConfig.isTargetPackage(pkg)) return true;
+            if (isTargetPackage(pkg)) return true;
         }
         return false;
     }
@@ -251,41 +252,6 @@ public final class GuardModule extends XposedModule {
 
         for (Method method : record.getDeclaredMethods()) {
             String name = method.getName();
-
-            if (("supportsFreeform".equals(name)
-                    || "supportsFreeformInDisplayArea".equals(name)
-                    || "isResizeable".equals(name))
-                    && method.getReturnType() == boolean.class) {
-                try {
-                    method.setAccessible(true);
-                    if (!installedHooks.add(method.toGenericString())) continue;
-
-                    hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
-                        if (!enabled()
-                                || current == null
-                                || !current.isManagedTopActivityRecord(
-                                        chain.getThisObject())) {
-                            return chain.proceed();
-                        }
-
-                        String pkg = activityPackage(chain.getThisObject());
-                        diag("ACTIVITY_FREEFORM_FORCE",
-                                "pkg=" + pkg
-                                        + " method=" + name
-                                        + " forced=true");
-                        return true;
-                    });
-                    log(Log.INFO, TAG,
-                            "SYSTEM_SCOPE installed ActivityRecord." + name);
-                } catch (Throwable t) {
-                    installedHooks.remove(method.toGenericString());
-                    log(Log.WARN, TAG,
-                            "SYSTEM_SCOPE skipped ActivityRecord."
-                                    + name + " error=" + t);
-                }
-                continue;
-            }
 
             if ("shouldPauseActivity".equals(name)
                     && method.getReturnType() == boolean.class) {
@@ -539,10 +505,9 @@ public final class GuardModule extends XposedModule {
 
                         Object activityRecord = chain.getThisObject();
                         String pkg = activityPackage(activityRecord);
-                        if (!isTargetPackage(pkg)) return result;
 
                         TaskSurfaceController current = container;
-                        if (current != null) {
+                        if (current != null && current.wantsPackage(pkg)) {
                             current.capture(activityRecord, pkg);
                         }
                         return result;
@@ -554,48 +519,6 @@ public final class GuardModule extends XposedModule {
                     log(Log.WARN, TAG,
                             "SYSTEM_SCOPE skipped ActivityRecord.setState error=" + t);
                 }
-            }
-        }
-    }
-
-
-    private void installTaskFreeformHooks(ClassLoader loader) {
-        Class<?> task = load(loader, "com.android.server.wm.Task");
-        if (task == null) return;
-
-        for (Method method : task.getDeclaredMethods()) {
-            String name = method.getName();
-            if (!("supportsFreeform".equals(name)
-                    || "supportsFreeformInDisplayArea".equals(name)
-                    || "isResizeable".equals(name))
-                    || method.getReturnType() != boolean.class) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-                if (!installedHooks.add(method.toGenericString())) continue;
-
-                hook(method).intercept(chain -> {
-                    TaskSurfaceController current = container;
-                    if (!enabled()
-                            || current == null
-                            || !current.isManagedTask(chain.getThisObject())) {
-                        return chain.proceed();
-                    }
-
-                    diag("TASK_FREEFORM_FORCE",
-                            "method=" + name + " forced=true");
-                    return true;
-                });
-
-                log(Log.INFO, TAG,
-                        "SYSTEM_SCOPE installed Task." + name);
-            } catch (Throwable t) {
-                installedHooks.remove(method.toGenericString());
-                log(Log.WARN, TAG,
-                        "SYSTEM_SCOPE skipped Task."
-                                + name + " error=" + t);
             }
         }
     }
@@ -1101,6 +1024,32 @@ public final class GuardModule extends XposedModule {
                 }
             }
         }, 2_000L);
+    }
+
+    private Context resolveSystemUiContext(ClassLoader loader) {
+        try {
+            Class<?> activityThread = Class.forName(
+                    "android.app.ActivityThread", false, loader);
+            Method current = activityThread.getDeclaredMethod(
+                    "currentActivityThread");
+            current.setAccessible(true);
+            Object thread = current.invoke(null);
+
+            if (thread != null) {
+                try {
+                    Method getSystemUiContext =
+                            activityThread.getDeclaredMethod("getSystemUiContext");
+                    getSystemUiContext.setAccessible(true);
+                    Object value = getSystemUiContext.invoke(thread);
+                    if (value instanceof Context) return (Context) value;
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            diag("SYSTEM_UI_CONTEXT_FAIL", String.valueOf(t));
+        }
+
+        return resolveSystemContext(loader);
     }
 
     private Context resolveSystemContext(ClassLoader loader) {
