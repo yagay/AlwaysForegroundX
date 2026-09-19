@@ -224,7 +224,11 @@ public final class HongguoBackgroundModule extends XposedModule {
                 int explicitPath = backgroundPausePath();
                 boolean stableBackgroundCause = isRecentBackgroundTransition();
 
-                if (!stableBackgroundCause && explicitPath == 0) {
+                // Do not use Fragment/P0 lifecycle evidence by itself. Episode-to-episode
+                // transitions also stop/pause the previous Fragment and must be allowed so
+                // autoplay can advance. Only an actual recent Activity background transition
+                // authorizes suppressing the player pause.
+                if (!stableBackgroundCause) {
                     return chain.proceed();
                 }
 
@@ -307,7 +311,10 @@ public final class HongguoBackgroundModule extends XposedModule {
                 if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
 
                 int source = episodeP0BackgroundSource();
-                if (source == 0 && !isRecentBackgroundTransition()) {
+                // P0 is also used while replacing an episode Fragment. Never block it solely
+                // because its caller is onStop/lifecycle; require the app-level background
+                // transition marker so autoplay/next-episode remains intact.
+                if (!isRecentBackgroundTransition()) {
                     return chain.proceed();
                 }
 
@@ -343,7 +350,9 @@ public final class HongguoBackgroundModule extends XposedModule {
                 if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
 
                 int path = backgroundPausePath();
-                if (path == 0 && !isRecentBackgroundTransition()) {
+                // adapter.a.x() is reached during normal episode replacement too. Restrict this
+                // fallback to the app-level background transition window.
+                if (!isRecentBackgroundTransition()) {
                     return chain.proceed();
                 }
 
