@@ -46,10 +46,14 @@ final class OplusFlexibleWindowController {
     private final Logger logger;
     private final Map<Integer, Session> sessions =
             new ConcurrentHashMap<>();
+    private final Map<String, Boolean> backgroundNotificationStates =
+            new ConcurrentHashMap<>();
 
     private volatile Context systemContext;
     private volatile boolean running;
     private volatile boolean keyguardShowing;
+    private volatile String focusedPackage;
+    private volatile boolean focusKnown;
     private volatile AudioManager audioManager;
     private volatile boolean audioCallbackRegistered;
 
@@ -62,13 +66,9 @@ final class OplusFlexibleWindowController {
                 ) {
                     if (!running) return;
 
-                    for (Session session :
-                            sessions.values()) {
-                        updateBackgroundNotification(
-                                session,
-                                configs,
-                                "audio-callback");
-                    }
+                    updateAllBackgroundNotifications(
+                            configs,
+                            "audio-callback");
                 }
             };
 
@@ -108,10 +108,19 @@ final class OplusFlexibleWindowController {
     void shutdown() {
         running = false;
 
-        for (Session session :
-                sessions.values()) {
+        for (String packageName :
+                GuardConfig.stringSet(
+                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)) {
             setBackgroundNotification(
-                    session,
+                    packageName,
+                    false,
+                    "engine-shutdown");
+        }
+
+        for (String packageName :
+                backgroundNotificationStates.keySet()) {
+            setBackgroundNotification(
+                    packageName,
                     false,
                     "engine-shutdown");
         }
@@ -418,6 +427,10 @@ final class OplusFlexibleWindowController {
                 session,
                 "task-info");
 
+        updateAllBackgroundNotifications(
+                null,
+                "task-info");
+
         log(
                 "OPLUS_TASK_INFO",
                 "pkg=" + session.packageName
@@ -605,6 +618,12 @@ final class OplusFlexibleWindowController {
     ) {
         keyguardShowing = showing;
 
+        updateAllBackgroundNotifications(
+                null,
+                showing
+                        ? "keyguard-showing"
+                        : "keyguard-hidden");
+
         if (showing) {
             for (Session session :
                     sessions.values()) {
@@ -771,6 +790,19 @@ final class OplusFlexibleWindowController {
     ) {
         if (activityRecord == null) return;
 
+        String newFocusedPackage =
+                objectPackage(
+                        activityRecord);
+
+        if (newFocusedPackage != null) {
+            focusedPackage = newFocusedPackage;
+            focusKnown = true;
+
+            updateAllBackgroundNotifications(
+                    null,
+                    "focus=" + newFocusedPackage);
+        }
+
         Object task =
                 activityTask(
                         activityRecord);
@@ -886,18 +918,80 @@ final class OplusFlexibleWindowController {
     ) {
         if (session == null) return;
 
+        updateBackgroundNotification(
+                session.packageName,
+                configs,
+                reason);
+    }
+
+    private void updateAllBackgroundNotifications(
+            List<AudioPlaybackConfiguration> configs,
+            String reason
+    ) {
+        for (String packageName :
+                GuardConfig.stringSet(
+                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)) {
+            updateBackgroundNotification(
+                    packageName,
+                    configs,
+                    reason);
+        }
+
+        for (String packageName :
+                backgroundNotificationStates.keySet()) {
+            if (!GuardConfig.backgroundPlaybackPackage(
+                    packageName)) {
+                setBackgroundNotification(
+                        packageName,
+                        false,
+                        "removed-from-list");
+            }
+        }
+    }
+
+    private void updateBackgroundNotification(
+            String packageName,
+            List<AudioPlaybackConfiguration> configs,
+            String reason
+    ) {
+        if (packageName == null
+                || packageName.isBlank()) {
+            return;
+        }
+
         boolean shouldShow =
-                session.active
-                        && session.backgroundProtected
-                        && session.backgroundNotificationEligible
+                focusKnown
+                        && !keyguardShowing
+                        && !packageName.equals(
+                                focusedPackage)
+                        && !hasNativeOplusWindowForPackage(
+                                packageName)
                         && isPackagePlaybackActive(
-                                session.packageName,
+                                packageName,
                                 configs);
 
         setBackgroundNotification(
-                session,
+                packageName,
                 shouldShow,
                 reason);
+    }
+
+    private boolean hasNativeOplusWindowForPackage(
+            String packageName
+    ) {
+        for (Session session :
+                sessions.values()) {
+            if (session != null
+                    && session.active
+                    && packageName.equals(
+                            session.packageName)
+                    && isNativeOplusWindow(
+                            session)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean isPackagePlaybackActive(
@@ -1007,9 +1101,30 @@ final class OplusFlexibleWindowController {
             boolean active,
             String reason
     ) {
-        if (session == null
-                || session.notificationVisible
-                == active) {
+        if (session == null) return;
+
+        setBackgroundNotification(
+                session.packageName,
+                active,
+                reason);
+    }
+
+    private void setBackgroundNotification(
+            String packageName,
+            boolean active,
+            String reason
+    ) {
+        if (packageName == null
+                || packageName.isBlank()) {
+            return;
+        }
+
+        boolean visible =
+                Boolean.TRUE.equals(
+                        backgroundNotificationStates
+                                .get(packageName));
+
+        if (visible == active) {
             return;
         }
 
@@ -1024,7 +1139,7 @@ final class OplusFlexibleWindowController {
 
             extras.putString(
                     KEY_PACKAGE_NAME,
-                    session.packageName);
+                    packageName);
             extras.putBoolean(
                     KEY_ACTIVE,
                     active);
@@ -1036,21 +1151,30 @@ final class OplusFlexibleWindowController {
                             null,
                             extras);
 
-            session.notificationVisible = active;
+            if (active) {
+                backgroundNotificationStates.put(
+                        packageName,
+                        true);
+            } else {
+                backgroundNotificationStates.remove(
+                        packageName);
+            }
 
             log(
                     active
                             ? "BACKGROUND_NOTIFICATION_SHOW"
                             : "BACKGROUND_NOTIFICATION_HIDE",
-                    "pkg=" + session.packageName
-                            + " taskId="
-                            + session.taskId
+                    "pkg=" + packageName
+                            + " focused="
+                            + focusedPackage
+                            + " keyguard="
+                            + keyguardShowing
                             + " reason="
                             + reason);
         } catch (Throwable t) {
             log(
                     "BACKGROUND_NOTIFICATION_ERROR",
-                    "pkg=" + session.packageName
+                    "pkg=" + packageName
                             + " active=" + active
                             + " error="
                             + t.getClass()
@@ -1953,7 +2077,6 @@ final class OplusFlexibleWindowController {
         volatile boolean lockKeepAlive;
         volatile boolean backgroundProtected;
         volatile boolean backgroundNotificationEligible;
-        volatile boolean notificationVisible;
 
         volatile long lastOplusStateElapsed;
         volatile long lastSeenElapsed =
