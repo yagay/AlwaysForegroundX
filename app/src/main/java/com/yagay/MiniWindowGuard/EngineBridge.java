@@ -561,42 +561,38 @@ final class EngineBridge {
         }
 
         @Override
-        protected Class<?> loadClass(
+        protected synchronized Class<?> loadClass(
                 String name,
                 boolean resolve
         ) throws ClassNotFoundException {
-            synchronized (
-                    getClassLoadingLock(
-                            name)) {
-                Class<?> loaded =
-                        findLoadedClass(
-                                name);
+            Class<?> loaded =
+                    findLoadedClass(
+                            name);
 
-                if (loaded == null
-                        && name.startsWith(
-                                RELOADABLE_PREFIX)) {
-                    try {
-                        loaded =
-                                findClass(
-                                        name);
-                    } catch (ClassNotFoundException ignored) {
-                    }
-                }
-
-                if (loaded == null) {
+            if (loaded == null
+                    && name.startsWith(
+                            RELOADABLE_PREFIX)) {
+                try {
                     loaded =
-                            super.loadClass(
-                                    name,
-                                    false);
+                            findClass(
+                                    name);
+                } catch (ClassNotFoundException ignored) {
                 }
-
-                if (resolve) {
-                    resolveClass(
-                            loaded);
-                }
-
-                return loaded;
             }
+
+            if (loaded == null) {
+                loaded =
+                        super.loadClass(
+                                name,
+                                false);
+            }
+
+            if (resolve) {
+                resolveClass(
+                        loaded);
+            }
+
+            return loaded;
         }
     }
 
