@@ -14,6 +14,7 @@ public final class ModeConfig {
     public static final String KEY_SMALL_WINDOW_FORM = "small_window_form";
     public static final String KEY_SMALL_WINDOW_WIDTH = "small_window_width";
     public static final String KEY_SMALL_WINDOW_HEIGHT = "small_window_height";
+    public static final String KEY_ROOT_BRIDGE_TOKEN = "root_bridge_token";
 
     public static final int SMALL_WINDOW_FORM_WINDOW = 1;
     public static final int SMALL_WINDOW_FORM_ICON = 2;
