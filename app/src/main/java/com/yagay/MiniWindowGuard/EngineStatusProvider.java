@@ -11,16 +11,16 @@ import android.os.Bundle;
 import android.os.Process;
 import android.os.SystemClock;
 
-final class EngineStatusProvider extends ContentProvider {
+public final class EngineStatusProvider extends ContentProvider {
     static final String AUTHORITY = "com.yagay.MiniWindowGuard.engine_status";
     static final Uri URI = Uri.parse("content://" + AUTHORITY);
     static final String METHOD_MARK = "markEngine";
 
     private static final String PREFS = "engine_status";
-    private static final String KEY_VERSION = "version";
-    private static final String KEY_STARTED_AT = "started_at";
-    private static final String KEY_PID = "pid";
-    private static final String KEY_HOOKS = "hooks";
+    static final String KEY_VERSION = "version";
+    static final String KEY_STARTED_AT = "started_at";
+    static final String KEY_PID = "pid";
+    static final String KEY_HOOKS = "hooks";
 
     static final class Status {
         final long versionCode;
