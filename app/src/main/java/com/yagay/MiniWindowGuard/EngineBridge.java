@@ -19,7 +19,7 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 3;
+    static final int BOOTSTRAP_API = 4;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
@@ -399,6 +399,23 @@ final class EngineBridge {
                 "onFocusedActivity",
                 new Class<?>[]{Object.class},
                 activityRecord);
+    }
+
+    boolean shouldBlockBackgroundStop(
+            Object task,
+            boolean finishing
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldBlockBackgroundStop",
+                new Class<?>[]{
+                        Object.class,
+                        boolean.class
+                },
+                task,
+                finishing);
+        return value instanceof Boolean
+                && (Boolean) value;
     }
 
     boolean shouldSuppressRecentsPause(
