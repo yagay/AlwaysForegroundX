@@ -86,7 +86,7 @@ final class SmallWindowController {
             int userId = Math.max(0, context.getApplicationInfo().uid / 100000);
             Intent request = new Intent(RootSmallWindowReceiver.ACTION);
             request.setClassName(
-                    "com.jieei.alwaysforeground",
+                    "com.yagay.alwaysforeground",
                     "com.jieei.alwaysforeground.RootSmallWindowReceiver");
             request.putExtra(RootSmallWindowReceiver.EXTRA_TOKEN, token);
             request.putExtra(RootSmallWindowReceiver.EXTRA_INTENT_URI, uri);
