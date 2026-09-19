@@ -2,113 +2,179 @@
 
 MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
 
-## 4.2.0
+## 4.3.0
 
-4.2.0 继续重构 VirtualDisplay 窗口层，重点解决 4.1.0 的黑屏、缩放卡顿，以及缺少图标/隐藏状态的问题。
+4.3.0 引入 **固定 Bootstrap + 可热重载 Engine**。
 
-### 显示桥
+目标是解决开发测试阶段最麻烦的问题：以前每次更新 APK 后，system_server 里仍然运行旧模块 ClassLoader，因此必须重启手机。现在只有 Hook 注册层固定驻留，窗口、VirtualDisplay、输入、前台策略和大部分运行逻辑都放进可重新加载的 Engine。
 
-- system_server 创建独立 VirtualDisplay。
-- 使用稳定的 `TextureView + SurfaceTexture + Surface` 作为 VirtualDisplay 输出。
-- 先等待 TextureView Surface 准备完成，再把目标 Task 移入 VirtualDisplay。
-- 宿主根 View 在窗口存活期间**绝不 remove/add 重挂**，避免 SurfaceTexture 断开和 VirtualDisplay ON/OFF 抖动。
-- VirtualDisplay 使用：
-  - `SUPPORTS_TOUCH`
-  - `TRUSTED`
-  - `OWN_FOCUS`
-  - `STEAL_TOP_FOCUS_DISABLED`
+### 第一次升级
 
-### 输入
+从 4.2.x 或更早版本升级到 4.3.0：
 
-- 触摸事件从 TextureView 本地坐标读取。
-- 重新构造 MotionEvent，并写入目标 VirtualDisplay 的 `displayId`。
-- 通过 system_server InputManager 注入。
-- 点击窗口内容时主动请求目标 Task 焦点。
+1. 安装 4.3.0 APK。
+2. 仍然需要 **最后重启一次手机**。
+3. 重启后，新的 Bootstrap 会进入 system_server。
+4. 设置页会显示：
+   - Bootstrap code
+   - Engine code
+   - 热重载可用
+   - Engine generation
+   - 活动小窗数量
+   - 上一次 reload 结果
 
-### 缩放性能
+完成这一次之后，正常 APK 更新不再需要重启手机。
 
-4.1.0 会在手指每次移动时调用 `VirtualDisplay.resize()`，在 OxygenOS 上会造成大量：
+### 以后更新 APK
 
-- display configuration change
-- Task transition
-- Activity relayout / relaunch
+Bootstrap 每 2 秒检查：
 
-4.2.0 改成：
+- 当前安装 APK 的 versionCode
+- 当前运行 Engine 的 versionCode
+- 手动 reload sequence
+- 当前活动小窗数量
 
-- ACTION_MOVE：只改变宿主窗口大小作为预览。
-- ACTION_UP：只提交一次 `VirtualDisplay.resize()`。
+默认开启 **自动热重载**。
 
-因此缩放过程中不再连续触发 display 级配置变化。
+如果安装新版 APK 时没有活动小窗：
 
-### 窗口控制
+```
+APK 更新
+  ↓
+Bootstrap 检测 versionCode 不一致
+  ↓
+停止旧 Engine
+  ↓
+从当前安装 APK sourceDir 创建新的 PathClassLoader
+  ↓
+加载 HotReloadEngine
+  ↓
+启动新版 VirtualDisplay / 输入 / 前台逻辑
+  ↓
+原子切换 current Engine
+```
 
-不恢复旧三点菜单。
+整个过程不重启 system_server，也不重启手机。
 
-标题栏直接提供：
+如果更新时仍有活动小窗，自动 reload 会暂缓，避免突然关闭正在运行的窗口。可以：
 
-- 返回
-- 缩小成图标
-- 隐藏
-- 关闭
+- 先关闭当前小窗，Bootstrap 会自动加载新版；
+- 或在设置页点击 **“立即重新加载 System Engine”**，强制 reload。强制 reload 会关闭当前小窗并把对应 Task 恢复到原 display。
 
-#### 缩小成图标
+### Reload 失败保护
 
-- 主窗口被移到 display 0 屏幕外。
-- TextureView 和 VirtualDisplay Surface 继续保持连接。
-- 显示一个圆形恢复按钮。
-- 点击恢复按钮回到原窗口位置。
+新版 Engine 会先完成：
 
-#### 隐藏
+- APK 路径解析
+- ClassLoader 创建
+- Engine 类实例化
+- Bootstrap API 兼容性检查
 
-- 同样保持 VirtualDisplay 和 Surface 存活。
-- 主窗口移出屏幕，不阻挡当前前台 App。
-- 只留下右侧一个很窄的恢复把手。
-- 点击把手恢复小窗。
+确认候选 Engine 可以加载后，才停止旧 Engine。
 
-### 始终前台
+如果新版启动失败：
 
-MiniWindowGuard 自己的前台保护继续保留：
+- Bootstrap 尝试重新启动旧 Engine；
+- 保留旧 Engine 引用；
+- 写入 `ENGINE_RELOAD_FAILED`；
+- 如果回滚也失败，会记录 `ENGINE_ROLLBACK_FAILED`。
 
-- 进程状态保持前台级别。
-- `hasResumedActivity(uid)` 保持为 true。
-- 拦截真实 pause/stop 路径。
-- 保持客户端可见。
-- 阻止普通最近任务/OEM 清理链路强杀。
+### Bootstrap 与 Engine
 
-4.2.0 删除了两个高频 visibility 查询 Hook：
+Bootstrap 负责：
 
-- `TaskFragment.getVisibility()`
-- `TaskFragment.shouldBeVisible()`
-- ActivityRecord 的高频 visible 查询强制返回
+- LSPosed system_server Hook 注册
+- Hook 回调入口
+- Engine ClassLoader 生命周期
+- 自动/手动热重载
+- Engine 状态上报
 
-这些 Hook 在 4.1.0 日志里会在 `android.display` 线程高频触发，造成额外负担。现在只保留真正影响生命周期的 pause / invisible / clientVisible 拦截。
+Engine 负责：
+
+- VirtualDisplay
+- TextureView / Surface
+- 输入注入
+- 小窗拖动 / resize
+- 图标 / 隐藏 / 恢复
+- 当前受管 Task
+- 前台策略数据
+- Engine 级运行逻辑
+
+Bootstrap Hook 只安装一次，不会因为 reload 重复注册。
+
+### 什么时候仍然需要重启
+
+普通功能更新原则上不需要重启，例如：
+
+- 修复黑屏
+- 修复输入
+- 修改 VirtualDisplay
+- 修改窗口 UI
+- 修改 resize
+- 修改图标 / 隐藏
+- 修改 Engine 内部前台策略
+- 修改诊断
+
+只有以后修改了 **Bootstrap 本身**，例如：
+
+- 新增以前没有注册过的 system_server Hook 点
+- 改变 Bootstrap / Engine 接口版本
+- 修改 LSPosed 初始化方式
+
+才可能再次需要重启 system_server / 手机。
+
+## 4.2 窗口架构
+
+窗口层继续使用 MiniWindowGuard 自己实现的 VirtualDisplay 引擎：
+
+- system_server 创建独立 VirtualDisplay；
+- 使用稳定 `TextureView + SurfaceTexture + Surface`；
+- Surface 就绪后才迁移 Task；
+- 宿主窗口存活期间不 remove/add 根 View；
+- VirtualDisplay 使用 `SUPPORTS_TOUCH / TRUSTED / OWN_FOCUS / STEAL_TOP_FOCUS_DISABLED`；
+- 触摸事件重新构造并带目标 displayId 注入；
+- resize 手势移动阶段只预览，松手时才提交一次 VirtualDisplay resize；
+- 标题栏直接提供返回、缩小成图标、隐藏和关闭。
+
+## 始终前台
+
+MiniWindowGuard 保留自己的 system_server 前台保护：
+
+- 进程状态保持前台级别；
+- `hasResumedActivity(uid)` 保持为 true；
+- 拦截真实 pause / stop；
+- 保持客户端可见；
+- 阻止普通最近任务 / OEM 清理链路强杀。
 
 ## 诊断
 
-重点日志：
+诊断 ZIP 现在额外记录：
 
+- `bootstrapVersionCode`
+- `loadedEngineVersionCode`
+- `hotReloadAvailable`
+- `engineGeneration`
+- `engineActiveSessions`
+- `engineReloadMessage`
+- `engine_reload_seq`
+
+关键日志：
+
+- `ENGINE_RELOAD_BEGIN`
+- `ENGINE_RELOAD_SUCCESS`
+- `ENGINE_RELOAD_FAILED`
+- `ENGINE_RELOAD_PENDING`
+- `ENGINE_ROLLBACK_FAILED`
 - `VD_TASK_CAPTURED`
 - `VD_WINDOW_CREATED`
 - `VD_SURFACE_READY`
 - `VD_TASK_MOVED`
 - `VD_FOCUS`
 - `VD_INPUT_DOWN`
-- `VD_INPUT_ERROR`
 - `VD_RESIZE_COMMIT`
 - `VD_MINIMIZED`
 - `VD_HIDDEN`
 - `VD_RESTORE`
-- `VD_SURFACE_LOST`
-
-诊断 ZIP 仍包含：
-
-- `dumpsys display`
-- `dumpsys input`
-- SurfaceFlinger surface 列表
-- Activity / Window / Task
-- Audio / MediaSession
-- LSPosed 日志
-- 最近 30000 行 logcat
 
 ## 开源架构参考
 
@@ -119,6 +185,6 @@ MiniWindowGuard 自己的前台保护继续保留：
 - FreeformShell
 - Android AOSP DisplayManager / ActivityTaskManager / InputManager
 
-这些项目只用于理解公开架构与系统行为。MiniWindowGuard 当前窗口引擎为本项目重新实现，不直接使用上述项目的窗口实现源码。
+这些项目用于理解公开架构与系统行为。MiniWindowGuard 当前窗口与热重载 Engine 均为本项目重新实现。
 
-本仓库继续使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
+本仓库使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
