@@ -7,6 +7,7 @@ import android.util.Log;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -24,23 +25,25 @@ public final class GuardApp extends Application {
             ConfigKeys.ROOT_WAKELOCK,
             ConfigKeys.SYSTEM_IMPORTANCE_TOP,
             ConfigKeys.SYSTEM_HAS_RESUMED,
-            ConfigKeys.SYSTEM_KEEP_MINI_RESUMED,
-            ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME,
-            ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT,
-            ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW,
-            ConfigKeys.AOSP_FREEFORM_FALLBACK,
+            ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED,
+            ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE,
+            ConfigKeys.AUTO_CONTAINER,
+            ConfigKeys.CONTAINER_ALWAYS_ON_TOP,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
     private static final String[] INT_KEYS = {
-            ConfigKeys.SMALL_WINDOW_FORM,
-            ConfigKeys.SMALL_WINDOW_WIDTH,
-            ConfigKeys.SMALL_WINDOW_HEIGHT
+            ConfigKeys.CONTAINER_DEFAULT_STATE,
+            ConfigKeys.CONTAINER_WIDTH,
+            ConfigKeys.CONTAINER_HEIGHT,
+            ConfigKeys.CONTAINER_COMMAND_STATE,
+            ConfigKeys.CONTAINER_COMMAND_SEQ
     };
 
     private static volatile GuardApp instance;
     private static volatile XposedService service;
     private static volatile String frameworkName = "";
+    private static final AtomicInteger commandSeq = new AtomicInteger();
 
     @Override
     protected void attachBaseContext(android.content.Context base) {
@@ -51,8 +54,9 @@ public final class GuardApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
-
         installCrashHandler();
+
+        commandSeq.set(localPrefs().getInt(ConfigKeys.CONTAINER_COMMAND_SEQ, 0));
 
         XposedServiceHelper.registerListener(new XposedServiceHelper.OnServiceListener() {
             @Override
@@ -85,10 +89,7 @@ public final class GuardApp extends Application {
                     getApplicationContext(),
                     "uncaught:" + (thread == null ? "unknown" : thread.getName()),
                     throwable);
-
-            if (previous != null) {
-                previous.uncaughtException(thread, throwable);
-            }
+            if (previous != null) previous.uncaughtException(thread, throwable);
         });
     }
 
@@ -152,8 +153,31 @@ public final class GuardApp extends Application {
         putString(ConfigKeys.TARGET_PACKAGES, String.join("\n", sorted));
     }
 
+    static int getContainerState() {
+        return ConfigKeys.sanitizeState(
+                getInt(ConfigKeys.CONTAINER_COMMAND_STATE));
+    }
+
+    static String getContainerPackage() {
+        return getString(ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+    }
+
+    static void sendContainerCommand(String packageName, int state) {
+        int safeState = ConfigKeys.sanitizeState(state);
+        int seq = commandSeq.incrementAndGet();
+
+        localPrefs().edit()
+                .putString(ConfigKeys.CONTAINER_COMMAND_PACKAGE,
+                        packageName == null ? "" : packageName)
+                .putInt(ConfigKeys.CONTAINER_COMMAND_STATE, safeState)
+                .putInt(ConfigKeys.CONTAINER_COMMAND_SEQ, seq)
+                .apply();
+        syncAll();
+    }
+
     static void resetDefaults() {
         localPrefs().edit().clear().commit();
+        commandSeq.set(0);
         syncAll();
     }
 
@@ -171,12 +195,17 @@ public final class GuardApp extends Application {
             for (String key : INT_KEYS) {
                 editor.putInt(key, getInt(key));
             }
+
             editor.putString(
                     ConfigKeys.TARGET_PACKAGES,
                     getString(ConfigKeys.TARGET_PACKAGES));
             editor.putString(
+                    ConfigKeys.CONTAINER_COMMAND_PACKAGE,
+                    getString(ConfigKeys.CONTAINER_COMMAND_PACKAGE));
+            editor.putString(
                     ConfigKeys.DIAGNOSTICS_STARTED_AT,
                     getString(ConfigKeys.DIAGNOSTICS_STARTED_AT));
+
             return editor.commit();
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync remote preferences", t);
