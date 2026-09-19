@@ -75,7 +75,7 @@ public final class MainActivity extends Activity {
         parent.addView(title);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("VirtualDisplay 小窗 · System Scope");
+        subtitle.setText("OPlus 系统小窗 · System Scope");
         subtitle.setTextSize(15);
         subtitle.setTextColor(0xFF656A73);
         subtitle.setPadding(0, dp(6), 0, dp(16));
@@ -97,8 +97,16 @@ public final class MainActivity extends Activity {
         addSwitch(
                 card,
                 "启用小窗守护",
-                "关闭后不创建 VirtualDisplay，也不应用始终前台保护。",
+                "关闭后不启动系统小窗，也不应用始终前台保护。",
                 ConfigKeys.MASTER_ENABLED);
+
+        addSwitch(
+                card,
+                "使用一加系统小窗（推荐）",
+                "直接调用 OxygenOS / ColorOS 的 FlexibleWindow 管理现有 Task。"
+                        + "App 画面、视频 Surface、拖动、缩放和系统小窗动画全部由系统处理。"
+                        + "关闭后恢复旧 VirtualDisplay 兼容模式。修改后请重新加载 System Engine。",
+                ConfigKeys.OPLUS_SYSTEM_WINDOW);
 
         addSwitch(
                 card,
@@ -140,10 +148,9 @@ public final class MainActivity extends Activity {
     private void addLauncherCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
-                "VirtualDisplay 小窗",
-                "完全重写的 system_server VirtualDisplay 引擎："
-                        + "使用稳定 TextureView Surface，Surface 就绪后再迁移 Task；"
-                        + "不使用原开源项目窗口实现源码。");
+                "系统小窗",
+                "默认直接使用一加/OPlus 系统 FlexibleWindow。"
+                        + "MiniWindowGuard 不再承载 App 画面，只负责启动系统小窗和保持前台。");
 
         Button openApps = button("选择应用并打开小窗");
         openApps.setOnClickListener(v -> {
@@ -166,50 +173,48 @@ public final class MainActivity extends Activity {
 
         card.addView(detailBlock(
                 "窗口操作",
-                "标题栏直接提供返回、缩小成图标、隐藏和关闭；"
-                        + "不再使用旧三点菜单。图标/隐藏只把宿主窗口移出屏幕，"
-                        + "VirtualDisplay 与 TextureView Surface 保持存活，点击恢复控件即可还原。"));
+                "进入系统小窗后，拖动、缩放、最小化、恢复、关闭等全部使用 OxygenOS 自己的小窗控件。"
+                        + "MiniWindowGuard 不再额外叠加标题栏或 TextureView。"));
     }
 
     private void addForegroundCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
                 "始终前台",
-                "只保留 MiniWindowGuard 原来的前台保护思路。"
-                        + "VirtualDisplay 负责显示，system_server 负责让容器中的 App"
-                        + "保持前台级进程状态和 Activity 生命周期。");
+                "OxygenOS 负责系统小窗显示，MiniWindowGuard 只负责前台保护。"
+                        + "受保护 Task 仍留在系统原来的 display / Surface 树中。");
 
         addSwitch(
                 card,
                 "进程状态保持 TOP",
-                "ActivityManager 对当前 VirtualDisplay 容器中的 App"
+                "ActivityManager 对当前系统小窗中的 App"
                         + "返回前台级进程状态。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(
                 card,
                 "系统视为存在 Resumed Activity",
-                "ActivityTaskManager 对容器 App 的 UID"
+                "ActivityTaskManager 对系统小窗 App 的 UID"
                         + "视为仍存在 Resumed Activity。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
                 "保持 Resumed",
-                "阻止容器中的顶层 Activity 因主屏切换而进入 pause/stop。",
+                "阻止系统小窗中的顶层 Activity 因主屏切换而进入 pause/stop。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
 
         addSwitch(
                 card,
                 "保持 Visible",
-                "目标 Task 位于 VirtualDisplay 时持续保持逻辑可见，"
+                "目标 Task 进入系统小窗后持续保持逻辑可见，"
                         + "避免 OEM 因主屏焦点变化把窗口变为不可见。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
 
         addSwitch(
                 card,
                 "阻止最近任务清理强杀",
-                "仅保护已经进入 VirtualDisplay 的 App；"
+                "仅保护已经进入系统小窗的 App；"
                         + "应用更新和明确强制停止仍然放行。",
                 ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
@@ -217,9 +222,9 @@ public final class MainActivity extends Activity {
     private void addWindowCard(LinearLayout parent) {
         LinearLayout card = card(
                 parent,
-                "默认窗口尺寸",
-                "尺寸只控制 VirtualDisplay Overlay，"
-                        + "不再修改主屏 Task 的 bounds/windowing mode。");
+                "VirtualDisplay 兼容模式尺寸",
+                "只有关闭“一加系统小窗”时这些尺寸才生效；"
+                        + "系统小窗模式的大小和比例由 OxygenOS 自己管理。");
 
         card.addView(detailBlock(
                 "首次打开提示",
