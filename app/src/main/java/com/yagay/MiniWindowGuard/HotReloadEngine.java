@@ -14,7 +14,7 @@ import android.util.Log;
  */
 public final class HotReloadEngine {
     private static final String TAG = "MiniWindowGuardEngine";
-    private static final int BOOTSTRAP_API_REQUIRED = 2;
+    private static final int BOOTSTRAP_API_REQUIRED = 3;
 
     private OplusFlexibleWindowController controller;
     private volatile boolean started;
@@ -144,6 +144,16 @@ public final class HotReloadEngine {
         OplusFlexibleWindowController current = controller;
         if (current != null) {
             current.onOplusTaskVanished(taskInfo);
+        }
+    }
+
+    public void onFloatHandleOpened(
+            int taskId
+    ) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onFloatHandleOpened(
+                    taskId);
         }
     }
 
