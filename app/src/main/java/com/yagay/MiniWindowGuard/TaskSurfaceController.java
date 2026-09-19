@@ -7,7 +7,6 @@ import android.graphics.Rect;
 import android.os.Handler;
 import android.os.SystemClock;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -26,7 +25,10 @@ final class TaskSurfaceController {
 
     private static final int WINDOWING_MODE_FULLSCREEN = 1;
     private static final int WINDOWING_MODE_FREEFORM = 5;
+    private static final int WINDOWING_MODE_MULTI_WINDOW = 6;
+
     private static final long POLL_MS = 250L;
+    private static final long VERIFY_MS = 650L;
 
     private final Handler handler;
     private volatile Context systemContext;
@@ -108,8 +110,6 @@ final class TaskSurfaceController {
                 GuardConfig.defaultContainerState());
 
         tasks.put(taskId, managed);
-        applyState(managed, managed.state);
-        notifyCaptured(managed);
 
         log("TASK_CAPTURED",
                 "pkg=" + packageName
@@ -117,12 +117,16 @@ final class TaskSurfaceController {
                         + " originalBounds=" + originalBounds
                         + " originalWindowingMode=" + originalWindowingMode
                         + " state=" + managed.state);
+
+        // ActivityRecord.setState can be called while WM owns its global lock.
+        // Run WindowOrganizer transactions after that call returns.
+        handler.post(() -> applyState(managed, managed.state));
     }
 
     void releasePackage(String packageName) {
         ManagedTask task = findLatest(packageName);
         if (task != null) {
-            applyState(task, ConfigKeys.STATE_RELEASED);
+            handler.post(() -> applyState(task, ConfigKeys.STATE_RELEASED));
         }
     }
 
@@ -171,87 +175,172 @@ final class TaskSurfaceController {
 
     private void applyState(ManagedTask managed, int requestedState) {
         int state = ConfigKeys.sanitizeState(requestedState);
-        Object task = managed.taskObject;
-        Object lock = globalLock(task);
 
-        Runnable work = () -> {
-            try {
-                if (state == ConfigKeys.STATE_RELEASED) {
-                    restoreTask(managed);
-                    managed.state = state;
-                    tasks.remove(managed.taskId, managed);
-                    notifyCaptured(managed);
-                    log("TASK_RELEASED",
-                            "pkg=" + managed.packageName
-                                    + " taskId=" + managed.taskId);
-                    return;
-                }
-
-                Rect windowBounds = containerBounds();
-                Rect offscreenBounds = offscreenBounds(windowBounds);
-
-                setWindowingMode(task, WINDOWING_MODE_FREEFORM);
-                setAlwaysOnTop(task,
-                        GuardConfig.bool(ConfigKeys.CONTAINER_ALWAYS_ON_TOP));
-
-                if (state == ConfigKeys.STATE_WINDOW) {
-                    setBounds(task, windowBounds);
-                    setFocusable(task, true);
-                    setSurfaceAlpha(task, 1f);
-                } else {
-                    // Keep the same width/height to avoid a size configuration change.
-                    // Move the task outside the physical display and make its Surface transparent.
-                    setBounds(task, offscreenBounds);
-                    setFocusable(task, false);
-                    setSurfaceAlpha(task, 0f);
-                }
-
+        try {
+            if (state == ConfigKeys.STATE_RELEASED) {
+                restoreTask(managed);
                 managed.state = state;
-                managed.lastBounds = new Rect(
-                        state == ConfigKeys.STATE_WINDOW
-                                ? windowBounds : offscreenBounds);
                 managed.lastSeenElapsed = SystemClock.elapsedRealtime();
-
+                tasks.remove(managed.taskId, managed);
                 notifyCaptured(managed);
-                log("TASK_STATE",
+                log("TASK_RELEASED",
                         "pkg=" + managed.packageName
-                                + " taskId=" + managed.taskId
-                                + " state=" + state
-                                + " bounds=" + managed.lastBounds);
-            } catch (Throwable t) {
-                log("TASK_STATE_ERROR",
-                        "pkg=" + managed.packageName
-                                + " taskId=" + managed.taskId
-                                + " state=" + state
-                                + " error=" + t);
+                                + " taskId=" + managed.taskId);
+                return;
             }
-        };
 
-        if (lock != null) {
-            synchronized (lock) {
-                work.run();
+            if (state == ConfigKeys.STATE_WINDOW) {
+                applyWindowState(managed, WINDOWING_MODE_MULTI_WINDOW, 1);
+                return;
             }
-        } else {
-            synchronized (task) {
-                work.run();
-            }
+
+            applyBackgroundState(managed, state);
+        } catch (Throwable t) {
+            log("TASK_STATE_ERROR",
+                    "pkg=" + managed.packageName
+                            + " taskId=" + managed.taskId
+                            + " state=" + state
+                            + " error=" + t);
         }
     }
 
-    private void restoreTask(ManagedTask managed) {
-        Object task = managed.taskObject;
-        setSurfaceAlpha(task, 1f);
-        setFocusable(task, true);
-        setAlwaysOnTop(task, false);
+    private void applyWindowState(
+            ManagedTask managed,
+            int windowingMode,
+            int attempt
+    ) {
+        Rect bounds = containerBounds();
+        boolean ok = applyWindowContainerTransaction(
+                managed.taskObject,
+                windowingMode,
+                bounds,
+                true,
+                GuardConfig.bool(ConfigKeys.CONTAINER_ALWAYS_ON_TOP),
+                true);
 
-        Rect original = managed.originalBounds;
-        if (original != null) {
-            setBounds(task, new Rect(original));
+        if (!ok) {
+            log("TASK_WCT_ERROR",
+                    "pkg=" + managed.packageName
+                            + " taskId=" + managed.taskId
+                            + " mode=" + windowingMode
+                            + " reason=apply-failed");
+            return;
         }
 
+        managed.state = ConfigKeys.STATE_WINDOW;
+        managed.lastBounds = new Rect(bounds);
+        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+
+        notifyCaptured(managed);
+        log("TASK_STATE",
+                "pkg=" + managed.packageName
+                        + " taskId=" + managed.taskId
+                        + " state=" + ConfigKeys.STATE_WINDOW
+                        + " backend=WCT"
+                        + " requestedMode=" + windowingMode
+                        + " bounds=" + bounds
+                        + " attempt=" + attempt);
+
+        handler.postDelayed(
+                () -> verifyWindowState(managed, windowingMode, attempt),
+                VERIFY_MS);
+    }
+
+    private void verifyWindowState(
+            ManagedTask managed,
+            int requestedMode,
+            int attempt
+    ) {
+        if (managed.state != ConfigKeys.STATE_WINDOW
+                || !tasks.containsKey(managed.taskId)) {
+            return;
+        }
+
+        int actualMode = readWindowingMode(managed.taskObject);
+        Rect actualBounds = readBounds(managed.taskObject);
+        Rect requestedBounds = managed.lastBounds;
+
+        boolean boundsOk = boundsApproximatelyEqual(
+                requestedBounds,
+                actualBounds,
+                12);
+        boolean modeOk = actualMode == requestedMode
+                || actualMode == WINDOWING_MODE_MULTI_WINDOW
+                || actualMode == WINDOWING_MODE_FREEFORM;
+
+        log("TASK_VERIFY",
+                "pkg=" + managed.packageName
+                        + " taskId=" + managed.taskId
+                        + " requestedMode=" + requestedMode
+                        + " actualMode=" + actualMode
+                        + " requestedBounds=" + requestedBounds
+                        + " actualBounds=" + actualBounds
+                        + " modeOk=" + modeOk
+                        + " boundsOk=" + boundsOk
+                        + " attempt=" + attempt);
+
+        if (modeOk && boundsOk) return;
+
+        if (attempt == 1 && requestedMode != WINDOWING_MODE_FREEFORM) {
+            log("TASK_BACKEND_FALLBACK",
+                    "pkg=" + managed.packageName
+                            + " taskId=" + managed.taskId
+                            + " from=MULTI_WINDOW to=FREEFORM");
+            applyWindowState(managed, WINDOWING_MODE_FREEFORM, 2);
+            return;
+        }
+
+        log("TASK_WINDOW_UNSUPPORTED",
+                "pkg=" + managed.packageName
+                        + " taskId=" + managed.taskId
+                        + " actualMode=" + actualMode
+                        + " actualBounds=" + actualBounds);
+    }
+
+    private void applyBackgroundState(ManagedTask managed, int state) {
+        // Never make the currently focused top task transparent/off-screen.
+        // A transparent top task leaves no visible activity behind it and produces a black screen.
+        boolean ok = applyWindowContainerTransaction(
+                managed.taskObject,
+                readWindowingMode(managed.taskObject),
+                null,
+                false,
+                false,
+                false);
+
+        if (!ok) {
+            log("TASK_BACKGROUND_ERROR",
+                    "pkg=" + managed.packageName
+                            + " taskId=" + managed.taskId
+                            + " state=" + state
+                            + " reason=reorder-failed");
+            return;
+        }
+
+        managed.state = state;
+        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+
+        notifyCaptured(managed);
+        log("TASK_STATE",
+                "pkg=" + managed.packageName
+                        + " taskId=" + managed.taskId
+                        + " state=" + state
+                        + " backend=WCT"
+                        + " action=reorder-to-back");
+    }
+
+    private void restoreTask(ManagedTask managed) {
+        Rect original = managed.originalBounds;
         int originalMode = managed.originalWindowingMode;
         if (originalMode <= 0) originalMode = WINDOWING_MODE_FULLSCREEN;
-        setWindowingMode(task, originalMode);
+
+        applyWindowContainerTransaction(
+                managed.taskObject,
+                originalMode,
+                original,
+                true,
+                false,
+                true);
     }
 
     private Rect containerBounds() {
@@ -261,10 +350,107 @@ final class TaskSurfaceController {
                 GuardConfig.containerHeight());
     }
 
-    private Rect offscreenBounds(Rect visible) {
-        return ContainerGeometry.offscreenBounds(
-                Resources.getSystem(),
-                visible);
+    /**
+     * Uses the same WindowContainerTransaction path used by AOSP TaskView/Desktop mode.
+     * Direct Task.setBounds()/setWindowingMode() is not stable because Shell/TaskOrganizer
+     * can overwrite those internal changes immediately.
+     */
+    private boolean applyWindowContainerTransaction(
+            Object task,
+            int windowingMode,
+            Rect bounds,
+            boolean focusable,
+            boolean alwaysOnTop,
+            boolean onTop
+    ) {
+        if (task == null) return false;
+
+        try {
+            Object token = taskWindowContainerToken(task);
+            Object atm = fieldValue(task, "mAtmService");
+            if (atm == null) atm = fieldValue(task, "mService");
+            Object organizer = fieldValue(atm, "mWindowOrganizerController");
+
+            if (token == null || organizer == null) {
+                log("TASK_WCT_ERROR",
+                        "token=" + token + " organizer=" + organizer);
+                return false;
+            }
+
+            ClassLoader loader = task.getClass().getClassLoader();
+            Class<?> wctClass = Class.forName(
+                    "android.window.WindowContainerTransaction",
+                    false,
+                    loader);
+
+            Object wct = wctClass.getDeclaredConstructor().newInstance();
+
+            if (windowingMode > 0) {
+                invokeCompatible(
+                        wct,
+                        "setWindowingMode",
+                        token,
+                        windowingMode);
+            }
+
+            if (bounds != null) {
+                invokeCompatible(
+                        wct,
+                        "setBounds",
+                        token,
+                        new Rect(bounds));
+            }
+
+            invokeCompatible(
+                    wct,
+                    "setFocusable",
+                    token,
+                    focusable);
+
+            invokeCompatible(
+                    wct,
+                    "setAlwaysOnTop",
+                    token,
+                    alwaysOnTop);
+
+            boolean reordered = invokeCompatible(
+                    wct,
+                    "reorder",
+                    token,
+                    onTop,
+                    true);
+            if (!reordered) {
+                invokeCompatible(
+                        wct,
+                        "reorder",
+                        token,
+                        onTop);
+            }
+
+            Method apply = findCompatibleMethod(
+                    organizer.getClass(),
+                    "applyTransaction",
+                    new Object[]{wct});
+            if (apply == null) {
+                log("TASK_WCT_ERROR",
+                        "reason=no-applyTransaction organizer="
+                                + organizer.getClass().getName());
+                return false;
+            }
+
+            apply.setAccessible(true);
+            apply.invoke(organizer, wct);
+            return true;
+        } catch (Throwable t) {
+            log("TASK_WCT_ERROR", "error=" + t);
+            return false;
+        }
+    }
+
+    private static Object taskWindowContainerToken(Object task) {
+        Object remoteToken = fieldValue(task, "mRemoteToken");
+        if (remoteToken == null) return null;
+        return invokeNoArg(remoteToken, "toWindowContainerToken");
     }
 
     private void notifyCaptured(ManagedTask task) {
@@ -280,53 +466,6 @@ final class TaskSurfaceController {
             context.sendBroadcast(event);
         } catch (Throwable t) {
             log("TASK_EVENT_ERROR", String.valueOf(t));
-        }
-    }
-
-    private void setBounds(Object task, Rect bounds) {
-        if (invokeCompatible(task, "setBounds", bounds)) return;
-        invokeCompatible(task, "setBoundsUnchecked", bounds);
-    }
-
-    private void setWindowingMode(Object task, int mode) {
-        invokeCompatible(task, "setWindowingMode", mode);
-    }
-
-    private void setFocusable(Object task, boolean focusable) {
-        if (invokeCompatible(task, "setFocusable", focusable)) return;
-        invokeCompatible(task, "setCanReceiveKeys", focusable);
-    }
-
-    private void setAlwaysOnTop(Object task, boolean alwaysOnTop) {
-        invokeCompatible(task, "setAlwaysOnTop", alwaysOnTop);
-    }
-
-    private void setSurfaceAlpha(Object task, float alpha) {
-        Object surface = invokeNoArg(task, "getSurfaceControl");
-        if (surface == null) return;
-
-        Object transaction = null;
-        try {
-            ClassLoader loader = task.getClass().getClassLoader();
-            Class<?> transactionClass = Class.forName(
-                    "android.view.SurfaceControl$Transaction",
-                    false,
-                    loader);
-
-            Constructor<?> ctor = transactionClass.getDeclaredConstructor();
-            ctor.setAccessible(true);
-            transaction = ctor.newInstance();
-
-            invokeCompatible(transaction, "setAlpha", surface, alpha);
-            invokeCompatible(transaction, "show", surface);
-            invokeCompatible(transaction, "apply");
-        } catch (Throwable t) {
-            log("SURFACE_ALPHA_ERROR",
-                    "alpha=" + alpha + " error=" + t);
-        } finally {
-            if (transaction != null) {
-                invokeCompatible(transaction, "close");
-            }
         }
     }
 
@@ -367,15 +506,6 @@ final class TaskSurfaceController {
         return context instanceof Context ? (Context) context : null;
     }
 
-    private static Object globalLock(Object task) {
-        Object service = fieldValue(task, "mAtmService");
-        if (service == null) service = fieldValue(task, "mService");
-        if (service == null) return null;
-
-        Object lock = fieldValue(service, "mGlobalLock");
-        return lock != null ? lock : service;
-    }
-
     private static String activityPackage(Object activityRecord) {
         Object value = fieldValue(activityRecord, "packageName");
         if (value instanceof String) return (String) value;
@@ -385,6 +515,18 @@ final class TaskSurfaceController {
             return ((android.content.ComponentName) component).getPackageName();
         }
         return null;
+    }
+
+    private static boolean boundsApproximatelyEqual(
+            Rect expected,
+            Rect actual,
+            int tolerance
+    ) {
+        if (expected == null || actual == null) return false;
+        return Math.abs(expected.left - actual.left) <= tolerance
+                && Math.abs(expected.top - actual.top) <= tolerance
+                && Math.abs(expected.right - actual.right) <= tolerance
+                && Math.abs(expected.bottom - actual.bottom) <= tolerance;
     }
 
     private static Object fieldValue(Object receiver, String name) {
@@ -413,7 +555,10 @@ final class TaskSurfaceController {
 
     private static Object invokeNoArg(Object receiver, String name) {
         if (receiver == null) return null;
-        Method method = findCompatibleMethod(receiver.getClass(), name, new Object[0]);
+        Method method = findCompatibleMethod(
+                receiver.getClass(),
+                name,
+                new Object[0]);
         if (method == null) return null;
 
         try {
