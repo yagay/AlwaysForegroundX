@@ -218,21 +218,20 @@ public final class MainActivity extends Activity {
         LinearLayout card = card(
                 parent,
                 "小窗显示与兼容性",
-                "内部 VirtualDisplay 和外部可见窗口现在可以独立控制。");
+                "先用安全尺寸建立视频，再让视频跟随窗口动态调整。");
 
         addSwitch(
                 card,
-                "固定内部显示（推荐）",
-                "开启后，目标 App 始终运行在固定 VirtualDisplay 画布上。"
-                        + "拖动改变的只是外部 TextureView 大小，不再触发播放器 Surface"
-                        + "和 Activity 配置反复重建。关闭后恢复动态 VirtualDisplay resize。",
-                ConfigKeys.FIXED_INTERNAL_DISPLAY);
+                "安全启动模式（推荐）",
+                "首次创建小窗时，先使用已验证兼容的内部尺寸，"
+                        + "避免视频 SurfaceView / MediaCodec 在启动阶段黑屏。",
+                ConfigKeys.SAFE_INITIAL_DISPLAY);
 
         int internalScale = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.INTERNAL_DISPLAY_SCALE),
                 48);
         TextView internalScaleLabel =
-                label("内部渲染比例：" + internalScale + "%");
+                label("安全启动比例：" + internalScale + "%");
         card.addView(internalScaleLabel);
 
         SeekBar internalScaleSeek = percentSeek(internalScale);
@@ -246,7 +245,7 @@ public final class MainActivity extends Activity {
                     ) {
                         int value = Math.min(95, progress + 30);
                         internalScaleLabel.setText(
-                                "内部渲染比例：" + value + "%");
+                                "安全启动比例：" + value + "%");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.INTERNAL_DISPLAY_SCALE,
@@ -256,21 +255,62 @@ public final class MainActivity extends Activity {
                 });
         card.addView(internalScaleSeek);
 
-        card.addView(detailBlock(
-                "兼容模式说明",
-                "你当前设备上 48% 的内部画布已经验证可以正常建立视频 Surface。"
-                        + "固定内部显示开启时，这个比例只决定 App 第一次看到的内部显示尺寸；"
-                        + "外部窗口之后可以随意拉宽、拉高或缩小，内部视频画布不会改变。"));
+        addSwitch(
+                card,
+                "启动后同步视频尺寸",
+                "开启后，小窗拖动缩放时先实时预览；松手后再调整 VirtualDisplay，"
+                        + "让目标 App 和视频真正适配新的窗口长宽。"
+                        + "关闭后则保持 4.4.1 的固定内部画布模式。",
+                ConfigKeys.FOLLOW_WINDOW_AFTER_START);
+
+        int settleMs = Math.max(
+                0,
+                Math.min(
+                        5000,
+                        GuardApp.getInt(
+                                ConfigKeys.STARTUP_SETTLE_MS)));
+        TextView settleLabel =
+                label("启动保护时间：" + settleMs + "ms");
+        card.addView(settleLabel);
+
+        SeekBar settleSeek = new SeekBar(this);
+        settleSeek.setMax(50);
+        settleSeek.setProgress(settleMs / 100);
+        settleSeek.setOnSeekBarChangeListener(
+                new SimpleSeekListener() {
+                    @Override
+                    public void onProgressChanged(
+                            SeekBar seekBar,
+                            int progress,
+                            boolean fromUser
+                    ) {
+                        int value = progress * 100;
+                        settleLabel.setText(
+                                "启动保护时间：" + value + "ms");
+                        if (fromUser) {
+                            GuardApp.putInt(
+                                    ConfigKeys.STARTUP_SETTLE_MS,
+                                    value);
+                        }
+                    }
+                });
+        card.addView(settleSeek);
 
         card.addView(detailBlock(
-                "默认外部窗口",
-                "下面的宽度和高度只决定小窗刚打开时在屏幕上的可见大小，"
-                        + "不再等于固定兼容模式下的内部 VirtualDisplay 尺寸。"));
+                "推荐设置",
+                "安全启动模式：开启；安全启动比例：48%；"
+                        + "启动后同步视频尺寸：开启；启动保护时间：1500ms。"
+                        + "这样第一次先保证视频正常建立，之后窗口改变时视频也会真正跟随。"));
+
+        card.addView(detailBlock(
+                "普通初始尺寸",
+                "关闭安全启动模式时，下面的宽度和高度直接决定首次 VirtualDisplay 尺寸。"
+                        + "开启安全启动模式时，第一次会优先使用上面的安全启动比例。"));
 
         int width = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH),
                 58);
-        widthLabel = label("外部窗口宽度：" + width + "%");
+        widthLabel = label("普通初始宽度：" + width + "%");
         card.addView(widthLabel);
 
         SeekBar widthSeek = percentSeek(width);
@@ -284,7 +324,7 @@ public final class MainActivity extends Activity {
                     ) {
                         int value = Math.min(95, progress + 30);
                         widthLabel.setText(
-                                "外部窗口宽度：" + value + "%");
+                                "普通初始宽度：" + value + "%");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.CONTAINER_WIDTH,
@@ -297,7 +337,7 @@ public final class MainActivity extends Activity {
         int height = ConfigKeys.sanitizePercent(
                 GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT),
                 66);
-        heightLabel = label("外部窗口高度：" + height + "%");
+        heightLabel = label("普通初始高度：" + height + "%");
         card.addView(heightLabel);
 
         SeekBar heightSeek = percentSeek(height);
@@ -311,7 +351,7 @@ public final class MainActivity extends Activity {
                     ) {
                         int value = Math.min(95, progress + 30);
                         heightLabel.setText(
-                                "外部窗口高度：" + value + "%");
+                                "普通初始高度：" + value + "%");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.CONTAINER_HEIGHT,
@@ -328,7 +368,7 @@ public final class MainActivity extends Activity {
                         GuardApp.getInt(
                                 ConfigKeys.OUTER_MIN_WIDTH_DP)));
         TextView minWidthLabel =
-                label("最小外部宽度：" + minWidth + "dp");
+                label("最小窗口宽度：" + minWidth + "dp");
         card.addView(minWidthLabel);
 
         SeekBar minWidthSeek = new SeekBar(this);
@@ -344,7 +384,7 @@ public final class MainActivity extends Activity {
                     ) {
                         int value = progress + 120;
                         minWidthLabel.setText(
-                                "最小外部宽度：" + value + "dp");
+                                "最小窗口宽度：" + value + "dp");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.OUTER_MIN_WIDTH_DP,
@@ -361,7 +401,7 @@ public final class MainActivity extends Activity {
                         GuardApp.getInt(
                                 ConfigKeys.OUTER_MIN_HEIGHT_DP)));
         TextView minHeightLabel =
-                label("最小外部高度：" + minHeight + "dp");
+                label("最小窗口高度：" + minHeight + "dp");
         card.addView(minHeightLabel);
 
         SeekBar minHeightSeek = new SeekBar(this);
@@ -377,7 +417,7 @@ public final class MainActivity extends Activity {
                     ) {
                         int value = progress + 160;
                         minHeightLabel.setText(
-                                "最小外部高度：" + value + "dp");
+                                "最小窗口高度：" + value + "dp");
                         if (fromUser) {
                             GuardApp.putInt(
                                     ConfigKeys.OUTER_MIN_HEIGHT_DP,
@@ -388,9 +428,10 @@ public final class MainActivity extends Activity {
         card.addView(minHeightSeek);
 
         card.addView(detailBlock(
-                "触摸映射",
-                "固定内部显示开启时，触摸坐标会自动从当前外部窗口尺寸换算到"
-                        + "内部 VirtualDisplay 坐标，所以把小窗缩得更小以后仍可正常点击和滑动。"));
+                "缩放过程",
+                "拖动过程中只缩放最后一帧，避免连续 display configuration change；"
+                        + "松手后才提交一次新的 VirtualDisplay 尺寸。"
+                        + "提交以后触摸坐标会重新按新的内部尺寸工作。"));
     }
 
     private void addDiagnosticsCard(LinearLayout parent) {
