@@ -26,6 +26,7 @@ public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final String SYSTEM_PACKAGE = "system";
     private static final int PROCESS_STATE_TOP = 2;
+    private static final long MODULE_VERSION_CODE = 50L;
 
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
     private final Set<String> firstHits = ConcurrentHashMap.newKeySet();
@@ -402,7 +403,7 @@ public final class GuardModule extends XposedModule {
                         Bundle extras = new Bundle();
                         extras.putLong(
                                 EngineStatusProvider.KEY_VERSION,
-                                BuildConfig.VERSION_CODE);
+                                MODULE_VERSION_CODE);
                         extras.putInt(
                                 EngineStatusProvider.KEY_PID,
                                 Process.myPid());
@@ -426,7 +427,7 @@ public final class GuardModule extends XposedModule {
                 if (ok) {
                     log(Log.INFO, TAG,
                             "SYSTEM_SCOPE heartbeat delivered"
-                                    + " version=" + BuildConfig.VERSION_CODE
+                                    + " version=" + MODULE_VERSION_CODE
                                     + " pid=" + Process.myPid()
                                     + " hooks=" + installedHooks.size());
                     return;
