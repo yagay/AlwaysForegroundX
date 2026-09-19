@@ -10,8 +10,8 @@ android {
         applicationId = "com.yagay.alwaysforeground"
         minSdk = 31
         targetSdk = 37
-        versionCode = 38
-        versionName = "1.9.0"
+        versionCode = 39
+        versionName = "1.9.1"
     }
 
     compileOptions {
