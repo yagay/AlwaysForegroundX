@@ -14,12 +14,14 @@ public final class AlwaysForegroundApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        ensureRootBridgeToken();
         XposedServiceHelper.registerListener(new XposedServiceHelper.OnServiceListener() {
             @Override
             public void onServiceBind(XposedService service) {
                 xposedService = service;
                 syncPendingMode(service);
                 syncPendingSmallWindow(service);
+                syncRootBridgeToken(service);
                 syncPendingDiagnostics(service);
                 Log.i(TAG, "Xposed service connected: " + service.getFrameworkName());
             }
@@ -150,6 +152,32 @@ public final class AlwaysForegroundApp extends Application {
         } catch (Throwable t) {
             Log.e(TAG, "Failed to sync small-window settings", t);
             return false;
+        }
+    }
+
+    static String getRootBridgeTokenLocal() {
+        return ensureRootBridgeToken();
+    }
+
+    private static String ensureRootBridgeToken() {
+        SharedPreferences prefs = getInstancePrefs();
+        String existing = prefs.getString(ModeConfig.KEY_ROOT_BRIDGE_TOKEN, "");
+        if (existing != null && !existing.isEmpty()) return existing;
+
+        String token = java.util.UUID.randomUUID().toString()
+                + "-" + Long.toHexString(new java.security.SecureRandom().nextLong());
+        prefs.edit().putString(ModeConfig.KEY_ROOT_BRIDGE_TOKEN, token).commit();
+        return token;
+    }
+
+    private static void syncRootBridgeToken(XposedService service) {
+        try {
+            service.getRemotePreferences(ModeConfig.REMOTE_GROUP)
+                    .edit()
+                    .putString(ModeConfig.KEY_ROOT_BRIDGE_TOKEN, ensureRootBridgeToken())
+                    .commit();
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to sync root bridge token", t);
         }
     }
 
