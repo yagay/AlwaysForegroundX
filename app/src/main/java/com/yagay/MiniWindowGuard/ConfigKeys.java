@@ -31,8 +31,6 @@ final class ConfigKeys {
             "diagnostics_started_at";
 
     static final int STATE_WINDOW = 1;
-    static final int STATE_ICON = 2;
-    static final int STATE_HIDDEN = 3;
     static final int STATE_RELEASED = 4;
 
     private ConfigKeys() {}
@@ -59,8 +57,8 @@ final class ConfigKeys {
     }
 
     static int sanitizeState(int value) {
-        return value >= STATE_WINDOW && value <= STATE_RELEASED
-                ? value
+        return value == STATE_RELEASED
+                ? STATE_RELEASED
                 : STATE_WINDOW;
     }
 
