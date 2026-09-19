@@ -57,15 +57,17 @@ final class DiagnosticsManager {
 
         Log.i(TAG, "DIAG_SESSION START"
                 + " epochMs=" + started
-                + " package=" + GuardApp.getString(
-                        ConfigKeys.OPLUS_COMMAND_PACKAGE));
+                + " foregroundPackages="
+                + GuardApp.getStringSet(
+                        ConfigKeys.FOREGROUND_PACKAGES));
     }
 
     static void stopSession() {
         Log.i(TAG, "DIAG_SESSION STOP"
                 + " epochMs=" + System.currentTimeMillis()
-                + " package=" + GuardApp.getString(
-                        ConfigKeys.OPLUS_COMMAND_PACKAGE));
+                + " foregroundPackages="
+                + GuardApp.getStringSet(
+                        ConfigKeys.FOREGROUND_PACKAGES));
         GuardApp.putBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE, false);
     }
 
