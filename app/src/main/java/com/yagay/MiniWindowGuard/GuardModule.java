@@ -96,6 +96,10 @@ public final class GuardModule extends XposedModule {
 
         installOplusFlexibleWindowHooks(
                 systemClassLoader);
+        installOplusEdgeKeepaliveHooks(
+                systemClassLoader);
+        installOplusLockKeepaliveHooks(
+                systemClassLoader);
         installActivityRecordCaptureHook(
                 systemClassLoader);
         installActivityManagerHooks(
@@ -162,7 +166,7 @@ public final class GuardModule extends XposedModule {
         return packageName != null
                 && enabled()
                 && current != null
-                && current.isKnownPackage(packageName);
+                && current.isForceSupportPackage(packageName);
     }
 
     private boolean isTargetUid(int uid) {
@@ -356,9 +360,7 @@ public final class GuardModule extends XposedModule {
                             extractKnownPackage(
                                     chain.getArgs());
 
-                    if (engineBool(
-                            ConfigKeys.OPLUS_FORCE_SUPPORT)
-                            && pkg != null) {
+                    if (pkg != null) {
                         boolean forced =
                                 supportCheck;
 
@@ -435,9 +437,7 @@ public final class GuardModule extends XposedModule {
                             extractKnownPackage(
                                     chain.getArgs());
 
-                    if (engineBool(
-                            ConfigKeys.OPLUS_FORCE_SUPPORT)
-                            && pkg != null) {
+                    if (pkg != null) {
                         diag(
                                 "OPLUS_ZOOM_SUPPORT_FORCE",
                                 "pkg=" + pkg);
@@ -449,6 +449,483 @@ public final class GuardModule extends XposedModule {
             } catch (Throwable t) {
                 installedHooks.remove(
                         method.toGenericString());
+            }
+        }
+    }
+
+    /**
+     * OPlus edge/minimize keepalive.
+     *
+     * Let FlexibleTaskController finish its own animation and FloatHandle state,
+     * but skip the final Task.moveTaskToBack for a selected app. Focus is moved
+     * to the task underneath so the hidden edge task does not consume input.
+     */
+    private void installOplusEdgeKeepaliveHooks(
+            ClassLoader loader
+    ) {
+        Class<?> taskExt =
+                load(
+                        loader,
+                        "com.android.server.wm.TaskExtImpl");
+
+        if (taskExt != null) {
+            for (Method method :
+                    taskExt.getDeclaredMethods()) {
+                if (!"moveTaskToBackForPanorama"
+                        .equals(method.getName())) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        Object task =
+                                findTaskArg(
+                                        chain.getArgs());
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && task != null
+                                && current.shouldHoldEdgeTask(
+                                task)) {
+                            focusTaskBehind(task);
+
+                            diag(
+                                    "OPLUS_EDGE_MOVE_BACK_BLOCK",
+                                    "taskId="
+                                            + taskId(task)
+                                            + " pkg="
+                                            + packageFromObject(task));
+
+                            return null;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
+        Class<?> taskClass =
+                load(
+                        loader,
+                        "com.android.server.wm.Task");
+
+        if (taskClass != null) {
+            for (Method method :
+                    taskClass.getDeclaredMethods()) {
+                if (!"prepareSurfaces"
+                        .equals(method.getName())
+                        || method.getParameterCount()
+                        != 0) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        Object result =
+                                chain.proceed();
+
+                        Object task =
+                                chain.getThisObject();
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && current.isEdgeHungTask(
+                                task)) {
+                            Object surface =
+                                    invokeNoArg(
+                                            task,
+                                            "getSurfaceControl");
+
+                            Object valid =
+                                    invokeNoArg(
+                                            surface,
+                                            "isValid");
+
+                            if (Boolean.TRUE.equals(valid)) {
+                                Object transaction =
+                                        invokeNoArg(
+                                                task,
+                                                "getSyncTransaction");
+
+                                invokeMethod(
+                                        transaction,
+                                        "hide",
+                                        surface);
+
+                                diag(
+                                        "OPLUS_EDGE_SURFACE_HIDE",
+                                        "taskId="
+                                                + taskId(task)
+                                                + " pkg="
+                                                + packageFromObject(task));
+                            }
+                        }
+
+                        return result;
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
+        Class<?> displayContent =
+                load(
+                        loader,
+                        "com.android.server.wm.DisplayContent");
+
+        if (displayContent != null) {
+            for (Method method :
+                    displayContent.getDeclaredMethods()) {
+                if (!"setFocusedApp"
+                        .equals(method.getName())
+                        || method.getParameterCount() < 1) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args =
+                                chain.getArgs();
+
+                        if (!args.isEmpty()
+                                && args.get(0) != null) {
+                            Object task =
+                                    invokeNoArg(
+                                            args.get(0),
+                                            "getTask");
+
+                            EngineBridge current = engine;
+
+                            if (current != null
+                                    && current.isEdgeHungTask(
+                                    task)) {
+                                Object behind =
+                                        findBehindActivity(
+                                                task);
+
+                                if (behind != null) {
+                                    try {
+                                        args.set(
+                                                0,
+                                                behind);
+
+                                        diag(
+                                                "OPLUS_EDGE_FOCUS_REDIRECT",
+                                                "taskId="
+                                                        + taskId(task)
+                                                        + " pkg="
+                                                        + packageFromObject(task));
+                                    } catch (Throwable ignored) {
+                                    }
+                                }
+                            }
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+    }
+
+    /**
+     * Lock-screen keepalive. These hooks are intentionally narrow: they only
+     * fire for an "always foreground" app whose task was a real OPlus
+     * FlexibleWindow/floating task at the moment keyguard started.
+     */
+    private void installOplusLockKeepaliveHooks(
+            ClassLoader loader
+    ) {
+        Class<?> flexible =
+                load(
+                        loader,
+                        "com.android.server.wm.FlexibleTaskController");
+
+        if (flexible != null) {
+            for (Method method :
+                    flexible.getDeclaredMethods()) {
+                if (!"notifyKeyguardStateChanged"
+                        .equals(method.getName())) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        List<Object> args =
+                                chain.getArgs();
+
+                        Boolean showing = null;
+
+                        if (args.size() >= 2
+                                && args.get(1)
+                                instanceof Boolean) {
+                            showing =
+                                    (Boolean) args.get(1);
+                        } else {
+                            int booleanIndex = 0;
+
+                            for (Object arg : args) {
+                                if (arg instanceof Boolean) {
+                                    if (booleanIndex++ == 1) {
+                                        showing =
+                                                (Boolean) arg;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && showing != null) {
+                            current.onKeyguardStateChanged(
+                                    showing);
+
+                            diag(
+                                    "OPLUS_KEYGUARD_STATE",
+                                    "showing="
+                                            + showing);
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
+        Class<?> taskFragment =
+                load(
+                        loader,
+                        "com.android.server.wm.TaskFragment");
+
+        if (taskFragment != null) {
+            for (Method method :
+                    taskFragment.getDeclaredMethods()) {
+                if (!"sleepIfPossible"
+                        .equals(method.getName())
+                        || method.getReturnType()
+                        != boolean.class) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        Object task =
+                                taskFromContainer(
+                                        chain.getThisObject());
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && task != null
+                                && current.shouldKeepTaskAwake(
+                                task)) {
+                            diag(
+                                    "OPLUS_LOCK_SLEEP_BLOCK",
+                                    "taskId="
+                                            + taskId(task)
+                                            + " pkg="
+                                            + packageFromObject(task));
+
+                            return true;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
+        Class<?> hans =
+                load(
+                        loader,
+                        "com.android.server.hans.freeze.HansCGroup");
+
+        if (hans != null) {
+            for (Method method :
+                    hans.getDeclaredMethods()) {
+                if (!"hansFreezeLocked"
+                        .equals(method.getName())
+                        || method.getReturnType()
+                        != boolean.class) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        int uid =
+                                extractUid(
+                                        chain.getArgs());
+
+                        if (uid >= 10000
+                                && isTargetUid(uid)) {
+                            diag(
+                                    "OPLUS_HANS_FREEZE_BLOCK",
+                                    "uid=" + uid);
+                            return false;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
+        Class<?> optimizer =
+                load(
+                        loader,
+                        "com.android.server.am.CachedAppOptimizer");
+
+        if (optimizer != null) {
+            for (Method method :
+                    optimizer.getDeclaredMethods()) {
+                if (!"freezeAppAsyncInternalLSP"
+                        .equals(method.getName())) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        Object process =
+                                findProcessRecordArg(
+                                        chain.getArgs());
+
+                        String processName =
+                                processName(
+                                        process);
+
+                        String pkg =
+                                targetPackageForProcess(
+                                        processName);
+
+                        if (pkg != null) {
+                            diag(
+                                    "OPLUS_AOSP_FREEZE_BLOCK",
+                                    "pkg=" + pkg
+                                            + " process="
+                                            + processName);
+                            return null;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
+            }
+        }
+
+        Class<?> ams =
+                load(
+                        loader,
+                        "com.android.server.am.ActivityManagerService");
+
+        if (ams != null) {
+            for (Method method :
+                    ams.getDeclaredMethods()) {
+                if (!"doStopUidLocked"
+                        .equals(method.getName())) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    if (!installedHooks.add(
+                            method.toGenericString())) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        int uid =
+                                extractUid(
+                                        chain.getArgs());
+
+                        if (uid >= 10000
+                                && isTargetUid(uid)) {
+                            diag(
+                                    "OPLUS_STOP_UID_BLOCK",
+                                    "uid=" + uid);
+                            return null;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            method.toGenericString());
+                }
             }
         }
     }
@@ -1499,6 +1976,361 @@ public final class GuardModule extends XposedModule {
                             + className);
             return null;
         }
+    }
+
+    private Object findBehindActivity(
+            Object floatTask
+    ) {
+        try {
+            Object controller =
+                    getFlexibleTaskController();
+
+            if (controller == null) {
+                return null;
+            }
+
+            Object behind =
+                    invokeMethod(
+                            controller,
+                            "getTaskUnderFlexible",
+                            floatTask);
+
+            if (behind == null
+                    || !Boolean.TRUE.equals(
+                    invokeNoArg(
+                            behind,
+                            "isTopActivityFocusable"))
+                    || !Boolean.TRUE.equals(
+                    invokeNoArg(
+                            behind,
+                            "isVisible"))) {
+                return null;
+            }
+
+            return invokeNoArg(
+                    behind,
+                    "getTopNonFinishingActivity");
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private Object getFlexibleTaskController() {
+        try {
+            Class<?> service =
+                    load(
+                            systemClassLoader,
+                            "com.android.server.wm.FlexibleWindowManagerService");
+
+            if (service == null) {
+                return null;
+            }
+
+            Method getInstance = null;
+
+            for (Method method :
+                    service.getDeclaredMethods()) {
+                if ("getInstance"
+                        .equals(method.getName())
+                        && java.lang.reflect.Modifier
+                        .isStatic(
+                                method.getModifiers())) {
+                    getInstance = method;
+                    break;
+                }
+            }
+
+            if (getInstance == null) {
+                return null;
+            }
+
+            getInstance.setAccessible(true);
+
+            Object instance;
+
+            if (getInstance.getParameterCount()
+                    == 0) {
+                instance =
+                        getInstance.invoke(null);
+            } else {
+                Object[] args =
+                        new Object[
+                                getInstance
+                                        .getParameterCount()];
+                instance =
+                        getInstance.invoke(
+                                null,
+                                args);
+            }
+
+            return invokeNoArg(
+                    instance,
+                    "getFlexibleTaskController");
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void focusTaskBehind(Object task) {
+        try {
+            Object behind =
+                    findBehindActivity(task);
+
+            if (behind == null) {
+                return;
+            }
+
+            Object displayContent =
+                    fieldValue(
+                            task,
+                            "mDisplayContent");
+
+            if (displayContent == null) {
+                return;
+            }
+
+            invokeMethod(
+                    displayContent,
+                    "setFocusedApp",
+                    behind);
+
+            Object wmService =
+                    fieldValue(
+                            displayContent,
+                            "mWmService");
+
+            invokeMethod(
+                    wmService,
+                    "updateFocusedWindowLocked",
+                    0,
+                    true);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Object taskFromContainer(
+            Object container
+    ) {
+        if (container == null) {
+            return null;
+        }
+
+        if ("com.android.server.wm.Task"
+                .equals(
+                        container.getClass()
+                                .getName())) {
+            return container;
+        }
+
+        Object task =
+                invokeNoArg(
+                        container,
+                        "getTask");
+
+        if (task != null) {
+            return task;
+        }
+
+        return fieldValue(
+                container,
+                "mTask");
+    }
+
+    private static Object findTaskArg(
+            List<Object> args
+    ) {
+        if (args == null) {
+            return null;
+        }
+
+        for (Object arg : args) {
+            if (arg == null) continue;
+
+            if ("com.android.server.wm.Task"
+                    .equals(
+                            arg.getClass()
+                                    .getName())
+                    || findField(
+                    arg.getClass(),
+                    "mTaskId") != null) {
+                return arg;
+            }
+        }
+
+        return null;
+    }
+
+    private static Object findProcessRecordArg(
+            List<Object> args
+    ) {
+        if (args == null) {
+            return null;
+        }
+
+        for (Object arg : args) {
+            if (arg == null) continue;
+
+            String name =
+                    arg.getClass()
+                            .getName();
+
+            if (name.endsWith(
+                    ".ProcessRecord")
+                    || findField(
+                    arg.getClass(),
+                    "processName") != null
+                    || findField(
+                    arg.getClass(),
+                    "mProcessName") != null) {
+                return arg;
+            }
+        }
+
+        return null;
+    }
+
+    private static String processName(
+            Object processRecord
+    ) {
+        if (processRecord == null) {
+            return null;
+        }
+
+        for (String field : new String[]{
+                "processName",
+                "mProcessName"
+        }) {
+            Object value =
+                    fieldValue(
+                            processRecord,
+                            field);
+
+            if (value instanceof String) {
+                return (String) value;
+            }
+        }
+
+        return null;
+    }
+
+    private static int extractUid(
+            List<Object> args
+    ) {
+        if (args == null) {
+            return -1;
+        }
+
+        for (Object arg : args) {
+            if (arg instanceof Integer) {
+                int value =
+                        (Integer) arg;
+
+                if (value >= 10000) {
+                    return value;
+                }
+            }
+
+            if (arg == null) continue;
+
+            Object uid =
+                    invokeNoArg(
+                            arg,
+                            "getUid");
+
+            if (uid instanceof Number) {
+                int value =
+                        ((Number) uid)
+                                .intValue();
+
+                if (value >= 10000) {
+                    return value;
+                }
+            }
+
+            for (String field :
+                    new String[]{
+                            "mUid",
+                            "uid"
+                    }) {
+                Object value =
+                        fieldValue(
+                                arg,
+                                field);
+
+                if (value instanceof Number) {
+                    int parsed =
+                            ((Number) value)
+                                    .intValue();
+
+                    if (parsed >= 10000) {
+                        return parsed;
+                    }
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static int taskId(Object task) {
+        if (task == null) {
+            return -1;
+        }
+
+        Object id =
+                invokeNoArg(
+                        task,
+                        "getTaskId");
+
+        if (id instanceof Number) {
+            return ((Number) id)
+                    .intValue();
+        }
+
+        return intField(
+                task,
+                "mTaskId",
+                -1);
+    }
+
+    private static Object invokeMethod(
+            Object receiver,
+            String name,
+            Object... args
+    ) {
+        if (receiver == null) {
+            return null;
+        }
+
+        Class<?> current =
+                receiver.getClass();
+
+        while (current != null) {
+            for (Method method :
+                    current.getDeclaredMethods()) {
+                if (!name.equals(
+                        method.getName())
+                        || method.getParameterCount()
+                        != args.length) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+                    return method.invoke(
+                            receiver,
+                            args);
+                } catch (IllegalArgumentException ignored) {
+                } catch (Throwable ignored) {
+                    return null;
+                }
+            }
+
+            current =
+                    current.getSuperclass();
+        }
+
+        return null;
     }
 
     private static Object invokeNoArg(
