@@ -1,5 +1,26 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.2 — 修复普通后台/普通锁屏名单未同步
+
+5.3.0 加入了 `background_playback_packages`，但 App 侧 `GuardApp.syncAll()` 的
+`STRING_SET_KEYS` 漏掉了这个新 key。结果是界面可以勾选“后台播放应用”，但 LSPosed/system_server
+永远收不到该名单，因此：
+
+- 普通全屏切后台不会出现 `BACKGROUND_PAUSE_SUPPRESS / BACKGROUND_PAUSE_BLOCK`；
+- 普通全屏锁屏仍会执行 `wm_pause_activity ... reason=sleep`；
+- 只有原来的 OPlus 小窗名单继续有效。
+
+5.3.2 修复：
+
+- 将 `BACKGROUND_PLAYBACK_PACKAGES` 加入 Remote Preferences 同步；
+- 已经勾选的后台播放应用会在新版本启动后自动同步，无需重新勾选；
+- 诊断摘要新增 `background_playback_packages=[...]`；
+- 诊断目标列表也包含后台播放应用；
+- 不修改 5.3.1 已稳定的小窗/FloatHandle 状态机；
+- Bootstrap API 仍为 3，本版本没有新增固定 system_server Hook。
+
+> 如果当前已经运行 5.3.1 / Bootstrap API 3，安装 5.3.2 后不需要完整重启；让 App 启动并连接 LSPosed 后即可同步配置，Engine 可自动热重载。
+
 ## 5.3.1 — 修复 FloatHandle 重复开关后停止播放
 
 诊断确认：第一次缩成 FloatHandle 后，从图标重新打开小窗时，OPlus 会执行
