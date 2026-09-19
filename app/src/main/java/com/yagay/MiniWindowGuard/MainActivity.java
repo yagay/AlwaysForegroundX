@@ -422,13 +422,23 @@ public final class MainActivity extends Activity {
         if (engineStatus != null) {
             long expected = GuardApp.getExpectedVersionCode();
             long loaded = GuardApp.getLoadedEngineVersionCode();
+            boolean connected = GuardApp.isXposedServiceConnected();
+            boolean hasSystem = GuardApp.hasSystemScope();
             boolean current = GuardApp.isSystemEngineCurrent();
 
-            engineStatus.setText(current
-                    ? "System 引擎：已加载当前版本 · code " + loaded
-                    : "System 引擎：未加载当前版本 · App=" + expected
-                            + " / system_server=" + loaded
-                            + "（安装或更新模块后必须重启手机）");
+            if (!connected) {
+                engineStatus.setText("System 引擎：LSPosed 服务未连接");
+            } else if (!hasSystem) {
+                engineStatus.setText("System 引擎：作用域缺少 system · 实际="
+                        + GuardApp.getFrameworkScope());
+            } else if (current) {
+                engineStatus.setText("System 引擎：已激活 · code " + loaded
+                        + " · pid " + GuardApp.getEnginePid()
+                        + " · hooks " + GuardApp.getEngineHookCount());
+            } else {
+                engineStatus.setText("System 引擎：scope 已包含 system，但本次开机未收到心跳"
+                        + " · App=" + expected + " / heartbeat=" + loaded);
+            }
             engineStatus.setTextColor(current ? 0xFF16794A : 0xFFB3261E);
         }
 
@@ -444,6 +454,7 @@ public final class MainActivity extends Activity {
             boolean connected = GuardApp.isXposedServiceConnected();
             xposedStatus.setText(connected
                     ? "LSPosed：已连接 · " + GuardApp.getFrameworkName()
+                            + " · scope=" + GuardApp.getFrameworkScope()
                     : "LSPosed：配置服务未连接");
             xposedStatus.setTextColor(connected ? 0xFF16794A : 0xFFB3261E);
         }

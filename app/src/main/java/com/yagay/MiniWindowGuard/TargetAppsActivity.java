@@ -306,10 +306,12 @@ public final class TargetAppsActivity extends Activity {
         }
 
         if (!GuardApp.isSystemEngineCurrent()) {
-            Toast.makeText(
-                    this,
-                    "当前版本的 system_server 引擎还没有加载。安装/更新模块后请先重启手机。",
-                    Toast.LENGTH_LONG).show();
+            String message = !GuardApp.hasSystemScope()
+                    ? "LSPosed 实际作用域不包含 system，请检查模块作用域。当前："
+                            + GuardApp.getFrameworkScope()
+                    : "作用域已有 system，但本次开机没有收到 system_server 引擎心跳。"
+                            + "请检查 LSPosed 模块是否启用，并重启 system_server/手机。";
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
             return;
         }
 

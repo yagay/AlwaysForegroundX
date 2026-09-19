@@ -15,6 +15,13 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <provider
+            android:name="com.yagay.MiniWindowGuard.EngineStatusProvider"
+            android:authorities="com.yagay.MiniWindowGuard.engine_status"
+            android:directBootAware="true"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
         <service
             android:name="com.yagay.MiniWindowGuard.ContainerOverlayService"
             android:exported="false"

@@ -3,8 +3,10 @@ package com.yagay.MiniWindowGuard;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
 import android.util.Log;
 
 import java.lang.reflect.Field;
@@ -53,7 +55,6 @@ public final class GuardModule extends XposedModule {
         Handler handler = new Handler(Looper.getMainLooper());
 
         Context context = resolveSystemContext(systemClassLoader);
-        GuardConfig.markEngineActive(resolveInstalledVersionCode(context));
 
         container = new TaskSurfaceController(
                 handler,
@@ -70,6 +71,8 @@ public final class GuardModule extends XposedModule {
                 "targets=" + GuardConfig.targetPackages()
                         + " hooks=" + installedHooks.size()
                         + " systemContext=" + (context != null));
+
+        scheduleEngineHeartbeat(handler);
     }
 
     private boolean enabled() {
@@ -383,15 +386,61 @@ public final class GuardModule extends XposedModule {
         }
     }
 
-    private long resolveInstalledVersionCode(Context context) {
-        if (context == null) return 49L;
-        try {
-            return context.getPackageManager()
-                    .getPackageInfo("com.yagay.MiniWindowGuard", 0)
-                    .getLongVersionCode();
-        } catch (Throwable ignored) {
-            return 49L;
-        }
+    private void scheduleEngineHeartbeat(Handler handler) {
+        handler.postDelayed(new Runnable() {
+            private int attempts;
+
+            @Override
+            public void run() {
+                attempts++;
+
+                Context context = resolveSystemContext(systemClassLoader);
+                boolean ok = false;
+
+                if (context != null) {
+                    try {
+                        Bundle extras = new Bundle();
+                        extras.putLong(
+                                EngineStatusProvider.KEY_VERSION,
+                                BuildConfig.VERSION_CODE);
+                        extras.putInt(
+                                EngineStatusProvider.KEY_PID,
+                                Process.myPid());
+                        extras.putInt(
+                                EngineStatusProvider.KEY_HOOKS,
+                                installedHooks.size());
+
+                        Bundle result = context.getContentResolver().call(
+                                EngineStatusProvider.URI,
+                                EngineStatusProvider.METHOD_MARK,
+                                null,
+                                extras);
+                        ok = result != null && result.getBoolean("ok", false);
+                    } catch (Throwable t) {
+                        log(Log.WARN, TAG,
+                                "SYSTEM_SCOPE heartbeat failed attempt="
+                                        + attempts + " error=" + t);
+                    }
+                }
+
+                if (ok) {
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE heartbeat delivered"
+                                    + " version=" + BuildConfig.VERSION_CODE
+                                    + " pid=" + Process.myPid()
+                                    + " hooks=" + installedHooks.size());
+                    return;
+                }
+
+                if (attempts < 24) {
+                    handler.postDelayed(this, 5_000L);
+                } else {
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE heartbeat abandoned after "
+                                    + attempts + " attempts");
+                }
+            }
+        }, 2_000L);
     }
 
     private Context resolveSystemContext(ClassLoader loader) {
