@@ -20,8 +20,6 @@ public final class GuardApp extends Application {
             ConfigKeys.ENGINE_AUTO_RELOAD,
             ConfigKeys.SYSTEM_IMPORTANCE_TOP,
             ConfigKeys.SYSTEM_HAS_RESUMED,
-            ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED,
-            ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
             ConfigKeys.OPLUS_FORCE_SUPPORT,
             ConfigKeys.DIAGNOSTICS_ACTIVE
