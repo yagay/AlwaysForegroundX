@@ -1,5 +1,21 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.0 — 普通后台播放状态
+
+5.3.0 在已经稳定的 5.2.0 OPlus 小窗状态机旁边增加独立的 `BACKGROUND_PROTECTED`，不改变原有小窗逻辑。
+
+- 新增“后台播放应用”名单；
+- 普通全屏 App 切到不同包、Home/用户离开，或屏幕 sleep 时才进入 `BACKGROUND_PROTECTED`；
+- `TaskFragment.startPausing()` 直接依据当前 Activity、resuming Activity、`userLeaving` 和 `uiSleeping` 判断，不使用延迟；
+- 同 App 内页面切换正常 pause/resume，不拦；
+- Activity finishing、强制停止和应用更新正常放行；
+- 返回受保护 App、重新获得焦点时自动退出 `BACKGROUND_PROTECTED`；
+- 后台状态复用现有 TOP / hasResumedActivity / Hans / freezer / stopUid 保护；
+- 用户从最近任务划掉普通后台 App 时允许正常关闭，不套用小窗的 task-removal kill guard；
+- 小窗/FloatHandle/锁屏小窗继续完全使用 5.2.0 的原逻辑。
+
+> 5.3.0 的 Bootstrap API 升级为 2。旧 Bootstrap 不会错误热加载本版本；安装后需要完整重启一次。
+
 ## 5.2.0 — 状态驱动生命周期守护
 
 5.2.0 不再依赖“锁屏前提前几毫秒”或“动画结束后再补救”的时序方案。
