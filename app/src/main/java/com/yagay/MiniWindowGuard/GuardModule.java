@@ -36,7 +36,7 @@ public final class GuardModule extends XposedModule {
             new ConcurrentHashMap<>();
 
     private volatile ClassLoader systemClassLoader;
-    private volatile TaskSurfaceController container;
+    private volatile VirtualDisplayController container;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -59,7 +59,7 @@ public final class GuardModule extends XposedModule {
 
         Context context = resolveSystemUiContext(systemClassLoader);
 
-        container = new TaskSurfaceController(
+        container = new VirtualDisplayController(
                 handler,
                 context,
                 this::containerLog);
@@ -73,9 +73,9 @@ public final class GuardModule extends XposedModule {
         installRemovedTaskServiceGuard(systemClassLoader);
         installProcessKillGuard(systemClassLoader);
 
-        log(Log.INFO, TAG, "SYSTEM_SCOPE VirtualDisplay engine ready in system_server");
+        log(Log.INFO, TAG, "SYSTEM_SCOPE original VirtualDisplay engine ready in system_server");
         diag("ENGINE_READY",
-                "backend=VirtualDisplay"
+                "backend=OriginalVirtualDisplay"
                         + " hooks=" + installedHooks.size()
                         + " systemUiContext=" + (context != null));
 
@@ -87,7 +87,7 @@ public final class GuardModule extends XposedModule {
     }
 
     private boolean isTargetPackage(String packageName) {
-        TaskSurfaceController current = container;
+        VirtualDisplayController current = container;
         return packageName != null
                 && enabled()
                 && current != null
@@ -260,7 +260,7 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         if (!enabled()
                                 || current == null
                                 || !GuardConfig.bool(
@@ -301,7 +301,7 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         if (!enabled()
                                 || current == null
                                 || !GuardConfig.bool(
@@ -341,7 +341,7 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         Object activityRecord = chain.getThisObject();
                         if (!enabled()
                                 || current == null
@@ -394,7 +394,7 @@ public final class GuardModule extends XposedModule {
                             return chain.proceed();
                         }
 
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         Object activityRecord = chain.getThisObject();
                         if (!enabled()
                                 || current == null
@@ -445,7 +445,7 @@ public final class GuardModule extends XposedModule {
                             return chain.proceed();
                         }
 
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         Object activityRecord = chain.getThisObject();
                         if (!enabled()
                                 || current == null
@@ -503,7 +503,7 @@ public final class GuardModule extends XposedModule {
                         Object activityRecord = chain.getThisObject();
                         String pkg = activityPackage(activityRecord);
 
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         if (current != null && current.wantsPackage(pkg)) {
                             current.capture(activityRecord, pkg);
                         }
@@ -541,7 +541,7 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         if (!enabled()
                                 || current == null
                                 || !GuardConfig.bool(
@@ -587,7 +587,7 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         if (!enabled()
                                 || current == null
                                 || !GuardConfig.bool(
@@ -631,7 +631,7 @@ public final class GuardModule extends XposedModule {
                     if (!installedHooks.add(method.toGenericString())) continue;
 
                     hook(method).intercept(chain -> {
-                        TaskSurfaceController current = container;
+                        VirtualDisplayController current = container;
                         if (!enabled()
                                 || current == null
                                 || !GuardConfig.bool(
@@ -698,7 +698,7 @@ public final class GuardModule extends XposedModule {
                         return chain.proceed();
                     }
 
-                    TaskSurfaceController current = container;
+                    VirtualDisplayController current = container;
                     Object token = chain.getThisObject();
                     if (!enabled()
                             || current == null
@@ -881,7 +881,7 @@ public final class GuardModule extends XposedModule {
     }
 
     private String targetPackageForProcess(String processName) {
-        TaskSurfaceController current = container;
+        VirtualDisplayController current = container;
         return current == null
                 ? null
                 : current.managedPackageForProcess(processName);
