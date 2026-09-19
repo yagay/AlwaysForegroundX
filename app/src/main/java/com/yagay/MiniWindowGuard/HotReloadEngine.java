@@ -138,6 +138,13 @@ public final class HotReloadEngine {
         }
     }
 
+    public void preArmLockKeepAlive(String reason) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.preArmLockKeepAlive(reason);
+        }
+    }
+
     public void onKeyguardStateChanged(boolean showing) {
         OplusFlexibleWindowController current = controller;
         if (current != null) {
