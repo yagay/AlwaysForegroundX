@@ -83,6 +83,15 @@ final class GuardConfig {
                 .contains(packageName);
     }
 
+    static boolean backgroundPlaybackPackage(
+            String packageName
+    ) {
+        return packageName != null
+                && stringSet(
+                ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)
+                .contains(packageName);
+    }
+
     static boolean forceSupportPackage(String packageName) {
         return packageName != null
                 && stringSet(
