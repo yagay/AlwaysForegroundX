@@ -19,15 +19,12 @@ final class ConfigKeys {
 
     static final String AUTO_CONTAINER = "auto_container";
 
-    // Kept on the existing preference key for 4.4.x migration.
-    static final String SAFE_INITIAL_DISPLAY =
+    static final String FIXED_INTERNAL_DISPLAY =
             "fixed_internal_display";
     static final String INTERNAL_DISPLAY_SCALE =
             "internal_display_scale";
-    static final String FOLLOW_WINDOW_AFTER_START =
-            "follow_window_after_start";
-    static final String STARTUP_SETTLE_MS =
-            "startup_settle_ms";
+    static final String LOCK_WINDOW_ASPECT =
+            "lock_window_aspect";
     static final String OUTER_MIN_WIDTH_DP =
             "outer_min_width_dp";
     static final String OUTER_MIN_HEIGHT_DP =
@@ -64,8 +61,8 @@ final class ConfigKeys {
                     SYSTEM_KEEP_CONTAINER_VISIBLE,
                     SYSTEM_BLOCK_REMOVE_KILL,
                     AUTO_CONTAINER,
-                    SAFE_INITIAL_DISPLAY,
-                    FOLLOW_WINDOW_AFTER_START -> true;
+                    FIXED_INTERNAL_DISPLAY,
+                    LOCK_WINDOW_ASPECT -> true;
             default -> false;
         };
     }
@@ -75,7 +72,6 @@ final class ConfigKeys {
             case CONTAINER_WIDTH -> 58;
             case CONTAINER_HEIGHT -> 66;
             case INTERNAL_DISPLAY_SCALE -> 48;
-            case STARTUP_SETTLE_MS -> 1500;
             case OUTER_MIN_WIDTH_DP -> 160;
             case OUTER_MIN_HEIGHT_DP -> 220;
             default -> 0;
