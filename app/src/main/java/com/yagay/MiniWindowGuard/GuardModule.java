@@ -2,6 +2,10 @@ package com.yagay.MiniWindowGuard;
 
 import android.content.ComponentName;
 import android.content.SharedPreferences;
+import android.os.Binder;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
 import android.util.Log;
 
 import java.lang.reflect.Field;
@@ -29,11 +33,19 @@ public final class GuardModule extends XposedModule {
     private final Set<String> installedHooks = ConcurrentHashMap.newKeySet();
     private final Set<String> firstHits = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Integer, String[]> uidPackages = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Long> flexibleWindowRequestedAt =
+            new ConcurrentHashMap<>();
 
     private volatile ClassLoader systemClassLoader;
+    private volatile Handler systemHandler;
 
     private volatile Object oplusZoomManager;
     private volatile Method getCurrentZoomWindowState;
+    private volatile Method startMiniZoomFromZoom;
+    private volatile Method hideZoomWindow;
+
+    private volatile Object oplusActivityTaskManager;
+    private volatile Method toggleFlexibleWindow;
     private volatile Field zoomPkgField;
     private volatile Field windowTypeField;
     private volatile Field windowShownField;
@@ -69,12 +81,14 @@ public final class GuardModule extends XposedModule {
         if (!SYSTEM_PACKAGE.equals(param.getPackageName())) return;
 
         systemClassLoader = param.getClassLoader();
+        systemHandler = new Handler(Looper.getMainLooper());
 
         installActivityManagerHooks(systemClassLoader);
         installActivityTaskManagerHooks(systemClassLoader);
         installActivityRecordHooks(systemClassLoader);
         installOplusMultiResumeHooks(systemClassLoader);
         prepareOplusZoomState(systemClassLoader);
+        prepareOplusFlexibleWindowApi(systemClassLoader);
 
         log(Log.INFO, TAG, "SYSTEM_SCOPE system_server hooks ready");
         diag("ENGINE_READY",
@@ -267,45 +281,91 @@ public final class GuardModule extends XposedModule {
         if (record == null) return;
 
         for (Method method : record.getDeclaredMethods()) {
-            if (!"shouldPauseActivity".equals(method.getName())
-                    || method.getReturnType() != boolean.class) {
+            if ("shouldPauseActivity".equals(method.getName())
+                    && method.getReturnType() == boolean.class) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+                    hook(method).intercept(chain -> {
+                        if (!enabled()
+                                || !GuardConfig.bool(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED)) {
+                            return chain.proceed();
+                        }
+
+                        Object activityRecord = chain.getThisObject();
+                        String pkg = activityPackage(activityRecord);
+                        if (!isTargetPackage(pkg)) return chain.proceed();
+
+                        boolean zoomActive = isOplusZoomActiveFor(pkg);
+                        if (zoomActive) {
+                            hit("ActivityRecord.keepResumed zoom=" + pkg);
+                            diag("ACTIVITY_KEEP_RESUMED",
+                                    "pkg=" + pkg
+                                            + " record=" + compact(activityRecord)
+                                            + " decision=false"
+                                            + " stack=" + stackSummary());
+                            return false;
+                        }
+
+                        diag("ACTIVITY_PAUSE_ALLOWED",
+                                "pkg=" + pkg
+                                        + " zoomActive=false"
+                                        + " record=" + compact(activityRecord));
+                        return chain.proceed();
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord.shouldPauseActivity");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord.shouldPauseActivity error=" + t);
+                }
                 continue;
             }
 
-            try {
-                method.setAccessible(true);
-                if (!installedHooks.add(method.toGenericString())) continue;
-                hook(method).intercept(chain -> {
-                    if (!enabled()
-                            || !GuardConfig.bool(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED)) {
-                        return chain.proceed();
-                    }
+            // ActivityRecord.setState(RESUMED, reason) is a stable system_server point after a
+            // task has actually become foreground. Convert protected fullscreen tasks into the
+            // OEM flexible window here, instead of requiring any hook inside the target app.
+            if ("setState".equals(method.getName())
+                    && method.getReturnType() == void.class
+                    && method.getParameterCount() >= 1) {
+                try {
+                    method.setAccessible(true);
+                    if (!installedHooks.add(method.toGenericString())) continue;
+                    hook(method).intercept(chain -> {
+                        Object result = chain.proceed();
 
-                    Object activityRecord = chain.getThisObject();
-                    String pkg = activityPackage(activityRecord);
-                    if (!isTargetPackage(pkg)) return chain.proceed();
+                        if (!enabled()
+                                || !GuardConfig.bool(ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW)) {
+                            return result;
+                        }
 
-                    boolean zoomActive = isOplusZoomActiveFor(pkg);
-                    if (zoomActive) {
-                        hit("ActivityRecord.keepResumed zoom=" + pkg);
-                        diag("ACTIVITY_KEEP_RESUMED",
-                                "pkg=" + pkg
-                                        + " record=" + compact(activityRecord)
-                                        + " decision=false"
-                                        + " stack=" + stackSummary());
-                        return false;
-                    }
+                        List<Object> args = chain.getArgs();
+                        if (args.isEmpty() || !"RESUMED".equals(String.valueOf(args.get(0)))) {
+                            return result;
+                        }
 
-                    diag("ACTIVITY_PAUSE_ALLOWED",
-                            "pkg=" + pkg
-                                    + " zoomActive=false"
-                                    + " record=" + compact(activityRecord));
-                    return chain.proceed();
-                });
-                log(Log.INFO, TAG, "SYSTEM_SCOPE installed ActivityRecord.shouldPauseActivity");
-            } catch (Throwable t) {
-                installedHooks.remove(method.toGenericString());
-                log(Log.WARN, TAG, "SYSTEM_SCOPE skipped ActivityRecord.shouldPauseActivity error=" + t);
+                        Object activityRecord = chain.getThisObject();
+                        String pkg = activityPackage(activityRecord);
+                        if (!isTargetPackage(pkg)) return result;
+
+                        int taskId = activityTaskId(activityRecord);
+                        if (taskId < 0) {
+                            diag("AUTO_SMALL_WINDOW_SKIP",
+                                    "pkg=" + pkg + " reason=no-task-id");
+                            return result;
+                        }
+
+                        scheduleFlexibleWindow(taskId, pkg);
+                        return result;
+                    });
+                    log(Log.INFO, TAG,
+                            "SYSTEM_SCOPE installed ActivityRecord.setState auto-small-window");
+                } catch (Throwable t) {
+                    installedHooks.remove(method.toGenericString());
+                    log(Log.WARN, TAG,
+                            "SYSTEM_SCOPE skipped ActivityRecord.setState error=" + t);
+                }
             }
         }
     }
@@ -429,6 +489,10 @@ public final class GuardModule extends XposedModule {
             oplusZoomManager = managerClass.getMethod("getInstance").invoke(null);
             getCurrentZoomWindowState =
                     managerClass.getMethod("getCurrentZoomWindowState");
+            startMiniZoomFromZoom = optionalMethod(
+                    managerClass, "startMiniZoomFromZoom", int.class);
+            hideZoomWindow = optionalMethod(
+                    managerClass, "hideZoomWindow", int.class);
 
             Class<?> infoClass = Class.forName(
                     "com.oplus.zoomwindow.OplusZoomWindowInfo",
@@ -449,6 +513,250 @@ public final class GuardModule extends XposedModule {
             log(Log.INFO, TAG,
                     "SYSTEM_SCOPE OPlus Zoom state API unavailable: " + t);
         }
+    }
+
+    private void prepareOplusFlexibleWindowApi(ClassLoader loader) {
+        try {
+            Class<?> clazz = Class.forName(
+                    "android.app.OplusActivityTaskManager",
+                    false,
+                    loader);
+            Object instance = clazz.getMethod("getInstance").invoke(null);
+
+            Method toggle = optionalMethod(
+                    clazz,
+                    "toggleFlexibleWindow",
+                    IBinder.class,
+                    int.class,
+                    boolean.class,
+                    boolean.class);
+
+            if (instance == null || toggle == null) {
+                log(Log.INFO, TAG,
+                        "SYSTEM_SCOPE OPlus flexible-window API unavailable");
+                return;
+            }
+
+            oplusActivityTaskManager = instance;
+            toggleFlexibleWindow = toggle;
+            log(Log.INFO, TAG,
+                    "SYSTEM_SCOPE OPlus flexible-window API ready");
+            diag("OPLUS_FLEX_API_READY", "method=" + toggle.toGenericString());
+        } catch (Throwable t) {
+            log(Log.INFO, TAG,
+                    "SYSTEM_SCOPE OPlus flexible-window API unavailable: " + t);
+        }
+    }
+
+    private void scheduleFlexibleWindow(int taskId, String packageName) {
+        Handler handler = systemHandler;
+        if (handler == null) return;
+
+        long now = android.os.SystemClock.elapsedRealtime();
+        Long previous = flexibleWindowRequestedAt.get(taskId);
+        if (previous != null && now - previous < 2500L) {
+            return;
+        }
+        flexibleWindowRequestedAt.put(taskId, now);
+
+        diag("AUTO_SMALL_WINDOW_SCHEDULE",
+                "pkg=" + packageName
+                        + " taskId=" + taskId
+                        + " form=" + GuardConfig.windowForm());
+
+        handler.postDelayed(
+                () -> enterFlexibleWindow(taskId, packageName),
+                220L);
+    }
+
+    private void enterFlexibleWindow(int taskId, String packageName) {
+        if (!isTargetPackage(packageName)
+                || !GuardConfig.bool(ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW)) {
+            return;
+        }
+
+        // If the task is already in OPlus Zoom/Mini, don't toggle it again.
+        if (isOplusZoomActiveFor(packageName)) {
+            diag("AUTO_SMALL_WINDOW_ALREADY_ACTIVE",
+                    "pkg=" + packageName + " taskId=" + taskId);
+            applyRequestedWindowForm(packageName);
+            return;
+        }
+
+        Object manager = oplusActivityTaskManager;
+        Method toggle = toggleFlexibleWindow;
+        if (manager == null || toggle == null) {
+            diag("AUTO_SMALL_WINDOW_UNAVAILABLE",
+                    "pkg=" + packageName
+                            + " taskId=" + taskId
+                            + " reason=no-toggle-api");
+            return;
+        }
+
+        long identity = Binder.clearCallingIdentity();
+        try {
+            Object result = toggle.invoke(
+                    manager,
+                    null,
+                    taskId,
+                    true,
+                    true);
+
+            log(Log.INFO, TAG,
+                    "SYSTEM_SCOPE AUTO_SMALL_WINDOW"
+                            + " pkg=" + packageName
+                            + " taskId=" + taskId
+                            + " result=" + result);
+            diag("AUTO_SMALL_WINDOW_ENTER",
+                    "pkg=" + packageName
+                            + " taskId=" + taskId
+                            + " result=" + compact(result));
+
+            Handler handler = systemHandler;
+            if (handler != null) {
+                handler.postDelayed(
+                        () -> applyRequestedWindowForm(packageName),
+                        500L);
+            }
+        } catch (Throwable t) {
+            log(Log.WARN, TAG,
+                    "SYSTEM_SCOPE AUTO_SMALL_WINDOW failed"
+                            + " pkg=" + packageName
+                            + " taskId=" + taskId,
+                    t);
+            diag("AUTO_SMALL_WINDOW_FAILED",
+                    "pkg=" + packageName
+                            + " taskId=" + taskId
+                            + " error=" + compact(t));
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    private void applyRequestedWindowForm(String packageName) {
+        int form = GuardConfig.windowForm();
+        if (form == ConfigKeys.FORM_WINDOW) return;
+
+        Object manager = oplusZoomManager;
+        if (manager == null) {
+            diag("AUTO_SMALL_WINDOW_FORM_SKIP",
+                    "pkg=" + packageName + " reason=no-zoom-manager");
+            return;
+        }
+
+        long identity = Binder.clearCallingIdentity();
+        try {
+            if (form == ConfigKeys.FORM_ICON) {
+                Method mini = startMiniZoomFromZoom;
+                if (mini == null) {
+                    diag("AUTO_SMALL_WINDOW_FORM_SKIP",
+                            "pkg=" + packageName + " form=icon reason=no-mini-api");
+                    return;
+                }
+                Object result = mini.invoke(manager, 7);
+                diag("AUTO_SMALL_WINDOW_FORM",
+                        "pkg=" + packageName
+                                + " form=icon result=" + compact(result));
+                return;
+            }
+
+            if (form == ConfigKeys.FORM_HIDDEN) {
+                Method mini = startMiniZoomFromZoom;
+                if (mini != null) {
+                    try {
+                        mini.invoke(manager, 7);
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                Handler handler = systemHandler;
+                if (handler != null) {
+                    handler.postDelayed(() -> {
+                        long nestedIdentity = Binder.clearCallingIdentity();
+                        try {
+                            Method hide = hideZoomWindow;
+                            if (hide == null) {
+                                diag("AUTO_SMALL_WINDOW_FORM_SKIP",
+                                        "pkg=" + packageName
+                                                + " form=hidden reason=no-hide-api");
+                                return;
+                            }
+                            Object result = hide.invoke(manager, 2);
+                            diag("AUTO_SMALL_WINDOW_FORM",
+                                    "pkg=" + packageName
+                                            + " form=hidden result=" + compact(result));
+                        } catch (Throwable t) {
+                            diag("AUTO_SMALL_WINDOW_FORM_FAILED",
+                                    "pkg=" + packageName
+                                            + " form=hidden error=" + compact(t));
+                        } finally {
+                            Binder.restoreCallingIdentity(nestedIdentity);
+                        }
+                    }, 320L);
+                }
+            }
+        } catch (Throwable t) {
+            diag("AUTO_SMALL_WINDOW_FORM_FAILED",
+                    "pkg=" + packageName
+                            + " form=" + form
+                            + " error=" + compact(t));
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    private int activityTaskId(Object activityRecord) {
+        if (activityRecord == null) return -1;
+
+        try {
+            Method getTask = findMethod(activityRecord.getClass(), "getTask");
+            if (getTask != null) {
+                getTask.setAccessible(true);
+                Object task = getTask.invoke(activityRecord);
+                int id = taskId(task);
+                if (id >= 0) return id;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            Field taskField = findField(activityRecord.getClass(), "task");
+            if (taskField == null) {
+                taskField = findField(activityRecord.getClass(), "mTask");
+            }
+            if (taskField != null) {
+                taskField.setAccessible(true);
+                return taskId(taskField.get(activityRecord));
+            }
+        } catch (Throwable ignored) {
+        }
+
+        return -1;
+    }
+
+    private static int taskId(Object task) {
+        if (task == null) return -1;
+
+        try {
+            Method method = findMethod(task.getClass(), "getTaskId");
+            if (method != null) {
+                method.setAccessible(true);
+                Object value = method.invoke(task);
+                if (value instanceof Integer) return (Integer) value;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            Field field = findField(task.getClass(), "mTaskId");
+            if (field != null) {
+                field.setAccessible(true);
+                return field.getInt(task);
+            }
+        } catch (Throwable ignored) {
+        }
+
+        return -1;
     }
 
     private boolean isOplusZoomActiveFor(String packageName) {
@@ -524,6 +832,34 @@ public final class GuardModule extends XposedModule {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static Method optionalMethod(
+            Class<?> type,
+            String name,
+            Class<?>... parameterTypes
+    ) {
+        try {
+            Method method = type.getMethod(name, parameterTypes);
+            method.setAccessible(true);
+            return method;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Method findMethod(Class<?> type, String name) {
+        Class<?> current = type;
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (name.equals(method.getName())
+                        && method.getParameterCount() == 0) {
+                    return method;
+                }
+            }
+            current = current.getSuperclass();
+        }
+        return null;
     }
 
     private static Field findField(Class<?> type, String name) {
