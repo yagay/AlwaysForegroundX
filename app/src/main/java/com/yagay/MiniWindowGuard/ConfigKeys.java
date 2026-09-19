@@ -18,18 +18,6 @@ final class ConfigKeys {
             "system_block_remove_kill";
 
     static final String AUTO_CONTAINER = "auto_container";
-    static final String NATIVE_FREEFORM_ENGINE =
-            "native_freeform_engine";
-
-    static final String FIXED_INTERNAL_DISPLAY =
-            "fixed_internal_display";
-    static final String INTERNAL_DISPLAY_SCALE =
-            "internal_display_scale";
-    static final String OUTER_MIN_WIDTH_DP =
-            "outer_min_width_dp";
-    static final String OUTER_MIN_HEIGHT_DP =
-            "outer_min_height_dp";
-
     static final String CONTAINER_WIDTH = "container_width";
     static final String CONTAINER_HEIGHT = "container_height";
 
@@ -60,9 +48,7 @@ final class ConfigKeys {
                     SYSTEM_KEEP_CONTAINER_RESUMED,
                     SYSTEM_KEEP_CONTAINER_VISIBLE,
                     SYSTEM_BLOCK_REMOVE_KILL,
-                    AUTO_CONTAINER,
-                    NATIVE_FREEFORM_ENGINE,
-                    FIXED_INTERNAL_DISPLAY -> true;
+                    AUTO_CONTAINER -> true;
             default -> false;
         };
     }
@@ -71,9 +57,6 @@ final class ConfigKeys {
         return switch (key) {
             case CONTAINER_WIDTH -> 58;
             case CONTAINER_HEIGHT -> 66;
-            case INTERNAL_DISPLAY_SCALE -> 48;
-            case OUTER_MIN_WIDTH_DP -> 160;
-            case OUTER_MIN_HEIGHT_DP -> 220;
             default -> 0;
         };
     }
