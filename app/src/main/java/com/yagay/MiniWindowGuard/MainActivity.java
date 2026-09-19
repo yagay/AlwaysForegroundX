@@ -10,7 +10,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -18,36 +17,54 @@ import android.widget.Toast;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * OPlus FlexibleWindow control panel.
+ *
+ * No custom window settings exist here. OxygenOS owns all window rendering,
+ * size, animation, caption, minimize/restore and input behavior.
+ */
 public final class MainActivity extends Activity {
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor();
 
     private TextView engineStatus;
     private TextView diagnosticsStatus;
-    private TextView widthLabel;
-    private TextView heightLabel;
     private Button diagnosticsExport;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
+        ScrollView scroll =
+                new ScrollView(this);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(20), dp(18), dp(36));
-        root.setBackgroundColor(0xFFF5F6F8);
-        scroll.addView(root);
+        LinearLayout root =
+                new LinearLayout(this);
+
+        root.setOrientation(
+                LinearLayout.VERTICAL);
+
+        root.setPadding(
+                dp(18),
+                dp(18),
+                dp(18),
+                dp(28));
+
+        root.setBackgroundColor(
+                0xFFF4F5F7);
+
+        scroll.addView(
+                root,
+                new ScrollView.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
 
         addHeader(root);
         addEngineCard(root);
         addLauncherCard(root);
+        addOplusCard(root);
         addForegroundCard(root);
-        addWindowCard(root);
         addDiagnosticsCard(root);
-        addAboutCard(root);
 
         setContentView(scroll);
         refreshStatus();
@@ -56,7 +73,6 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        GuardApp.syncAll();
         refreshStatus();
     }
 
@@ -67,69 +83,86 @@ public final class MainActivity extends Activity {
     }
 
     private void addHeader(LinearLayout parent) {
-        TextView title = new TextView(this);
+        TextView title =
+                new TextView(this);
+
         title.setText("小窗守护");
         title.setTextSize(30);
         title.setTextColor(0xFF111318);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.BOLD);
+
         parent.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("OPlus 系统小窗 · System Scope");
+        TextView subtitle =
+                new TextView(this);
+
+        subtitle.setText(
+                "OPlus FlexibleWindow · System Scope");
         subtitle.setTextSize(15);
         subtitle.setTextColor(0xFF656A73);
-        subtitle.setPadding(0, dp(6), 0, dp(16));
+        subtitle.setPadding(
+                0,
+                dp(6),
+                0,
+                dp(16));
+
         parent.addView(subtitle);
     }
 
-    private void addEngineCard(LinearLayout parent) {
-        LinearLayout card = card(
-                parent,
-                "运行状态",
-                "核心运行在 system_server。目标 App 不需要加入 LSPosed 作用域。");
+    private void addEngineCard(
+            LinearLayout parent
+    ) {
+        LinearLayout card =
+                card(
+                        parent,
+                        "运行状态",
+                        "核心运行在 system_server，目标 App 不需要加入 LSPosed 作用域。");
 
-        engineStatus = statusLine("System 引擎：检测中…");
+        engineStatus =
+                statusLine(
+                        "System Engine：检测中…");
+
         card.addView(engineStatus);
 
-        card.addView(statusLine(
-                "LSPosed 固定作用域：system / system_server"));
+        card.addView(
+                statusLine(
+                        "LSPosed 固定作用域：system / system_server"));
 
         addSwitch(
                 card,
                 "启用小窗守护",
-                "关闭后不启动系统小窗，也不应用始终前台保护。",
+                "总开关。关闭后不修改一加小窗支持判断，也不应用前台/防清理保护。",
                 ConfigKeys.MASTER_ENABLED);
 
         addSwitch(
                 card,
-                "使用一加系统小窗（推荐）",
-                "直接调用 OxygenOS / ColorOS 的 FlexibleWindow 管理现有 Task。"
-                        + "App 画面、视频 Surface、拖动、缩放和系统小窗动画全部由系统处理。"
-                        + "关闭后恢复旧 VirtualDisplay 兼容模式。修改后请重新加载 System Engine。",
-                ConfigKeys.OPLUS_SYSTEM_WINDOW);
-
-        addSwitch(
-                card,
                 "自动热重载",
-                "安装新版 APK 后，如果当前没有活动小窗，system_server 会自动加载新版 Engine，不需要重启手机。",
+                "更新 APK 后自动加载新的 Engine。Bootstrap Hook 结构变化仍需要重启一次。",
                 ConfigKeys.ENGINE_AUTO_RELOAD);
 
-        Button reload = button("立即重新加载 System Engine");
+        Button reload =
+                button(
+                        "立即重新加载 System Engine");
+
         reload.setOnClickListener(v -> {
             if (!GuardApp.isHotReloadAvailable()) {
                 Toast.makeText(
                         this,
-                        "当前 system_server 还是旧 Bootstrap。安装这一版后需要最后重启一次，之后才能热重载。",
+                        "当前 Bootstrap 不支持热重载，请重启一次手机。",
                         Toast.LENGTH_LONG).show();
                 return;
             }
 
-            boolean sent = GuardApp.requestEngineReload();
+            boolean sent =
+                    GuardApp.requestEngineReload();
+
             Toast.makeText(
                     this,
                     sent
-                            ? "已请求重新加载 Engine。当前小窗会关闭并恢复到原屏幕。"
-                            : "热重载请求同步失败，请重新检测 LSPosed 连接。",
+                            ? "已请求重新加载 OPlus Engine。"
+                            : "热重载请求同步失败。",
                     Toast.LENGTH_LONG).show();
 
             if (engineStatus != null) {
@@ -138,240 +171,166 @@ public final class MainActivity extends Activity {
                         2500L);
             }
         });
+
         card.addView(reload);
 
-        Button refresh = button("重新检测");
-        refresh.setOnClickListener(v -> refreshStatus());
+        Button refresh =
+                button("重新检测");
+
+        refresh.setOnClickListener(
+                v -> refreshStatus());
+
         card.addView(refresh);
     }
 
-    private void addLauncherCard(LinearLayout parent) {
-        LinearLayout card = card(
-                parent,
-                "系统小窗",
-                "默认直接使用一加/OPlus 系统 FlexibleWindow。"
-                        + "MiniWindowGuard 不再承载 App 画面，只负责启动系统小窗和保持前台。");
+    private void addLauncherCard(
+            LinearLayout parent
+    ) {
+        LinearLayout card =
+                card(
+                        parent,
+                        "打开一加系统小窗",
+                        "选择应用后，MiniWindowGuard 只向 OplusActivityTaskManager 请求 FlexibleWindow；"
+                                + "窗口本身完全由 OxygenOS 创建和管理。");
 
-        Button openApps = button("选择应用并打开小窗");
+        Button openApps =
+                button(
+                        "选择应用并打开系统小窗");
+
         openApps.setOnClickListener(v -> {
             try {
                 startActivity(
-                        new Intent(this, TargetAppsActivity.class));
+                        new Intent(
+                                this,
+                                TargetAppsActivity.class));
             } catch (Throwable t) {
                 CrashStore.record(
                         this,
                         "MainActivity.openAppList",
                         t);
+
                 Toast.makeText(
                         this,
                         "打开应用列表失败："
-                                + t.getClass().getSimpleName(),
+                                + t.getClass()
+                                .getSimpleName(),
                         Toast.LENGTH_LONG).show();
             }
         });
+
         card.addView(openApps);
 
-        card.addView(detailBlock(
-                "窗口操作",
-                "进入系统小窗后，拖动、缩放、最小化、恢复、关闭等全部使用 OxygenOS 自己的小窗控件。"
-                        + "MiniWindowGuard 不再额外叠加标题栏或 TextureView。"));
+        card.addView(
+                detailBlock(
+                        "窗口全部由一加管理",
+                        "拖动、缩放、最大化、最小化、贴边、恢复、关闭、视频 Surface、输入焦点和导航键都不由 MiniWindowGuard 接管。"));
     }
 
-    private void addForegroundCard(LinearLayout parent) {
-        LinearLayout card = card(
-                parent,
-                "始终前台",
-                "OxygenOS 负责系统小窗显示，MiniWindowGuard 只负责前台保护。"
-                        + "受保护 Task 仍留在系统原来的 display / Surface 树中。");
+    private void addOplusCard(
+            LinearLayout parent
+    ) {
+        LinearLayout card =
+                card(
+                        parent,
+                        "一加小窗 Hook",
+                        "只修改 OxygenOS 自己的小窗判断，不创建替代窗口。");
 
         addSwitch(
                 card,
-                "进程状态保持 TOP",
-                "ActivityManager 对当前系统小窗中的 App"
-                        + "返回前台级进程状态。",
+                "强制允许所选应用使用一加小窗",
+                "仅对当前选择/跟踪的应用放行 FlexibleWindowUtils、FlexibleTaskController 和旧 Zoom 配置中的支持/黑名单检查，不全局修改其他应用。",
+                ConfigKeys.OPLUS_FORCE_SUPPORT);
+
+        card.addView(
+                detailBlock(
+                        "状态来源",
+                        "前台保护只认 OxygenOS 的真实 FlexibleWindow Task、实际小窗 bounds，或一加自己的贴边/最小化 FloatingList。"
+                                + "应用一旦真正回到普通全屏，前台保护会自动停止，不再阻止系统导航。"));
+    }
+
+    private void addForegroundCard(
+            LinearLayout parent
+    ) {
+        LinearLayout card =
+                card(
+                        parent,
+                        "小窗前台保护",
+                        "不再 Hook pause / invisible / setVisible。所有 Activity 生命周期继续完全交给 OxygenOS。");
+
+        addSwitch(
+                card,
+                "小窗进程状态保持 TOP",
+                "仅当 Task 当前真实属于一加 FlexibleWindow/贴边小窗时，对相关前台查询返回 TOP。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(
                 card,
-                "系统视为存在 Resumed Activity",
-                "ActivityTaskManager 对系统小窗 App 的 UID"
-                        + "视为仍存在 Resumed Activity。",
+                "小窗视为存在 Resumed Activity",
+                "仅在真实一加小窗状态下，对 hasResumedActivity 返回 true；普通全屏状态不修改。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
-                "保持 Resumed",
-                "阻止系统小窗中的顶层 Activity 因主屏切换而进入 pause/stop。",
-                ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
-
-        addSwitch(
-                card,
-                "保持 Visible",
-                "目标 Task 进入系统小窗后持续保持逻辑可见，"
-                        + "避免 OEM 因主屏焦点变化把窗口变为不可见。",
-                ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
-
-        addSwitch(
-                card,
-                "阻止最近任务清理强杀",
-                "仅保护已经进入系统小窗的 App；"
-                        + "应用更新和明确强制停止仍然放行。",
+                "阻止一加清理链路强杀小窗",
+                "仅保护当前仍属于一加 FlexibleWindow/贴边小窗的进程；应用更新、强制停止以及普通全屏状态放行。",
                 ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
 
-    private void addWindowCard(LinearLayout parent) {
-        LinearLayout card = card(
-                parent,
-                "VirtualDisplay 兼容模式尺寸",
-                "只有关闭“一加系统小窗”时这些尺寸才生效；"
-                        + "系统小窗模式的大小和比例由 OxygenOS 自己管理。");
+    private void addDiagnosticsCard(
+            LinearLayout parent
+    ) {
+        LinearLayout card =
+                card(
+                        parent,
+                        "详细诊断",
+                        "记录 OPlus FlexibleWindow 回调、支持判断、Task 状态、前台查询和 OEM 清理链路。");
 
-        card.addView(detailBlock(
-                "首次打开提示",
-                "首次创建小窗时，建议把“窗口宽度”和“窗口高度”设置成相同百分比。"
-                        + "如果两者差异较大，部分 OxygenOS 设备可能出现首次无画面。"
-                        + "小窗成功显示以后，可以再自由拖动缩放，长宽不需要保持一致。"));
+        diagnosticsStatus =
+                statusLine(
+                        "详细日志：检测中…");
 
-        int width = ConfigKeys.sanitizePercent(
-                GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH),
-                58);
-        widthLabel = label("窗口宽度：" + width + "%");
-        card.addView(widthLabel);
-
-        SeekBar widthSeek = percentSeek(width);
-        widthSeek.setOnSeekBarChangeListener(
-                new SimpleSeekListener() {
-                    @Override
-                    public void onProgressChanged(
-                            SeekBar seekBar,
-                            int progress,
-                            boolean fromUser
-                    ) {
-                        int value =
-                                Math.min(95, progress + 30);
-                        widthLabel.setText(
-                                "窗口宽度：" + value + "%");
-                        if (fromUser) {
-                            GuardApp.putInt(
-                                    ConfigKeys.CONTAINER_WIDTH,
-                                    value);
-                        }
-                    }
-                });
-        card.addView(widthSeek);
-
-        int height = ConfigKeys.sanitizePercent(
-                GuardApp.getInt(ConfigKeys.CONTAINER_HEIGHT),
-                66);
-        heightLabel = label("窗口高度：" + height + "%");
-        card.addView(heightLabel);
-
-        SeekBar heightSeek = percentSeek(height);
-        heightSeek.setOnSeekBarChangeListener(
-                new SimpleSeekListener() {
-                    @Override
-                    public void onProgressChanged(
-                            SeekBar seekBar,
-                            int progress,
-                            boolean fromUser
-                    ) {
-                        int value =
-                                Math.min(95, progress + 30);
-                        heightLabel.setText(
-                                "窗口高度：" + value + "%");
-                        if (fromUser) {
-                            GuardApp.putInt(
-                                    ConfigKeys.CONTAINER_HEIGHT,
-                                    value);
-                        }
-                    }
-                });
-        card.addView(heightSeek);
-    }
-
-    private void addDiagnosticsCard(LinearLayout parent) {
-        LinearLayout card = card(
-                parent,
-                "完整诊断",
-                "保留原来的持续诊断和一键导出 ZIP。"
-                        + "新版重点记录 VirtualDisplay、Task displayId、"
-                        + "Surface、输入注入和前台保护事件。");
-
-        diagnosticsStatus = statusLine("");
         card.addView(diagnosticsStatus);
 
-        Switch persistentLog = new Switch(this);
-        persistentLog.setText("持续开启详细诊断日志");
-        persistentLog.setTextSize(15);
-        persistentLog.setChecked(
-                GuardApp.getBoolean(
-                        ConfigKeys.DIAGNOSTICS_ACTIVE));
-        persistentLog.setOnCheckedChangeListener(
-                (button, checked) -> {
-                    if (checked) {
-                        DiagnosticsManager.startSession();
-                        Toast.makeText(
-                                this,
-                                "详细日志已持续开启。",
-                                Toast.LENGTH_SHORT).show();
-                    } else {
-                        DiagnosticsManager.stopSession();
-                        Toast.makeText(
-                                this,
-                                "详细日志已关闭。",
-                                Toast.LENGTH_SHORT).show();
-                    }
-                    refreshDiagnosticsStatus();
-                });
-        card.addView(persistentLog);
+        Button start =
+                button(
+                        "开始详细日志");
 
-        card.addView(detailBlock(
-                "诊断重点",
-                "• VD_WINDOW_CREATED / VD_SURFACE_READY / VD_TASK_MOVED\n"
-                        + "• VD_FOCUS / VD_INPUT_DOWN / VD_INPUT_ERROR\n"
-                        + "• VD_RESIZE_COMMIT / VD_MINIMIZED / VD_HIDDEN / VD_RESTORE\n"
-                        + "• Activity pause/visible/resumed 拦截\n"
-                        + "• 进程状态、Audio、MediaSession、Window、Task 快照\n"
-                        + "• 最近 30000 行 logcat"));
+        start.setOnClickListener(v -> {
+            DiagnosticsManager.startSession();
+            refreshDiagnosticsStatus();
 
-        diagnosticsExport = button("导出诊断 ZIP");
+            Toast.makeText(
+                    this,
+                    "已开始记录 OPlus 小窗详细日志。",
+                    Toast.LENGTH_SHORT).show();
+        });
+
+        card.addView(start);
+
+        Button stop =
+                button(
+                        "停止详细日志");
+
+        stop.setOnClickListener(v -> {
+            DiagnosticsManager.stopSession();
+            refreshDiagnosticsStatus();
+
+            Toast.makeText(
+                    this,
+                    "详细日志已停止。",
+                    Toast.LENGTH_SHORT).show();
+        });
+
+        card.addView(stop);
+
+        diagnosticsExport =
+                button(
+                        "导出诊断 ZIP");
+
         diagnosticsExport.setOnClickListener(
                 v -> exportDiagnostics());
+
         card.addView(diagnosticsExport);
-
-        Button reset = button("重置诊断起点");
-        reset.setOnClickListener(v -> {
-            if (GuardApp.getBoolean(
-                    ConfigKeys.DIAGNOSTICS_ACTIVE)) {
-                DiagnosticsManager.startSession();
-                Toast.makeText(
-                        this,
-                        "诊断起点已重置。",
-                        Toast.LENGTH_SHORT).show();
-                refreshDiagnosticsStatus();
-            } else {
-                Toast.makeText(
-                        this,
-                        "请先打开持续诊断日志。",
-                        Toast.LENGTH_SHORT).show();
-            }
-        });
-        card.addView(reset);
-    }
-
-    private void addAboutCard(LinearLayout parent) {
-        LinearLayout card = card(
-                parent,
-                "架构说明",
-                "窗口引擎已经完全重写。YAMF/YAMF² 与 FreeformShell"
-                        + "只作为公开架构思路参考，不复制其实现源码；"
-                        + "MiniWindowGuard 使用自己的 VirtualDisplay、输入、"
-                        + "前台保护和诊断实现。");
-
-        card.addView(detailBlock(
-                "许可证",
-                "本项目采用 GPLv3。仓库中包含 LICENSE"
-                        + " 和 THIRD_PARTY_NOTICES.md。"));
     }
 
     private void exportDiagnostics() {
@@ -381,7 +340,7 @@ public final class MainActivity extends Activity {
 
         Toast.makeText(
                 this,
-                "正在收集 VirtualDisplay、system_server 和系统状态…",
+                "正在收集 OPlus FlexibleWindow、system_server 和系统状态…",
                 Toast.LENGTH_SHORT).show();
 
         executor.execute(() -> {
@@ -398,7 +357,8 @@ public final class MainActivity extends Activity {
                 if (!result.ok()) {
                     Toast.makeText(
                             this,
-                            "导出失败：" + result.error,
+                            "导出失败："
+                                    + result.error,
                             Toast.LENGTH_LONG).show();
                     return;
                 }
@@ -410,14 +370,20 @@ public final class MainActivity extends Activity {
                         Toast.LENGTH_LONG).show();
 
                 try {
-                    Intent share = new Intent(
-                            Intent.ACTION_SEND);
-                    share.setType("application/zip");
+                    Intent share =
+                            new Intent(
+                                    Intent.ACTION_SEND);
+
+                    share.setType(
+                            "application/zip");
+
                     share.putExtra(
                             Intent.EXTRA_STREAM,
                             result.uri);
+
                     share.addFlags(
                             Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
                     startActivity(
                             Intent.createChooser(
                                     share,
@@ -432,74 +398,66 @@ public final class MainActivity extends Activity {
         if (engineStatus != null) {
             long expected =
                     GuardApp.getExpectedVersionCode();
+
             long loaded =
                     GuardApp.getLoadedEngineVersionCode();
 
             boolean connected =
                     GuardApp.isXposedServiceConnected();
+
             boolean hasSystem =
                     GuardApp.hasSystemScope();
+
             boolean active =
                     GuardApp.isSystemEngineActive();
+
             boolean current =
                     GuardApp.isSystemEngineCurrent();
 
             if (!connected) {
                 engineStatus.setText(
-                        "System 引擎：LSPosed 服务未连接");
-                engineStatus.setTextColor(0xFFB3261E);
+                        "System Engine：LSPosed 服务未连接");
+
+                engineStatus.setTextColor(
+                        0xFFB3261E);
             } else if (!hasSystem) {
                 engineStatus.setText(
-                        "System 引擎：作用域缺少 system · 实际="
+                        "System Engine：作用域缺少 system · 实际="
                                 + GuardApp.getFrameworkScope());
-                engineStatus.setTextColor(0xFFB3261E);
+
+                engineStatus.setTextColor(
+                        0xFFB3261E);
             } else if (current) {
-                if (GuardApp.isHotReloadAvailable()) {
-                    engineStatus.setText(
-                            "System Engine：code "
-                                    + loaded
-                                    + " · Bootstrap "
-                                    + GuardApp.getBootstrapVersionCode()
-                                    + " · 热重载可用"
-                                    + " · gen "
-                                    + GuardApp.getEngineGeneration()
-                                    + " · 活动小窗 "
-                                    + GuardApp.getEngineActiveSessions()
-                                    + "\n"
-                                    + GuardApp.getEngineReloadMessage());
-                } else {
-                    engineStatus.setText(
-                            "System 引擎：已激活当前版本 · code "
-                                    + loaded
-                                    + " · 当前 Bootstrap 不支持热重载");
-                }
-                engineStatus.setTextColor(0xFF16794A);
+                engineStatus.setText(
+                        "System Engine：code "
+                                + loaded
+                                + " · Bootstrap "
+                                + GuardApp.getBootstrapVersionCode()
+                                + " · gen "
+                                + GuardApp.getEngineGeneration()
+                                + " · 跟踪 Task "
+                                + GuardApp.getEngineActiveSessions()
+                                + "\n"
+                                + GuardApp.getEngineReloadMessage());
+
+                engineStatus.setTextColor(
+                        0xFF16794A);
             } else if (active) {
-                if (GuardApp.isHotReloadAvailable()) {
-                    engineStatus.setText(
-                            "System Engine：旧 Engine "
-                                    + loaded
-                                    + " / 已安装 APK "
-                                    + expected
-                                    + " · 热重载可用"
-                                    + " · 活动小窗 "
-                                    + GuardApp.getEngineActiveSessions()
-                                    + "\n"
-                                    + "无活动小窗时会自动更新，也可以点击“立即重新加载”。");
-                } else {
-                    engineStatus.setText(
-                            "System 引擎：当前仍是旧 Bootstrap · system="
-                                    + loaded
-                                    + " / App="
-                                    + expected
-                                    + "\n安装这一版后需要最后重启一次；以后更新 APK 不再需要重启手机。");
-                }
-                engineStatus.setTextColor(0xFF9A6700);
+                engineStatus.setText(
+                        "System Engine：旧 Engine "
+                                + loaded
+                                + " / 已安装 APK "
+                                + expected
+                                + "\n请重新加载 Engine；若 Bootstrap Hook 已改变，需要重启一次。");
+
+                engineStatus.setTextColor(
+                        0xFF9A6700);
             } else {
                 engineStatus.setText(
-                        "System 引擎：未检测到有效心跳 · scope="
-                                + GuardApp.getFrameworkScope());
-                engineStatus.setTextColor(0xFFB3261E);
+                        "System Engine：未检测到有效心跳");
+
+                engineStatus.setTextColor(
+                        0xFFB3261E);
             }
         }
 
@@ -507,11 +465,14 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshDiagnosticsStatus() {
-        if (diagnosticsStatus == null) return;
+        if (diagnosticsStatus == null) {
+            return;
+        }
 
         boolean active =
                 GuardApp.getBoolean(
                         ConfigKeys.DIAGNOSTICS_ACTIVE);
+
         String started =
                 GuardApp.getString(
                         ConfigKeys.DIAGNOSTICS_STARTED_AT);
@@ -522,10 +483,15 @@ public final class MainActivity extends Activity {
                             + (started.isEmpty()
                             ? ""
                             : " · start=" + started));
-            diagnosticsStatus.setTextColor(0xFFB3261E);
+
+            diagnosticsStatus.setTextColor(
+                    0xFFB3261E);
         } else {
-            diagnosticsStatus.setText("详细日志：关闭");
-            diagnosticsStatus.setTextColor(0xFF16794A);
+            diagnosticsStatus.setText(
+                    "详细日志：关闭");
+
+            diagnosticsStatus.setTextColor(
+                    0xFF16794A);
         }
     }
 
@@ -535,18 +501,35 @@ public final class MainActivity extends Activity {
             String description,
             String key
     ) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(6), 0, dp(6));
+        LinearLayout row =
+                new LinearLayout(this);
 
-        LinearLayout texts = new LinearLayout(this);
-        texts.setOrientation(LinearLayout.VERTICAL);
+        row.setOrientation(
+                LinearLayout.HORIZONTAL);
 
-        TextView titleView = label(title);
+        row.setGravity(
+                Gravity.CENTER_VERTICAL);
+
+        row.setPadding(
+                0,
+                dp(6),
+                0,
+                dp(6));
+
+        LinearLayout texts =
+                new LinearLayout(this);
+
+        texts.setOrientation(
+                LinearLayout.VERTICAL);
+
+        TextView titleView =
+                label(title);
+
         texts.addView(titleView);
 
-        TextView descriptionView = new TextView(this);
+        TextView descriptionView =
+                new TextView(this);
+
         descriptionView.setText(description);
         descriptionView.setTextSize(12.5f);
         descriptionView.setTextColor(0xFF6C717A);
@@ -555,6 +538,7 @@ public final class MainActivity extends Activity {
                 dp(2),
                 dp(8),
                 0);
+
         texts.addView(descriptionView);
 
         row.addView(
@@ -564,9 +548,12 @@ public final class MainActivity extends Activity {
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         1f));
 
-        Switch toggle = new Switch(this);
+        Switch toggle =
+                new Switch(this);
+
         toggle.setChecked(
                 GuardApp.getBoolean(key));
+
         toggle.setOnCheckedChangeListener(
                 (button, checked) ->
                         GuardApp.putBoolean(
@@ -577,21 +564,17 @@ public final class MainActivity extends Activity {
         parent.addView(row);
     }
 
-    private SeekBar percentSeek(int value) {
-        SeekBar seek = new SeekBar(this);
-        seek.setMax(65);
-        seek.setProgress(
-                Math.max(0, Math.min(65, value - 30)));
-        return seek;
-    }
-
     private LinearLayout card(
             LinearLayout parent,
             String title,
             String subtitle
     ) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout card =
+                new LinearLayout(this);
+
+        card.setOrientation(
+                LinearLayout.VERTICAL);
+
         card.setPadding(
                 dp(16),
                 dp(14),
@@ -600,46 +583,79 @@ public final class MainActivity extends Activity {
 
         GradientDrawable background =
                 new GradientDrawable();
-        background.setColor(0xFFFFFFFF);
-        background.setCornerRadius(dp(16));
+
+        background.setColor(
+                0xFFFFFFFF);
+
+        background.setCornerRadius(
+                dp(16));
+
         card.setBackground(background);
 
         LinearLayout.LayoutParams params =
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.setMargins(0, 0, 0, dp(12));
-        parent.addView(card, params);
 
-        TextView heading = new TextView(this);
+        params.setMargins(
+                0,
+                0,
+                0,
+                dp(12));
+
+        parent.addView(
+                card,
+                params);
+
+        TextView heading =
+                new TextView(this);
+
         heading.setText(title);
         heading.setTextSize(19);
         heading.setTypeface(
                 Typeface.DEFAULT,
                 Typeface.BOLD);
+
         card.addView(heading);
 
-        TextView sub = new TextView(this);
+        TextView sub =
+                new TextView(this);
+
         sub.setText(subtitle);
         sub.setTextSize(13);
         sub.setTextColor(0xFF6C717A);
-        sub.setPadding(0, dp(4), 0, dp(8));
+        sub.setPadding(
+                0,
+                dp(4),
+                0,
+                dp(8));
+
         card.addView(sub);
 
         return card;
     }
 
     private TextView statusLine(String text) {
-        TextView view = label(text);
-        view.setPadding(0, dp(4), 0, dp(4));
+        TextView view =
+                label(text);
+
+        view.setPadding(
+                0,
+                dp(4),
+                0,
+                dp(4));
+
         return view;
     }
 
     private TextView label(String text) {
-        TextView view = new TextView(this);
+        TextView view =
+                new TextView(this);
+
         view.setText(text);
         view.setTextSize(15);
         view.setTextColor(0xFF202124);
+
         return view;
     }
 
@@ -647,35 +663,42 @@ public final class MainActivity extends Activity {
             String title,
             String text
     ) {
-        TextView view = new TextView(this);
-        view.setText(title + "\n" + text);
+        TextView view =
+                new TextView(this);
+
+        view.setText(
+                title + "\n" + text);
+
         view.setTextSize(13.5f);
         view.setTextColor(0xFF41464F);
-        view.setLineSpacing(0, 1.18f);
-        view.setPadding(0, dp(8), 0, dp(8));
+        view.setLineSpacing(
+                0,
+                1.18f);
+
+        view.setPadding(
+                0,
+                dp(8),
+                0,
+                dp(8));
+
         return view;
     }
 
     private Button button(String text) {
-        Button button = new Button(this);
+        Button button =
+                new Button(this);
+
         button.setText(text);
         button.setAllCaps(false);
+
         return button;
     }
 
     private int dp(float value) {
         return Math.round(
-                value * getResources()
+                value
+                        * getResources()
                         .getDisplayMetrics()
                         .density);
-    }
-
-    private abstract static class SimpleSeekListener
-            implements SeekBar.OnSeekBarChangeListener {
-        @Override
-        public void onStartTrackingTouch(SeekBar seekBar) {}
-
-        @Override
-        public void onStopTrackingTouch(SeekBar seekBar) {}
     }
 }
