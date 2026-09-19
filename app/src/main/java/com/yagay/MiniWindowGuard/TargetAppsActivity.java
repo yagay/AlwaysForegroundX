@@ -239,7 +239,7 @@ public final class TargetAppsActivity extends Activity {
                     this,
                     "system_server 仍在运行旧版引擎 code "
                             + GuardApp.getLoadedEngineVersionCode()
-                            + "，请重启手机后再测试新版 VirtualDisplay。",
+                            + "，请先重新加载 System Engine。",
                     Toast.LENGTH_LONG).show();
         }
 
@@ -261,7 +261,7 @@ public final class TargetAppsActivity extends Activity {
 
             Toast.makeText(
                     this,
-                    "正在移动到独立 VirtualDisplay…",
+                    "正在启动小窗…",
                     Toast.LENGTH_SHORT).show();
         } catch (Throwable t) {
             CrashStore.record(
