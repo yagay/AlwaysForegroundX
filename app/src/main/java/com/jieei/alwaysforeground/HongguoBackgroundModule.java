@@ -66,6 +66,7 @@ public final class HongguoBackgroundModule extends XposedModule {
     private volatile boolean firstEpisodeBlockedLogged;
     private volatile boolean firstLandscapeBlockedLogged;
     private volatile boolean firstGenericBlockedLogged;
+    private volatile boolean firstNativeEligibilityLogged;
     private volatile boolean firstNativeHandoffLogged;
     private volatile boolean firstNativeResumeLogged;
     private volatile boolean firstNativeCompleteLogged;
@@ -95,6 +96,7 @@ public final class HongguoBackgroundModule extends XposedModule {
 
         // Primary strategy: let Hongguo's own series background player own episode continuity.
         installActivityBackgroundTracking();
+        installNativeSeriesBackgroundEligibility(classLoader);
         installNativeSeriesBackgroundDiagnostics(classLoader);
         installStablePlayerEndpoints(classLoader);
 
@@ -146,6 +148,65 @@ public final class HongguoBackgroundModule extends XposedModule {
             log(Log.WARN, TAG, "SKIPPED Hongguo lifecycle marker Instrumentation."
                     + methodName + ": " + t, t);
         }
+    }
+
+    /**
+     * Red Fruit 7.3.5.32 native background eligibility.
+     *
+     * ShortSeriesSingleFragment.vh() reads the "key_exit_with_audio_player" flag. The
+     * ShortSeriesSingleFragment$g.a lifecycle observer checks it before deciding whether to
+     * execute gh() -> z05.b.resume() or release the background player.
+     *
+     * Force this flag only while the real Activity is already paused and only when vh() is being
+     * queried from the series lifecycle observer. This enables Hongguo's own background-series
+     * engine without pretending the Activity/Fragment/window is still foreground or visible.
+     */
+    private void installNativeSeriesBackgroundEligibility(ClassLoader classLoader) {
+        try {
+            Class<?> fragment = classLoader.loadClass(SERIES_FRAGMENT);
+            Method method = fragment.getDeclaredMethod("vh");
+            if (method.getParameterCount() != 0 || method.getReturnType() != boolean.class) {
+                log(Log.WARN, TAG, "SKIPPED Hongguo native background eligibility: unexpected "
+                        + method);
+                return;
+            }
+
+            method.setAccessible(true);
+            hook(method).intercept(chain -> {
+                if (getMode() >= ModeConfig.MODE_STRONG
+                        && activityPaused
+                        && isSeriesBackgroundEligibilityCall()) {
+                    if (!firstNativeEligibilityLogged) {
+                        firstNativeEligibilityLogged = true;
+                        log(Log.INFO, TAG,
+                                "HIT Hongguo native background eligibility forced true "
+                                        + SERIES_FRAGMENT + ".vh");
+                    }
+                    return true;
+                }
+                return chain.proceed();
+            });
+
+            log(Log.INFO, TAG, "INSTALLED Hongguo native background eligibility "
+                    + SERIES_FRAGMENT + ".vh");
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "SKIPPED Hongguo native background eligibility: " + t, t);
+        }
+    }
+
+    private static boolean isSeriesBackgroundEligibilityCall() {
+        for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+            String cls = frame.getClassName();
+            String method = frame.getMethodName();
+
+            if (SERIES_LIFECYCLE_OBSERVER.equals(cls) && "a".equals(method)) {
+                return true;
+            }
+            if ("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
