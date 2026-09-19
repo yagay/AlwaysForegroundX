@@ -63,6 +63,13 @@ final class TaskSurfaceController {
         return isManagedPackage(pkg);
     }
 
+    boolean isManagedTask(Object task) {
+        if (task == null) return false;
+        int id = taskId(task);
+        ManagedTask managed = id < 0 ? null : tasks.get(id);
+        return managed != null && managed.state != ConfigKeys.STATE_RELEASED;
+    }
+
     boolean isManagedTopActivityRecord(Object activityRecord) {
         if (!isManagedActivityRecord(activityRecord)) return false;
 
