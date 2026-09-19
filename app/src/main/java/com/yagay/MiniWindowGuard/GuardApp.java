@@ -51,6 +51,8 @@ public final class GuardApp extends Application {
     public void onCreate() {
         super.onCreate();
 
+        installCrashHandler();
+
         XposedServiceHelper.registerListener(new XposedServiceHelper.OnServiceListener() {
             @Override
             public void onServiceBind(XposedService bound) {
@@ -69,6 +71,22 @@ public final class GuardApp extends Application {
                 if (service == dead) service = null;
                 frameworkName = "";
                 Log.w(TAG, "LSPosed service disconnected");
+            }
+        });
+    }
+
+    private void installCrashHandler() {
+        Thread.UncaughtExceptionHandler previous =
+                Thread.getDefaultUncaughtExceptionHandler();
+
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            CrashStore.record(
+                    getApplicationContext(),
+                    "uncaught:" + (thread == null ? "unknown" : thread.getName()),
+                    throwable);
+
+            if (previous != null) {
+                previous.uncaughtException(thread, throwable);
             }
         });
     }
