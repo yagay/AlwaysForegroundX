@@ -199,12 +199,12 @@ public final class MainActivity extends Activity {
                 "ActivityTaskManagerService.hasResumedActivity(uid) 返回 true。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
-        addSwitch(card, "窗口态保持 Resumed",
-                "仅窗口可见时阻止 Activity 被 pause；图标/隐藏态恢复系统正常生命周期，避免黑屏。",
+        addSwitch(card, "容器保持 Resumed",
+                "窗口、图标和隐藏态都保护受保护 App 的顶层 Activity，图标/隐藏不再因切换前台而触发 pause/stop。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
 
-        addSwitch(card, "窗口态保持 Visible",
-                "仅窗口态强制可见；图标/隐藏态允许 Task 正常退到后台。",
+        addSwitch(card, "容器保持 Visible",
+                "图标/隐藏态在 system_server 中保持逻辑可见；真实 Task Surface 单独隐藏，不把目标 App 当作普通后台页面。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
 
         addSwitch(card, "阻止任务划除强杀",
@@ -229,9 +229,9 @@ public final class MainActivity extends Activity {
         addForm(forms, ConfigKeys.STATE_WINDOW,
                 "窗口", "真实 Task 缩放到自有窗口区域，触摸仍直接属于目标 App。");
         addForm(forms, ConfigKeys.STATE_ICON,
-                "图标", "Task 正式退到后台，显示 MiniWindowGuard 图标；不再透明顶层 Task，因此不会黑屏。");
+                "图标", "Task 放到其他前台 App 后方，但保持逻辑 Visible/Resumed；真实 Surface 隐藏，仅显示 MiniWindowGuard 图标。");
         addForm(forms, ConfigKeys.STATE_HIDDEN,
-                "完全隐藏", "Task 正式退到后台且不显示图标，通过常驻通知恢复窗口。");
+                "完全隐藏", "与图标态相同地保持目标 App 运行，只隐藏真实 Surface 和悬浮图标，通过常驻通知恢复窗口。");
 
         int currentState = ConfigKeys.sanitizeState(
                 GuardApp.getInt(ConfigKeys.CONTAINER_DEFAULT_STATE));
@@ -310,7 +310,8 @@ public final class MainActivity extends Activity {
         card.addView(detailBlock("诊断内容",
                 "• system_server Hook 安装/命中和每次强制结果。\n"
                         + "• TaskSurface：taskId、请求/实际 bounds、windowing mode、WCT 后端和容器状态。\n"
-                        + "• ActivityRecord pause/visible 决策和关键调用栈。\n"
+                        + "• ActivityRecord / TaskFragment pause、visible、clientVisible 拦截及关键调用栈。\n"
+                        + "• 图标/隐藏态 Task Surface alpha 切换及补写结果。\n"
                         + "• Root 策略命令及返回值。\n"
                         + "• Activity/Task/进程/OOM/Window/Doze/NetPolicy/Power/Audio/MediaSession 快照。\n"
                         + "• 每个受保护 App 的 package、AppOps、standby bucket、meminfo。\n"
@@ -416,9 +417,9 @@ public final class MainActivity extends Activity {
                         + "• 目标 App 的画面不是截图，也不是 Overlay View，而是真实 Task Surface。"));
 
         card.addView(detailBlock("容器状态",
-                "• 窗口：WCT 正式提交 MULTI_WINDOW/FREEFORM + bounds。\n"
-                        + "• 图标/隐藏：Task reorder 到后台，不再把顶层 Surface 透明，因此不会留下黑屏。\n"
-                        + "• 释放：恢复接管前的 bounds 和 windowing mode。"));
+                "• 窗口：WCT 正式提交 MULTI_WINDOW/FREEFORM + bounds，真实 Surface 正常显示。\n"
+                        + "• 图标/隐藏：Task reorder 到其他前台 App 后方，同时阻止受保护顶层 Activity 的 pause/stop/clientVisible=false；真实 Surface 用 alpha=0 隐藏。\n"
+                        + "• 恢复窗口/释放：Surface alpha 恢复为 1；释放时再恢复接管前的 bounds 和 windowing mode。"));
     }
 
     private void addMaintenanceCard(LinearLayout parent) {
