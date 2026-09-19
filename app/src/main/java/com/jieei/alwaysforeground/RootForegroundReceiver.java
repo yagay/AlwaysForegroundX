@@ -16,7 +16,7 @@ import java.io.InputStreamReader;
  */
 public final class RootForegroundReceiver extends BroadcastReceiver {
     static final String ACTION =
-            "com.jieei.alwaysforeground.action.ROOT_VIRTUAL_FOREGROUND";
+            "com.yagay.alwaysforeground.action.ROOT_VIRTUAL_FOREGROUND";
 
     static final String EXTRA_TOKEN = "token";
     static final String EXTRA_PACKAGE = "package";
