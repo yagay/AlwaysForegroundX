@@ -43,6 +43,7 @@ final class NativeFreeformController {
     private volatile String pendingPackage = "";
     private volatile int pendingState = ConfigKeys.STATE_WINDOW;
     private volatile boolean running;
+    private long deepSnapshotSeq;
 
     NativeFreeformController(
             Handler handler,
@@ -350,6 +351,10 @@ final class NativeFreeformController {
                         + " state="
                         + initialState);
 
+        scheduleDeepSnapshots(
+                session,
+                "captured");
+
         handler.post(() ->
                 openSession(session));
     }
@@ -509,6 +514,10 @@ final class NativeFreeformController {
                                 session.taskObject)
                         + " backend="
                         + session.nativeBackend);
+
+        scheduleDeepSnapshots(
+                session,
+                "window-ready");
     }
 
     private boolean applyNativeWindow(
@@ -893,6 +902,320 @@ final class NativeFreeformController {
                         + movedFront);
     }
 
+    private void scheduleDeepSnapshots(
+            Session session,
+            String reason
+    ) {
+        if (session == null
+                || !session.active
+                || !GuardConfig.bool(
+                ConfigKeys.DIAGNOSTICS_ACTIVE)) {
+            return;
+        }
+
+        final long traceId = ++deepSnapshotSeq;
+        final long[] delays = {
+                0L,
+                50L,
+                150L,
+                400L,
+                1000L,
+                2000L
+        };
+
+        for (long delay : delays) {
+            handler.postDelayed(() -> {
+                if (session.active) {
+                    logDeepSnapshot(
+                            session,
+                            reason,
+                            traceId,
+                            delay);
+                }
+            }, delay);
+        }
+    }
+
+    private void logDeepSnapshot(
+            Session session,
+            String reason,
+            long traceId,
+            long delayMs
+    ) {
+        if (session == null) return;
+
+        Object task = session.taskObject;
+        Object activity = session.activityRecord;
+
+        Object top =
+                invokeNoArg(
+                        task,
+                        "topRunningActivity");
+
+        Object mainWindow =
+                activity == null
+                        ? null
+                        : invokeNoArg(
+                        activity,
+                        "findMainWindow");
+
+        if (mainWindow == null
+                && activity != null) {
+            mainWindow =
+                    invokeNoArg(
+                            activity,
+                            "getMainWindow");
+        }
+
+        Object windowFrames =
+                fieldValue(
+                        mainWindow,
+                        "mWindowFrames");
+
+        Object frame =
+                fieldValue(
+                        windowFrames,
+                        "mFrame");
+
+        if (frame == null) {
+            frame =
+                    invokeNoArg(
+                            mainWindow,
+                            "getFrame");
+        }
+
+        Object animator =
+                fieldValue(
+                        mainWindow,
+                        "mWinAnimator");
+
+        Object surfaceController =
+                fieldValue(
+                        animator,
+                        "mSurfaceController");
+
+        Object surfaceControl =
+                invokeNoArg(
+                        mainWindow,
+                        "getSurfaceControl");
+
+        Object app =
+                fieldValue(
+                        activity,
+                        "app");
+
+        Object processPid =
+                invokeNoArg(
+                        app,
+                        "getPid");
+
+        if (processPid == null) {
+            processPid =
+                    fieldValue(
+                            app,
+                            "mPid");
+        }
+
+        Object processName =
+                fieldValue(
+                        app,
+                        "processName");
+
+        Object taskConfig =
+                invokeNoArg(
+                        task,
+                        "getConfiguration");
+
+        Object activityConfig =
+                invokeNoArg(
+                        activity,
+                        "getConfiguration");
+
+        Object requestedOverride =
+                invokeNoArg(
+                        activity,
+                        "getRequestedOverrideConfiguration");
+
+        Object resolvedOverride =
+                invokeNoArg(
+                        activity,
+                        "getResolvedOverrideConfiguration");
+
+        Object activityState =
+                invokeNoArg(
+                        activity,
+                        "getState");
+
+        Object visibleRequested =
+                invokeNoArg(
+                        activity,
+                        "isVisibleRequested");
+
+        Object activityVisible =
+                invokeNoArg(
+                        activity,
+                        "isVisible");
+
+        Object clientVisible =
+                fieldValue(
+                        activity,
+                        "mClientVisible");
+
+        Object reportedDrawn =
+                fieldValue(
+                        activity,
+                        "mReportedDrawn");
+
+        Object firstWindowDrawn =
+                fieldValue(
+                        activity,
+                        "firstWindowDrawn");
+
+        Object hasSurface =
+                invokeNoArg(
+                        mainWindow,
+                        "hasSurface");
+
+        Object windowVisible =
+                invokeNoArg(
+                        mainWindow,
+                        "isVisible");
+
+        Object windowOnScreen =
+                invokeNoArg(
+                        mainWindow,
+                        "isOnScreen");
+
+        Object windowDrawn =
+                invokeNoArg(
+                        mainWindow,
+                        "isDrawn");
+
+        Object drawState =
+                fieldValue(
+                        animator,
+                        "mDrawState");
+
+        Object viewVisibility =
+                fieldValue(
+                        mainWindow,
+                        "mViewVisibility");
+
+        Object relayoutCalled =
+                fieldValue(
+                        mainWindow,
+                        "mRelayoutCalled");
+
+        Object displayArea =
+                invokeNoArg(
+                        task,
+                        "getDisplayArea");
+
+        Object rootTask =
+                invokeNoArg(
+                        task,
+                        "getRootTask");
+
+        log("NATIVE_TRACE_TASK",
+                "trace=" + traceId
+                        + " delayMs=" + delayMs
+                        + " reason=" + reason
+                        + " pkg="
+                        + session.packageName
+                        + " taskId="
+                        + session.taskId
+                        + " displayId="
+                        + taskDisplayId(task)
+                        + " mode="
+                        + taskWindowingMode(task)
+                        + " bounds="
+                        + taskBounds(task)
+                        + " backend="
+                        + session.nativeBackend
+                        + " alwaysOnTop="
+                        + invokeNoArg(
+                        task,
+                        "isAlwaysOnTop")
+                        + " visible="
+                        + invokeNoArg(
+                        task,
+                        "isVisible")
+                        + " visibleRequested="
+                        + invokeNoArg(
+                        task,
+                        "isVisibleRequested")
+                        + " top="
+                        + top
+                        + " rootTask="
+                        + rootTask
+                        + " displayArea="
+                        + displayArea);
+
+        log("NATIVE_TRACE_ACTIVITY",
+                "trace=" + traceId
+                        + " delayMs=" + delayMs
+                        + " state="
+                        + activityState
+                        + " bounds="
+                        + (activity == null
+                        ? null
+                        : invokeNoArg(
+                        activity,
+                        "getBounds"))
+                        + " visible="
+                        + activityVisible
+                        + " visibleRequested="
+                        + visibleRequested
+                        + " clientVisible="
+                        + clientVisible
+                        + " reportedDrawn="
+                        + reportedDrawn
+                        + " firstWindowDrawn="
+                        + firstWindowDrawn
+                        + " pid="
+                        + processPid
+                        + " process="
+                        + processName);
+
+        log("NATIVE_TRACE_WINDOW",
+                "trace=" + traceId
+                        + " delayMs=" + delayMs
+                        + " window="
+                        + mainWindow
+                        + " frame="
+                        + frame
+                        + " hasSurface="
+                        + hasSurface
+                        + " visible="
+                        + windowVisible
+                        + " onScreen="
+                        + windowOnScreen
+                        + " drawn="
+                        + windowDrawn
+                        + " drawState="
+                        + drawState
+                        + " viewVisibility="
+                        + viewVisibility
+                        + " relayoutCalled="
+                        + relayoutCalled
+                        + " surfaceControl="
+                        + surfaceControl
+                        + " surfaceController="
+                        + surfaceController);
+
+        log("NATIVE_TRACE_CONFIG",
+                "trace=" + traceId
+                        + " delayMs=" + delayMs
+                        + " taskConfig="
+                        + taskConfig
+                        + " activityConfig="
+                        + activityConfig
+                        + " requestedOverride="
+                        + requestedOverride
+                        + " resolvedOverride="
+                        + resolvedOverride);
+    }
+
     private void createOverlay(
             Session session
     ) {
@@ -1190,6 +1513,10 @@ final class NativeFreeformController {
                         + bounds
                         + " actualBounds="
                         + actual);
+
+        scheduleDeepSnapshots(
+                session,
+                "bounds-" + reason);
 
         return success;
     }
