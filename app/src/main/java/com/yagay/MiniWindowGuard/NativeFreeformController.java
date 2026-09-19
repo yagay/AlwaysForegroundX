@@ -116,13 +116,52 @@ final class NativeFreeformController {
         if (packageName == null) return false;
 
         if (packageName.equals(pendingPackage)
-                || isManagedPackage(packageName)) {
+                || isManagedPackage(packageName)
+                || isImmediatePendingCommand(packageName)) {
             return true;
         }
 
         VirtualDisplayController currentFallback = fallback;
         return currentFallback != null
                 && currentFallback.wantsPackage(packageName);
+    }
+
+    private boolean isImmediatePendingCommand(
+            String packageName
+    ) {
+        if (packageName == null) return false;
+
+        int seq = GuardConfig.integer(
+                ConfigKeys.CONTAINER_COMMAND_SEQ);
+
+        if (seq == lastCommandSeq) {
+            return false;
+        }
+
+        String pkg = GuardConfig.string(
+                ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+
+        int state = ConfigKeys.sanitizeState(
+                GuardConfig.integer(
+                        ConfigKeys.CONTAINER_COMMAND_STATE));
+
+        return packageName.equals(pkg)
+                && state != ConfigKeys.STATE_RELEASED;
+    }
+
+    private int requestedStateFor(
+            String packageName
+    ) {
+        if (isImmediatePendingCommand(packageName)) {
+            return ConfigKeys.sanitizeState(
+                    GuardConfig.integer(
+                            ConfigKeys.CONTAINER_COMMAND_STATE));
+        }
+
+        return packageName != null
+                && packageName.equals(pendingPackage)
+                ? pendingState
+                : ConfigKeys.STATE_WINDOW;
     }
 
     boolean isManagedPackage(String packageName) {
@@ -265,9 +304,7 @@ final class NativeFreeformController {
         }
 
         int initialState =
-                packageName.equals(pendingPackage)
-                        ? pendingState
-                        : ConfigKeys.STATE_WINDOW;
+                requestedStateFor(packageName);
 
         int originalMode =
                 intValue(
