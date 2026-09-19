@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">小窗守护</string>
-    <string name="app_description">通过 Root + LSPosed 提供通用系统小窗、Mini/隐藏形态、后台保活与虚拟前台运行保护。</string>
+    <string name="app_description">基于 system_server + VirtualDisplay 的真实悬浮小窗，并提供前台生命周期保护和完整诊断导出。</string>
 </resources>
