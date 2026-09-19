@@ -224,6 +224,16 @@ final class DiagnosticsManager {
                 .append(GuardApp.getExpectedVersionCode()).append('\n');
         out.append("loadedEngineVersionCode=")
                 .append(GuardApp.getLoadedEngineVersionCode()).append('\n');
+        out.append("bootstrapVersionCode=")
+                .append(GuardApp.getBootstrapVersionCode()).append('\n');
+        out.append("hotReloadAvailable=")
+                .append(GuardApp.isHotReloadAvailable()).append('\n');
+        out.append("engineGeneration=")
+                .append(GuardApp.getEngineGeneration()).append('\n');
+        out.append("engineActiveSessions=")
+                .append(GuardApp.getEngineActiveSessions()).append('\n');
+        out.append("engineReloadMessage=")
+                .append(GuardApp.getEngineReloadMessage()).append('\n');
         out.append("systemEngineActive=")
                 .append(GuardApp.isSystemEngineActive()).append('\n');
         out.append("systemEngineCurrent=")
@@ -251,6 +261,8 @@ final class DiagnosticsManager {
             out.append(key).append('=')
                     .append(GuardApp.getBoolean(key)).append('\n');
         }
+        out.append(ConfigKeys.ENGINE_RELOAD_SEQ).append('=')
+                .append(GuardApp.getInt(ConfigKeys.ENGINE_RELOAD_SEQ)).append('\n');
         out.append(ConfigKeys.CONTAINER_WIDTH).append('=')
                 .append(GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH)).append('\n');
         out.append(ConfigKeys.CONTAINER_HEIGHT).append('=')
@@ -274,6 +286,7 @@ final class DiagnosticsManager {
     private static List<String> booleanKeys() {
         ArrayList<String> keys = new ArrayList<>();
         keys.add(ConfigKeys.MASTER_ENABLED);
+        keys.add(ConfigKeys.ENGINE_AUTO_RELOAD);
         keys.add(ConfigKeys.SYSTEM_IMPORTANCE_TOP);
         keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
@@ -287,6 +300,9 @@ final class DiagnosticsManager {
         StringBuilder filtered = new StringBuilder();
         String[] keywords = {
                 "MiniWindowGuard",
+                "MiniWindowGuardEngine",
+                "ENGINE_RELOAD_",
+                "ENGINE_ROLLBACK",
                 "ActivityTaskManager",
                 "ActivityManager",
                 "WindowManager",
