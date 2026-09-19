@@ -1,7 +1,10 @@
 package com.yagay.MiniWindowGuard;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -34,6 +37,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        requestNotificationPermissionIfNeeded();
 
         ScrollView scroll =
                 new ScrollView(this);
@@ -79,6 +84,24 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         executor.shutdownNow();
         super.onDestroy();
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) {
+            return;
+        }
+
+        if (checkSelfPermission(
+                Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        requestPermissions(
+                new String[]{
+                        Manifest.permission.POST_NOTIFICATIONS
+                },
+                1001);
     }
 
     private void addHeader(LinearLayout parent) {
