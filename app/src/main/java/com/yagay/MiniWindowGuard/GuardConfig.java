@@ -73,10 +73,6 @@ final class GuardConfig {
         return bool(ConfigKeys.FIXED_INTERNAL_DISPLAY);
     }
 
-    static boolean lockWindowAspect() {
-        return bool(ConfigKeys.LOCK_WINDOW_ASPECT);
-    }
-
     static int internalDisplayScale() {
         return ConfigKeys.sanitizePercent(
                 integer(ConfigKeys.INTERNAL_DISPLAY_SCALE),
