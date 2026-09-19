@@ -64,6 +64,17 @@ final class TargetConfig {
         }
     }
 
+    static String getRootBridgeToken() {
+        SharedPreferences prefs = remotePreferences;
+        if (prefs == null) return "";
+        try {
+            String token = prefs.getString(ModeConfig.KEY_ROOT_BRIDGE_TOKEN, "");
+            return token == null ? "" : token;
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
     static boolean isDiagnosticsActiveFor(String packageName) {
         SharedPreferences prefs = remotePreferences;
         if (prefs == null) return false;
