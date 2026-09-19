@@ -27,6 +27,7 @@ public final class MainActivity extends Activity {
 
     private TextView rootStatus;
     private TextView xposedStatus;
+    private TextView engineStatus;
     private TextView overlayStatus;
     private TextView targetCount;
     private TextView diagnosticsStatus;
@@ -104,6 +105,9 @@ public final class MainActivity extends Activity {
         xposedStatus = statusLine("LSPosed：检测中…");
         card.addView(xposedStatus);
 
+        engineStatus = statusLine("System 引擎：检测中…");
+        card.addView(engineStatus);
+
         overlayStatus = statusLine("悬浮窗：检测中…");
         card.addView(overlayStatus);
 
@@ -137,7 +141,7 @@ public final class MainActivity extends Activity {
 
     private void addTargetCard(LinearLayout parent) {
         LinearLayout card = card(parent, "受保护应用",
-                "在这里选择 App。它们不需要加入 LSPosed 作用域，也不会被注入模块代码。");
+                "勾选后立即自动保存。只有首页显示“System 引擎：已加载当前版本”时，TaskSurface 容器才会生效。");
 
         targetCount = statusLine("");
         card.addView(targetCount);
@@ -414,6 +418,19 @@ public final class MainActivity extends Activity {
             targetCount.setText("当前受保护：" + GuardApp.getTargetPackages().size() + " 个 App");
         }
         refreshDiagnosticsStatus();
+
+        if (engineStatus != null) {
+            long expected = GuardApp.getExpectedVersionCode();
+            long loaded = GuardApp.getLoadedEngineVersionCode();
+            boolean current = GuardApp.isSystemEngineCurrent();
+
+            engineStatus.setText(current
+                    ? "System 引擎：已加载当前版本 · code " + loaded
+                    : "System 引擎：未加载当前版本 · App=" + expected
+                            + " / system_server=" + loaded
+                            + "（安装或更新模块后必须重启手机）");
+            engineStatus.setTextColor(current ? 0xFF16794A : 0xFFB3261E);
+        }
 
         if (overlayStatus != null) {
             boolean allowed = Settings.canDrawOverlays(this);
