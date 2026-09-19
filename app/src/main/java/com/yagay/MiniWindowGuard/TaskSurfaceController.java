@@ -1,11 +1,28 @@
 package com.yagay.MiniWindowGuard;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.res.Resources;
-import android.graphics.Rect;
+import android.graphics.PixelFormat;
+import android.graphics.SurfaceTexture;
+import android.graphics.drawable.GradientDrawable;
+import android.hardware.display.DisplayManager;
+import android.hardware.display.VirtualDisplay;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.SystemClock;
+import android.util.DisplayMetrics;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.TextureView;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -23,12 +40,11 @@ final class TaskSurfaceController {
         void log(String event, String detail);
     }
 
-    private static final int WINDOWING_MODE_FULLSCREEN = 1;
-    private static final int WINDOWING_MODE_FREEFORM = 5;
-    private static final int WINDOWING_MODE_MULTI_WINDOW = 6;
+    private static final long POLL_MS = 200L;
 
-    private static final long POLL_MS = 250L;
-    private static final long VERIFY_MS = 650L;
+    // Same virtual-display capabilities used by YAMF/YAMF²:
+    // SECURE | ROTATES_WITH_CONTENT | SHOULD_SHOW_SYSTEM_DECORATIONS | TRUSTED.
+    private static final int VIRTUAL_DISPLAY_FLAGS = 1668;
 
     private final Handler handler;
     private volatile Context systemContext;
@@ -36,6 +52,8 @@ final class TaskSurfaceController {
     private final Map<Integer, ManagedTask> tasks = new ConcurrentHashMap<>();
 
     private volatile int lastCommandSeq = Integer.MIN_VALUE;
+    private volatile String pendingPackage = "";
+    private volatile int pendingState = ConfigKeys.STATE_WINDOW;
 
     TaskSurfaceController(Handler handler, Context systemContext, Logger logger) {
         this.handler = handler;
@@ -58,6 +76,12 @@ final class TaskSurfaceController {
         return false;
     }
 
+    boolean wantsPackage(String packageName) {
+        return packageName != null
+                && (packageName.equals(pendingPackage)
+                || isManagedPackage(packageName));
+    }
+
     boolean isManagedActivityRecord(Object activityRecord) {
         String pkg = activityPackage(activityRecord);
         return isManagedPackage(pkg);
@@ -77,9 +101,7 @@ final class TaskSurfaceController {
         if (task == null) return false;
 
         Object top = invokeNoArg(task, "topRunningActivity");
-        if (top == null) {
-            top = invokeNoArg(task, "getTopResumedActivity");
-        }
+        if (top == null) top = invokeNoArg(task, "getTopResumedActivity");
         return top == null || top == activityRecord;
     }
 
@@ -92,13 +114,13 @@ final class TaskSurfaceController {
         if (activityRecord == null
                 || packageName == null
                 || !GuardConfig.bool(ConfigKeys.AUTO_CONTAINER)
-                || !GuardConfig.isTargetPackage(packageName)) {
+                || !wantsPackage(packageName)) {
             return;
         }
 
         Object taskObject = getTask(activityRecord);
         if (taskObject == null) {
-            log("TASK_CAPTURE_SKIP", "pkg=" + packageName + " reason=no-task");
+            log("VD_CAPTURE_SKIP", "pkg=" + packageName + " reason=no-task");
             return;
         }
 
@@ -108,7 +130,7 @@ final class TaskSurfaceController {
 
         int taskId = taskId(taskObject);
         if (taskId < 0) {
-            log("TASK_CAPTURE_SKIP", "pkg=" + packageName + " reason=no-task-id");
+            log("VD_CAPTURE_SKIP", "pkg=" + packageName + " reason=no-task-id");
             return;
         }
 
@@ -118,28 +140,27 @@ final class TaskSurfaceController {
             return;
         }
 
-        Rect originalBounds = readBounds(taskObject);
-        int originalWindowingMode = readWindowingMode(taskObject);
-
+        int originalDisplayId = readDisplayId(taskObject);
         ManagedTask managed = new ManagedTask(
                 taskId,
                 packageName,
                 taskObject,
-                originalBounds,
-                originalWindowingMode,
-                GuardConfig.defaultContainerState());
+                originalDisplayId,
+                pendingPackage.equals(packageName)
+                        ? pendingState
+                        : ConfigKeys.STATE_WINDOW);
 
         tasks.put(taskId, managed);
+        if (pendingPackage.equals(packageName)) {
+            pendingPackage = "";
+        }
 
-        log("TASK_CAPTURED",
+        log("VD_TASK_CAPTURED",
                 "pkg=" + packageName
                         + " taskId=" + taskId
-                        + " originalBounds=" + originalBounds
-                        + " originalWindowingMode=" + originalWindowingMode
+                        + " originalDisplay=" + originalDisplayId
                         + " state=" + managed.state);
 
-        // ActivityRecord.setState can be called while WM owns its global lock.
-        // Run WindowOrganizer transactions after that call returns.
         handler.post(() -> applyState(managed, managed.state));
     }
 
@@ -157,6 +178,7 @@ final class TaskSurfaceController {
                 int seq = GuardConfig.integer(ConfigKeys.CONTAINER_COMMAND_SEQ);
                 if (seq != lastCommandSeq) {
                     lastCommandSeq = seq;
+
                     String pkg = GuardConfig.string(
                             ConfigKeys.CONTAINER_COMMAND_PACKAGE);
                     int state = ConfigKeys.sanitizeState(
@@ -167,7 +189,9 @@ final class TaskSurfaceController {
                         if (task != null) {
                             applyState(task, state);
                         } else {
-                            log("TASK_COMMAND_MISS",
+                            pendingPackage = pkg;
+                            pendingState = state;
+                            log("VD_COMMAND_PENDING",
                                     "seq=" + seq
                                             + " pkg=" + pkg
                                             + " state=" + state);
@@ -175,7 +199,7 @@ final class TaskSurfaceController {
                     }
                 }
             } catch (Throwable t) {
-                log("TASK_COMMAND_ERROR", String.valueOf(t));
+                log("VD_COMMAND_ERROR", String.valueOf(t));
             } finally {
                 handler.postDelayed(this, POLL_MS);
             }
@@ -194,32 +218,52 @@ final class TaskSurfaceController {
     }
 
     private void applyState(ManagedTask managed, int requestedState) {
+        if (managed == null) return;
+
         int state = ConfigKeys.sanitizeState(requestedState);
 
         try {
             if (state == ConfigKeys.STATE_RELEASED) {
-                restoreTask(managed);
-                managed.state = state;
-                managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+                managed.state = ConfigKeys.STATE_RELEASED;
+                if (managed.window != null) {
+                    managed.window.destroy(true);
+                    managed.window = null;
+                } else {
+                    moveTaskToDisplay(
+                            managed.taskId,
+                            Math.max(0, managed.originalDisplayId));
+                }
                 tasks.remove(managed.taskId, managed);
-                notifyCaptured(managed);
-                log("TASK_RELEASED",
+                log("VD_TASK_RELEASED",
                         "pkg=" + managed.packageName
                                 + " taskId=" + managed.taskId);
                 return;
             }
 
-            if (state == ConfigKeys.STATE_WINDOW) {
-                // A real floating window must use FREEFORM. MULTI_WINDOW is split/
-                // multi-task semantics on handheld devices and can still reserve the
-                // whole display even when bounds are smaller.
-                applyWindowState(managed, WINDOWING_MODE_FREEFORM, 1);
-                return;
+            if (managed.window == null) {
+                VirtualWindow window = new VirtualWindow(managed);
+                if (!window.create()) {
+                    tasks.remove(managed.taskId, managed);
+                    managed.state = ConfigKeys.STATE_RELEASED;
+                    log("VD_WINDOW_CREATE_FAIL",
+                            "pkg=" + managed.packageName
+                                    + " taskId=" + managed.taskId);
+                    return;
+                }
+                managed.window = window;
             }
 
-            applyBackgroundState(managed, state);
+            managed.state = state;
+            managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+            managed.window.applyVisualState(state);
+
+            log("VD_TASK_STATE",
+                    "pkg=" + managed.packageName
+                            + " taskId=" + managed.taskId
+                            + " displayId=" + managed.window.displayId
+                            + " state=" + state);
         } catch (Throwable t) {
-            log("TASK_STATE_ERROR",
+            log("VD_STATE_ERROR",
                     "pkg=" + managed.packageName
                             + " taskId=" + managed.taskId
                             + " state=" + state
@@ -227,342 +271,764 @@ final class TaskSurfaceController {
         }
     }
 
-    private void applyWindowState(
-            ManagedTask managed,
-            int windowingMode,
-            int attempt
-    ) {
-        Rect bounds = containerBounds();
-        boolean ok = applyWindowContainerTransaction(
-                managed.taskObject,
-                windowingMode,
-                bounds,
-                true,
-                GuardConfig.bool(ConfigKeys.CONTAINER_ALWAYS_ON_TOP),
-                true);
+    private final class VirtualWindow
+            implements TextureView.SurfaceTextureListener {
 
-        if (!ok) {
-            log("TASK_WCT_ERROR",
-                    "pkg=" + managed.packageName
-                            + " taskId=" + managed.taskId
-                            + " mode=" + windowingMode
-                            + " reason=apply-failed");
-            return;
+        private final ManagedTask managed;
+
+        private Context context;
+        private WindowManager windowManager;
+        private DisplayManager displayManager;
+        private Object inputManager;
+
+        private VirtualDisplay virtualDisplay;
+        private Surface renderSurface;
+
+        private LinearLayout root;
+        private LinearLayout topBar;
+        private TextView title;
+        private Button backButton;
+        private Button moreButton;
+        private Button resizeButton;
+        private TextureView surfaceView;
+        private View actionMenu;
+
+        private WindowManager.LayoutParams windowParams;
+
+        private int displayId = -1;
+        private int densityDpi;
+        private int expandedWidth;
+        private int expandedHeight;
+        private int barHeight;
+
+        private float dragStartRawX;
+        private float dragStartRawY;
+        private int dragStartX;
+        private int dragStartY;
+
+        private float resizeStartRawX;
+        private float resizeStartRawY;
+        private int resizeStartWidth;
+        private int resizeStartHeight;
+
+        VirtualWindow(ManagedTask managed) {
+            this.managed = managed;
         }
 
-        managed.state = ConfigKeys.STATE_WINDOW;
-        managed.lastBounds = new Rect(bounds);
-        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
-        setTaskSurfaceAlpha(managed, 1.0f, "window");
+        boolean create() {
+            try {
+                context = systemContext;
+                if (context == null) return false;
 
-        notifyCaptured(managed);
-        log("TASK_STATE",
-                "pkg=" + managed.packageName
-                        + " taskId=" + managed.taskId
-                        + " state=" + ConfigKeys.STATE_WINDOW
-                        + " backend=WCT"
-                        + " requestedMode=" + windowingMode
-                        + " bounds=" + bounds
-                        + " attempt=" + attempt);
+                windowManager = context.getSystemService(WindowManager.class);
+                displayManager = context.getSystemService(DisplayManager.class);
+                inputManager = context.getSystemService("input");
 
-        handler.postDelayed(
-                () -> verifyWindowState(managed, windowingMode, attempt),
-                VERIFY_MS);
-    }
+                if (windowManager == null || displayManager == null) {
+                    log("VD_CREATE_ERROR",
+                            "pkg=" + managed.packageName
+                                    + " wm=" + windowManager
+                                    + " dm=" + displayManager);
+                    return false;
+                }
 
-    private void verifyWindowState(
-            ManagedTask managed,
-            int requestedMode,
-            int attempt
-    ) {
-        if (managed.state != ConfigKeys.STATE_WINDOW
-                || !tasks.containsKey(managed.taskId)) {
-            return;
+                DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+                densityDpi = Math.max(160, metrics.densityDpi);
+                expandedWidth = clamp(
+                        metrics.widthPixels * GuardConfig.containerWidth() / 100,
+                        dp(260),
+                        Math.max(dp(260), metrics.widthPixels - dp(24)));
+                expandedHeight = clamp(
+                        metrics.heightPixels * GuardConfig.containerHeight() / 100,
+                        dp(360),
+                        Math.max(dp(360), metrics.heightPixels - dp(120)));
+                barHeight = dp(44);
+
+                virtualDisplay = displayManager.createVirtualDisplay(
+                        "MiniWindowGuard-" + managed.taskId,
+                        expandedWidth,
+                        expandedHeight,
+                        densityDpi,
+                        null,
+                        VIRTUAL_DISPLAY_FLAGS);
+
+                if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
+                    log("VD_CREATE_ERROR",
+                            "pkg=" + managed.packageName
+                                    + " reason=createVirtualDisplay-null");
+                    return false;
+                }
+
+                displayId = virtualDisplay.getDisplay().getDisplayId();
+                buildOverlay();
+
+                if (!moveTaskToDisplay(managed.taskId, displayId)) {
+                    log("VD_MOVE_ERROR",
+                            "pkg=" + managed.packageName
+                                    + " taskId=" + managed.taskId
+                                    + " displayId=" + displayId);
+                    destroy(false);
+                    return false;
+                }
+
+                log("VD_WINDOW_CREATED",
+                        "pkg=" + managed.packageName
+                                + " taskId=" + managed.taskId
+                                + " displayId=" + displayId
+                                + " size=" + expandedWidth + "x" + expandedHeight
+                                + " density=" + densityDpi
+                                + " flags=" + VIRTUAL_DISPLAY_FLAGS);
+                return true;
+            } catch (Throwable t) {
+                log("VD_CREATE_ERROR",
+                        "pkg=" + managed.packageName + " error=" + t);
+                destroy(false);
+                return false;
+            }
         }
 
-        int actualMode = readWindowingMode(managed.taskObject);
-        Rect actualBounds = readBounds(managed.taskObject);
-        Rect requestedBounds = managed.lastBounds;
+        private void buildOverlay() {
+            root = new LinearLayout(context);
+            root.setOrientation(LinearLayout.VERTICAL);
 
-        boolean boundsOk = boundsApproximatelyEqual(
-                requestedBounds,
-                actualBounds,
-                12);
-        boolean modeOk = actualMode == WINDOWING_MODE_FREEFORM;
+            topBar = new LinearLayout(context);
+            topBar.setOrientation(LinearLayout.HORIZONTAL);
+            topBar.setGravity(Gravity.CENTER_VERTICAL);
+            topBar.setPadding(dp(4), 0, dp(4), 0);
 
-        log("TASK_VERIFY",
-                "pkg=" + managed.packageName
-                        + " taskId=" + managed.taskId
-                        + " requestedMode=" + requestedMode
-                        + " actualMode=" + actualMode
-                        + " requestedBounds=" + requestedBounds
-                        + " actualBounds=" + actualBounds
-                        + " modeOk=" + modeOk
-                        + " boundsOk=" + boundsOk
-                        + " attempt=" + attempt);
+            GradientDrawable barBg = new GradientDrawable();
+            barBg.setColor(0xEE202328);
+            barBg.setCornerRadius(dp(12));
+            topBar.setBackground(barBg);
 
-        if (modeOk && boundsOk) return;
+            backButton = smallButton("‹");
+            backButton.setTextSize(26);
+            backButton.setOnClickListener(v -> injectBack());
 
-        log("TASK_WINDOW_UNSUPPORTED",
-                "pkg=" + managed.packageName
-                        + " taskId=" + managed.taskId
-                        + " requestedMode=FREEFORM"
-                        + " actualMode=" + actualMode
-                        + " requestedBounds=" + requestedBounds
-                        + " actualBounds=" + actualBounds
-                        + " reason=freeform-not-honored");
+            title = new TextView(context);
+            title.setText(managed.packageName);
+            title.setTextColor(0xFFFFFFFF);
+            title.setTextSize(12.5f);
+            title.setSingleLine(true);
+            title.setGravity(Gravity.CENTER_VERTICAL);
+            title.setPadding(dp(6), 0, dp(6), 0);
+            title.setOnTouchListener((v, event) -> handleDrag(event));
 
-        // Never silently degrade to MULTI_WINDOW. On phones that mode can own the
-        // whole display even with smaller bounds, which is not a floating window.
-        restoreTask(managed);
-        managed.state = ConfigKeys.STATE_RELEASED;
-        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
-        tasks.remove(managed.taskId, managed);
-        notifyCaptured(managed);
-    }
+            moreButton = smallButton("⋮");
+            moreButton.setTextSize(22);
+            moreButton.setOnClickListener(v -> toggleActionMenu());
 
-    private void applyBackgroundState(ManagedTask managed, int state) {
-        // Icon/hidden is a visual state, not an Android lifecycle state.
-        // Mark it before reordering so lifecycle hooks can suppress pause/stop while
-        // WindowOrganizer moves the task behind the user's foreground task.
-        int previousState = managed.state;
-        managed.state = state;
-        managed.lastSeenElapsed = SystemClock.elapsedRealtime();
+            resizeButton = smallButton("↘");
+            resizeButton.setTextSize(18);
+            resizeButton.setOnTouchListener((v, event) -> handleResize(event));
 
-        boolean ok = applyWindowContainerTransaction(
-                managed.taskObject,
-                readWindowingMode(managed.taskObject),
-                null,
-                false,
-                false,
-                false);
+            topBar.addView(backButton,
+                    new LinearLayout.LayoutParams(barHeight, barHeight));
+            topBar.addView(title,
+                    new LinearLayout.LayoutParams(
+                            0,
+                            barHeight,
+                            1f));
+            topBar.addView(moreButton,
+                    new LinearLayout.LayoutParams(barHeight, barHeight));
+            topBar.addView(resizeButton,
+                    new LinearLayout.LayoutParams(barHeight, barHeight));
 
-        if (!ok) {
-            managed.state = previousState;
-            setTaskSurfaceAlpha(managed, 1.0f, "background-revert");
-            log("TASK_BACKGROUND_ERROR",
+            surfaceView = new TextureView(context);
+            surfaceView.setOpaque(true);
+            surfaceView.setSurfaceTextureListener(this);
+            surfaceView.setOnTouchListener((v, event) -> {
+                if (managed.state != ConfigKeys.STATE_WINDOW) return false;
+                bringToFront();
+                return injectMotionEvent(event);
+            });
+            surfaceView.setOnGenericMotionListener((v, event) ->
+                    managed.state == ConfigKeys.STATE_WINDOW
+                            && injectMotionEvent(event));
+
+            root.addView(topBar,
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            barHeight));
+            root.addView(surfaceView,
+                    new LinearLayout.LayoutParams(
+                            expandedWidth,
+                            expandedHeight));
+
+            windowParams = new WindowManager.LayoutParams(
+                    expandedWidth,
+                    expandedHeight + barHeight,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                            | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                    PixelFormat.TRANSLUCENT);
+            windowParams.gravity = Gravity.TOP | Gravity.START;
+            windowParams.x = dp(12);
+            windowParams.y = dp(72);
+
+            windowManager.addView(root, windowParams);
+        }
+
+        void applyVisualState(int state) {
+            if (root == null) return;
+
+            if (state == ConfigKeys.STATE_WINDOW) {
+                showExpanded();
+            } else {
+                showControllerOnly(state);
+            }
+
+            updateMenuPosition();
+        }
+
+        private void showExpanded() {
+            title.setVisibility(View.VISIBLE);
+            backButton.setVisibility(View.VISIBLE);
+            resizeButton.setVisibility(View.VISIBLE);
+            moreButton.setText("⋮");
+
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
+                    expandedWidth,
+                    expandedHeight);
+            surfaceView.setLayoutParams(sp);
+            surfaceView.setAlpha(1f);
+            surfaceView.setVisibility(View.VISIBLE);
+
+            windowParams.width = expandedWidth;
+            windowParams.height = expandedHeight + barHeight;
+            clampWindowPosition();
+            safeUpdateRoot();
+
+            resizeVirtualDisplay(expandedWidth, expandedHeight);
+            bringToFront();
+        }
+
+        private void showControllerOnly(int state) {
+            title.setVisibility(View.GONE);
+            backButton.setVisibility(View.GONE);
+            resizeButton.setVisibility(View.GONE);
+            moreButton.setText("⋮");
+
+            // Keep TextureView and its SurfaceTexture alive. The task continues
+            // rendering on its VirtualDisplay, but the pixels are visually hidden.
+            LinearLayout.LayoutParams sp =
+                    new LinearLayout.LayoutParams(1, 1);
+            surfaceView.setLayoutParams(sp);
+            surfaceView.setAlpha(0f);
+            surfaceView.setVisibility(View.VISIBLE);
+
+            windowParams.width = barHeight + dp(8);
+            windowParams.height = barHeight + 1;
+            clampWindowPosition();
+            safeUpdateRoot();
+            bringToFront();
+
+            log("VD_SURFACE_HIDDEN",
                     "pkg=" + managed.packageName
-                            + " taskId=" + managed.taskId
+                            + " displayId=" + displayId
                             + " state=" + state
-                            + " reason=reorder-failed");
-            return;
+                            + " surfaceAlive=true");
         }
 
-        // The task stays logically visible/resumed in system_server, but its real
-        // compositor surface is transparent while it sits behind the foreground task.
-        // Re-apply after transition settling because OEM Shell may rewrite task alpha.
-        setTaskSurfaceAlpha(managed, 0.0f, "background");
-        handler.postDelayed(() -> {
-            if (managed.state == ConfigKeys.STATE_ICON
-                    || managed.state == ConfigKeys.STATE_HIDDEN) {
-                setTaskSurfaceAlpha(managed, 0.0f, "background-settle-1");
+        private Button smallButton(String text) {
+            Button b = new Button(context);
+            b.setText(text);
+            b.setTextColor(0xFFFFFFFF);
+            b.setAllCaps(false);
+            b.setMinWidth(0);
+            b.setMinimumWidth(0);
+            b.setPadding(0, 0, 0, 0);
+            b.setBackgroundColor(0x00000000);
+            return b;
+        }
+
+        private boolean handleDrag(MotionEvent event) {
+            if (windowParams == null) return false;
+
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN -> {
+                    dragStartRawX = event.getRawX();
+                    dragStartRawY = event.getRawY();
+                    dragStartX = windowParams.x;
+                    dragStartY = windowParams.y;
+                    bringToFront();
+                    return true;
+                }
+                case MotionEvent.ACTION_MOVE -> {
+                    windowParams.x = dragStartX
+                            + Math.round(event.getRawX() - dragStartRawX);
+                    windowParams.y = dragStartY
+                            + Math.round(event.getRawY() - dragStartRawY);
+                    clampWindowPosition();
+                    safeUpdateRoot();
+                    updateMenuPosition();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    clampWindowPosition();
+                    safeUpdateRoot();
+                    updateMenuPosition();
+                    return true;
+                }
+                default -> {
+                    return false;
+                }
             }
-        }, 180L);
-        handler.postDelayed(() -> {
-            if (managed.state == ConfigKeys.STATE_ICON
-                    || managed.state == ConfigKeys.STATE_HIDDEN) {
-                setTaskSurfaceAlpha(managed, 0.0f, "background-settle-2");
+        }
+
+        private boolean handleResize(MotionEvent event) {
+            if (managed.state != ConfigKeys.STATE_WINDOW) return false;
+
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN -> {
+                    resizeStartRawX = event.getRawX();
+                    resizeStartRawY = event.getRawY();
+                    resizeStartWidth = expandedWidth;
+                    resizeStartHeight = expandedHeight;
+                    bringToFront();
+                    return true;
+                }
+                case MotionEvent.ACTION_MOVE -> {
+                    DisplayMetrics metrics =
+                            context.getResources().getDisplayMetrics();
+
+                    expandedWidth = clamp(
+                            resizeStartWidth
+                                    + Math.round(event.getRawX() - resizeStartRawX),
+                            dp(240),
+                            Math.max(dp(240), metrics.widthPixels - dp(16)));
+                    expandedHeight = clamp(
+                            resizeStartHeight
+                                    + Math.round(event.getRawY() - resizeStartRawY),
+                            dp(300),
+                            Math.max(dp(300), metrics.heightPixels - dp(100)));
+
+                    showExpanded();
+                    updateMenuPosition();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    showExpanded();
+                    updateMenuPosition();
+                    return true;
+                }
+                default -> {
+                    return false;
+                }
             }
-        }, 700L);
+        }
 
-        notifyCaptured(managed);
-        log("TASK_STATE",
-                "pkg=" + managed.packageName
-                        + " taskId=" + managed.taskId
-                        + " state=" + state
-                        + " backend=WCT+SurfaceControl"
-                        + " action=reorder-to-back-keep-live");
-    }
+        private void toggleActionMenu() {
+            if (actionMenu != null) {
+                dismissActionMenu();
+            } else {
+                showActionMenu();
+            }
+        }
 
-    private void restoreTask(ManagedTask managed) {
-        Rect original = managed.originalBounds;
-        int originalMode = managed.originalWindowingMode;
-        if (originalMode <= 0) originalMode = WINDOWING_MODE_FULLSCREEN;
+        private void showActionMenu() {
+            if (actionMenu != null || windowManager == null) return;
 
-        applyWindowContainerTransaction(
-                managed.taskObject,
-                originalMode,
-                original,
-                true,
-                false,
-                true);
-        setTaskSurfaceAlpha(managed, 1.0f, "release");
-    }
+            LinearLayout panel = new LinearLayout(context);
+            panel.setOrientation(LinearLayout.VERTICAL);
+            panel.setPadding(dp(6), dp(6), dp(6), dp(6));
 
-    private void setTaskSurfaceAlpha(
-            ManagedTask managed,
-            float alpha,
-            String reason
-    ) {
-        boolean ok = applyTaskSurfaceAlpha(managed.taskObject, alpha);
-        log("TASK_SURFACE_ALPHA",
-                "pkg=" + managed.packageName
-                        + " taskId=" + managed.taskId
-                        + " state=" + managed.state
-                        + " alpha=" + alpha
-                        + " reason=" + reason
-                        + " ok=" + ok);
-    }
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(0xFFF8F9FA);
+            bg.setCornerRadius(dp(14));
+            panel.setBackground(bg);
 
-    private boolean applyTaskSurfaceAlpha(Object task, float alpha) {
-        if (task == null) return false;
+            panel.addView(menuButton(
+                    "放大（全屏）",
+                    ConfigKeys.STATE_RELEASED));
+            panel.addView(menuButton(
+                    "小窗",
+                    ConfigKeys.STATE_WINDOW));
+            panel.addView(menuButton(
+                    "图标",
+                    ConfigKeys.STATE_ICON));
+            panel.addView(menuButton(
+                    "隐藏",
+                    ConfigKeys.STATE_HIDDEN));
 
-        try {
-            Object surface = invokeNoArg(task, "getSurfaceControl");
-            if (surface == null) return false;
+            WindowManager.LayoutParams lp = menuLayoutParams();
+            windowManager.addView(panel, lp);
+            actionMenu = panel;
+        }
 
-            ClassLoader loader = task.getClass().getClassLoader();
-            Class<?> txClass = Class.forName(
-                    "android.view.SurfaceControl$Transaction",
-                    false,
-                    loader);
-            Object tx = txClass.getDeclaredConstructor().newInstance();
+        private Button menuButton(String text, int state) {
+            Button b = new Button(context);
+            b.setText(text);
+            b.setTextSize(14);
+            b.setTextColor(0xFF202124);
+            b.setAllCaps(false);
+            b.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            b.setMinWidth(0);
+            b.setMinimumWidth(0);
+            b.setPadding(dp(14), 0, dp(14), 0);
+            b.setOnClickListener(v -> {
+                // Menu stays available for WINDOW / ICON / HIDDEN.
+                // RELEASE destroys the whole VirtualDisplay container.
+                handler.post(() -> applyState(managed, state));
+            });
+            return b;
+        }
 
-            boolean alphaSet = invokeCompatible(
-                    tx,
-                    "setAlpha",
-                    surface,
-                    alpha);
-            if (!alphaSet) {
-                invokeCompatible(tx, "close");
+        private WindowManager.LayoutParams menuLayoutParams() {
+            int menuWidth = dp(176);
+            DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    menuWidth,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.TOP | Gravity.START;
+
+            int anchorRight = windowParams.x + Math.max(windowParams.width, barHeight);
+            lp.x = clamp(
+                    anchorRight - menuWidth,
+                    dp(4),
+                    Math.max(dp(4), metrics.widthPixels - menuWidth - dp(4)));
+            lp.y = clamp(
+                    windowParams.y + barHeight,
+                    dp(4),
+                    Math.max(dp(4), metrics.heightPixels - dp(260)));
+            return lp;
+        }
+
+        private void updateMenuPosition() {
+            if (actionMenu == null || windowManager == null) return;
+            try {
+                windowManager.updateViewLayout(
+                        actionMenu,
+                        menuLayoutParams());
+            } catch (Throwable t) {
+                log("VD_MENU_UPDATE_ERROR", String.valueOf(t));
+            }
+        }
+
+        private void dismissActionMenu() {
+            if (actionMenu == null || windowManager == null) return;
+            try {
+                windowManager.removeViewImmediate(actionMenu);
+            } catch (Throwable ignored) {
+            }
+            actionMenu = null;
+        }
+
+        private void bringToFront() {
+            if (root == null || windowManager == null) return;
+
+            try {
+                windowManager.removeViewImmediate(root);
+                windowManager.addView(root, windowParams);
+            } catch (Throwable ignored) {
+                safeUpdateRoot();
+            }
+
+            if (actionMenu != null) {
+                View menu = actionMenu;
+                WindowManager.LayoutParams lp = menuLayoutParams();
+                try {
+                    windowManager.removeViewImmediate(menu);
+                    windowManager.addView(menu, lp);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        private void safeUpdateRoot() {
+            if (root == null || windowManager == null) return;
+            try {
+                windowManager.updateViewLayout(root, windowParams);
+            } catch (Throwable t) {
+                log("VD_WINDOW_UPDATE_ERROR", String.valueOf(t));
+            }
+        }
+
+        private void clampWindowPosition() {
+            DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+            int maxX = Math.max(0, metrics.widthPixels - Math.max(barHeight, windowParams.width));
+            int maxY = Math.max(0, metrics.heightPixels - Math.max(barHeight, windowParams.height));
+            windowParams.x = clamp(windowParams.x, 0, maxX);
+            windowParams.y = clamp(windowParams.y, 0, maxY);
+        }
+
+        private void resizeVirtualDisplay(int width, int height) {
+            if (virtualDisplay == null) return;
+            try {
+                virtualDisplay.resize(
+                        Math.max(1, width),
+                        Math.max(1, height),
+                        densityDpi);
+
+                SurfaceTexture st = surfaceView == null
+                        ? null : surfaceView.getSurfaceTexture();
+                if (st != null) {
+                    st.setDefaultBufferSize(
+                            Math.max(1, width),
+                            Math.max(1, height));
+                }
+
+                log("VD_RESIZE",
+                        "pkg=" + managed.packageName
+                                + " displayId=" + displayId
+                                + " size=" + width + "x" + height);
+            } catch (Throwable t) {
+                log("VD_RESIZE_ERROR", String.valueOf(t));
+            }
+        }
+
+        private boolean injectMotionEvent(MotionEvent source) {
+            if (source == null || displayId < 0 || inputManager == null) {
                 return false;
             }
 
-            // Keep the task surface present. Alpha controls only composition; lifecycle
-            // and client visibility remain owned by the system_server guard.
-            invokeCompatible(tx, "show", surface);
-            boolean applied = invokeCompatible(tx, "apply");
-            invokeCompatible(tx, "close");
-            return applied;
-        } catch (Throwable t) {
-            log("TASK_SURFACE_ALPHA_ERROR", String.valueOf(t));
-            return false;
+            MotionEvent copy = MotionEvent.obtain(source);
+            try {
+                setInputEventDisplayId(copy, displayId);
+                boolean ok = invokeCompatible(
+                        inputManager,
+                        "injectInputEvent",
+                        copy,
+                        0);
+                if (!ok) {
+                    log("VD_INPUT_ERROR",
+                            "pkg=" + managed.packageName
+                                    + " displayId=" + displayId
+                                    + " reason=injectInputEvent-unavailable");
+                }
+                return ok;
+            } finally {
+                copy.recycle();
+            }
+        }
+
+        private void injectBack() {
+            long now = SystemClock.uptimeMillis();
+            KeyEvent down = new KeyEvent(
+                    now,
+                    now,
+                    KeyEvent.ACTION_DOWN,
+                    KeyEvent.KEYCODE_BACK,
+                    0);
+            KeyEvent up = new KeyEvent(
+                    now,
+                    now,
+                    KeyEvent.ACTION_UP,
+                    KeyEvent.KEYCODE_BACK,
+                    0);
+
+            setInputEventDisplayId(down, displayId);
+            setInputEventDisplayId(up, displayId);
+            invokeCompatible(inputManager, "injectInputEvent", down, 0);
+            invokeCompatible(inputManager, "injectInputEvent", up, 0);
+        }
+
+        private void setInputEventDisplayId(Object event, int id) {
+            if (event == null) return;
+            invokeCompatible(event, "setDisplayId", id);
+        }
+
+        void destroy(boolean restoreTask) {
+            dismissActionMenu();
+
+            if (restoreTask) {
+                moveTaskToDisplay(
+                        managed.taskId,
+                        Math.max(0, managed.originalDisplayId));
+            }
+
+            if (windowManager != null && root != null) {
+                try {
+                    windowManager.removeViewImmediate(root);
+                } catch (Throwable ignored) {
+                }
+            }
+
+            if (virtualDisplay != null) {
+                try {
+                    virtualDisplay.setSurface(null);
+                } catch (Throwable ignored) {
+                }
+            }
+
+            if (renderSurface != null) {
+                try {
+                    renderSurface.release();
+                } catch (Throwable ignored) {
+                }
+                renderSurface = null;
+            }
+
+            if (virtualDisplay != null) {
+                try {
+                    virtualDisplay.release();
+                } catch (Throwable ignored) {
+                }
+                virtualDisplay = null;
+            }
+
+            root = null;
+            surfaceView = null;
+            displayId = -1;
+        }
+
+        @Override
+        public void onSurfaceTextureAvailable(
+                SurfaceTexture surface,
+                int width,
+                int height
+        ) {
+            if (virtualDisplay == null) return;
+
+            try {
+                surface.setDefaultBufferSize(
+                        Math.max(1, expandedWidth),
+                        Math.max(1, expandedHeight));
+
+                if (renderSurface != null) {
+                    try {
+                        renderSurface.release();
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                renderSurface = new Surface(surface);
+                virtualDisplay.setSurface(renderSurface);
+                resizeVirtualDisplay(expandedWidth, expandedHeight);
+
+                log("VD_SURFACE_READY",
+                        "pkg=" + managed.packageName
+                                + " displayId=" + displayId
+                                + " texture=" + width + "x" + height);
+            } catch (Throwable t) {
+                log("VD_SURFACE_ERROR", String.valueOf(t));
+            }
+        }
+
+        @Override
+        public void onSurfaceTextureSizeChanged(
+                SurfaceTexture surface,
+                int width,
+                int height
+        ) {
+            if (managed.state == ConfigKeys.STATE_WINDOW) {
+                resizeVirtualDisplay(
+                        Math.max(1, expandedWidth),
+                        Math.max(1, expandedHeight));
+            }
+        }
+
+        @Override
+        public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+            if (virtualDisplay != null) {
+                try {
+                    virtualDisplay.setSurface(null);
+                } catch (Throwable ignored) {
+                }
+            }
+
+            if (renderSurface != null) {
+                try {
+                    renderSurface.release();
+                } catch (Throwable ignored) {
+                }
+                renderSurface = null;
+            }
+            return true;
+        }
+
+        @Override
+        public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+        }
+
+        private int dp(float value) {
+            return Math.round(
+                    value * context.getResources().getDisplayMetrics().density);
         }
     }
 
-    private Rect containerBounds() {
-        return ContainerGeometry.visibleBounds(
-                Resources.getSystem(),
-                GuardConfig.containerWidth(),
-                GuardConfig.containerHeight());
-    }
-
-    /**
-     * Uses the same WindowContainerTransaction path used by AOSP TaskView/Desktop mode.
-     * Direct Task.setBounds()/setWindowingMode() is not stable because Shell/TaskOrganizer
-     * can overwrite those internal changes immediately.
-     */
-    private boolean applyWindowContainerTransaction(
-            Object task,
-            int windowingMode,
-            Rect bounds,
-            boolean focusable,
-            boolean alwaysOnTop,
-            boolean onTop
-    ) {
-        if (task == null) return false;
+    private boolean moveTaskToDisplay(int taskId, int displayId) {
+        if (taskId < 0 || displayId < 0) return false;
 
         try {
-            Object token = taskWindowContainerToken(task);
-            Object atm = fieldValue(task, "mAtmService");
-            if (atm == null) atm = fieldValue(task, "mService");
-            Object organizer = fieldValue(atm, "mWindowOrganizerController");
-
-            if (token == null || organizer == null) {
-                log("TASK_WCT_ERROR",
-                        "token=" + token + " organizer=" + organizer);
+            Object atm = getActivityTaskManagerService();
+            if (atm == null) {
+                log("VD_MOVE_ERROR", "reason=no-activity-task-manager");
                 return false;
             }
 
-            ClassLoader loader = task.getClass().getClassLoader();
-            Class<?> wctClass = Class.forName(
-                    "android.window.WindowContainerTransaction",
-                    false,
-                    loader);
-
-            Object wct = wctClass.getDeclaredConstructor().newInstance();
-
-            if (windowingMode > 0) {
-                invokeCompatible(
-                        wct,
-                        "setWindowingMode",
-                        token,
-                        windowingMode);
-            }
-
-            if (bounds != null) {
-                invokeCompatible(
-                        wct,
-                        "setBounds",
-                        token,
-                        new Rect(bounds));
-            }
-
-            invokeCompatible(
-                    wct,
-                    "setFocusable",
-                    token,
-                    focusable);
-
-            invokeCompatible(
-                    wct,
-                    "setAlwaysOnTop",
-                    token,
-                    alwaysOnTop);
-
-            boolean reordered = invokeCompatible(
-                    wct,
-                    "reorder",
-                    token,
-                    onTop,
-                    true);
-            if (!reordered) {
-                invokeCompatible(
-                        wct,
-                        "reorder",
-                        token,
-                        onTop);
-            }
-
-            Method apply = findCompatibleMethod(
-                    organizer.getClass(),
-                    "applyTransaction",
-                    new Object[]{wct});
-            if (apply == null) {
-                log("TASK_WCT_ERROR",
-                        "reason=no-applyTransaction organizer="
-                                + organizer.getClass().getName());
+            Method move = findCompatibleMethod(
+                    atm.getClass(),
+                    "moveRootTaskToDisplay",
+                    new Object[]{taskId, displayId});
+            if (move == null) {
+                log("VD_MOVE_ERROR",
+                        "reason=no-moveRootTaskToDisplay"
+                                + " taskId=" + taskId
+                                + " displayId=" + displayId);
                 return false;
             }
 
-            apply.setAccessible(true);
-            apply.invoke(organizer, wct);
+            move.setAccessible(true);
+            move.invoke(atm, taskId, displayId);
+
+            try {
+                Context context = systemContext;
+                ActivityManager am = context == null
+                        ? null : context.getSystemService(ActivityManager.class);
+                if (am != null) {
+                    am.moveTaskToFront(taskId, 0);
+                }
+            } catch (Throwable ignored) {
+            }
+
+            log("VD_TASK_MOVED",
+                    "taskId=" + taskId + " displayId=" + displayId);
             return true;
         } catch (Throwable t) {
-            log("TASK_WCT_ERROR", "error=" + t);
+            log("VD_MOVE_ERROR",
+                    "taskId=" + taskId
+                            + " displayId=" + displayId
+                            + " error=" + t);
             return false;
         }
     }
 
-    private static Object taskWindowContainerToken(Object task) {
-        Object remoteToken = fieldValue(task, "mRemoteToken");
-        if (remoteToken == null) return null;
-        return invokeNoArg(remoteToken, "toWindowContainerToken");
-    }
-
-    private void notifyCaptured(ManagedTask task) {
-        Context context = systemContext;
-        if (context == null) return;
-
+    private Object getActivityTaskManagerService() {
         try {
-            Intent event = new Intent(ACTION_TASK_CAPTURED);
-            event.setPackage("com.yagay.MiniWindowGuard");
-            event.putExtra(EXTRA_PACKAGE, task.packageName);
-            event.putExtra(EXTRA_TASK_ID, task.taskId);
-            event.putExtra(EXTRA_STATE, task.state);
-            context.sendBroadcast(event);
+            ClassLoader loader = TaskSurfaceController.class.getClassLoader();
+            Class<?> serviceManager = Class.forName(
+                    "android.os.ServiceManager",
+                    false,
+                    loader);
+            Method getService = serviceManager.getDeclaredMethod(
+                    "getService",
+                    String.class);
+            getService.setAccessible(true);
+
+            Object binder = getService.invoke(null, "activity_task");
+            if (!(binder instanceof IBinder)) return null;
+
+            Class<?> stub = Class.forName(
+                    "android.app.IActivityTaskManager$Stub",
+                    false,
+                    loader);
+            Method asInterface = stub.getDeclaredMethod(
+                    "asInterface",
+                    IBinder.class);
+            asInterface.setAccessible(true);
+            return asInterface.invoke(null, binder);
         } catch (Throwable t) {
-            log("TASK_EVENT_ERROR", String.valueOf(t));
+            log("VD_ATM_ERROR", String.valueOf(t));
+            return null;
         }
     }
 
@@ -583,17 +1049,13 @@ final class TaskSurfaceController {
         return field instanceof Integer ? (Integer) field : -1;
     }
 
-    private static Rect readBounds(Object task) {
-        Object value = invokeNoArg(task, "getBounds");
-        if (value instanceof Rect) return new Rect((Rect) value);
+    private static int readDisplayId(Object task) {
+        Object value = invokeNoArg(task, "getDisplayId");
+        if (value instanceof Integer) return (Integer) value;
 
-        Object field = fieldValue(task, "mBounds");
-        return field instanceof Rect ? new Rect((Rect) field) : null;
-    }
-
-    private static int readWindowingMode(Object task) {
-        Object value = invokeNoArg(task, "getWindowingMode");
-        return value instanceof Integer ? (Integer) value : WINDOWING_MODE_FULLSCREEN;
+        Object displayArea = invokeNoArg(task, "getDisplayArea");
+        Object id = invokeNoArg(displayArea, "getDisplayId");
+        return id instanceof Integer ? (Integer) id : 0;
     }
 
     private static Context deriveSystemContext(Object task) {
@@ -614,16 +1076,9 @@ final class TaskSurfaceController {
         return null;
     }
 
-    private static boolean boundsApproximatelyEqual(
-            Rect expected,
-            Rect actual,
-            int tolerance
-    ) {
-        if (expected == null || actual == null) return false;
-        return Math.abs(expected.left - actual.left) <= tolerance
-                && Math.abs(expected.top - actual.top) <= tolerance
-                && Math.abs(expected.right - actual.right) <= tolerance
-                && Math.abs(expected.bottom - actual.bottom) <= tolerance;
+    private static int clamp(int value, int min, int max) {
+        if (max < min) return min;
+        return Math.max(min, Math.min(max, value));
     }
 
     private static Object fieldValue(Object receiver, String name) {
@@ -672,7 +1127,11 @@ final class TaskSurfaceController {
             Object... args
     ) {
         if (receiver == null) return false;
-        Method method = findCompatibleMethod(receiver.getClass(), name, args);
+
+        Method method = findCompatibleMethod(
+                receiver.getClass(),
+                name,
+                args);
         if (method == null) return false;
 
         try {
@@ -689,33 +1148,45 @@ final class TaskSurfaceController {
             String name,
             Object[] args
     ) {
+        if (type == null) return null;
+
+        for (Method method : type.getMethods()) {
+            if (methodMatches(method, name, args)) return method;
+        }
+
         Class<?> current = type;
         while (current != null) {
             for (Method method : current.getDeclaredMethods()) {
-                if (!name.equals(method.getName())) continue;
-                Class<?>[] params = method.getParameterTypes();
-                if (params.length != args.length) continue;
-
-                boolean compatible = true;
-                for (int i = 0; i < params.length; i++) {
-                    if (!isCompatible(params[i], args[i])) {
-                        compatible = false;
-                        break;
-                    }
-                }
-                if (compatible) return method;
+                if (methodMatches(method, name, args)) return method;
             }
             current = current.getSuperclass();
         }
         return null;
     }
 
+    private static boolean methodMatches(
+            Method method,
+            String name,
+            Object[] args
+    ) {
+        if (!name.equals(method.getName())) return false;
+
+        Class<?>[] params = method.getParameterTypes();
+        if (params.length != args.length) return false;
+
+        for (int i = 0; i < params.length; i++) {
+            if (!isCompatible(params[i], args[i])) return false;
+        }
+        return true;
+    }
+
     private static boolean isCompatible(Class<?> type, Object value) {
         if (value == null) return !type.isPrimitive();
+
         Class<?> valueType = value.getClass();
         if (type.isAssignableFrom(valueType)) return true;
-
         if (!type.isPrimitive()) return false;
+
         return (type == int.class && valueType == Integer.class)
                 || (type == boolean.class && valueType == Boolean.class)
                 || (type == float.class && valueType == Float.class)
@@ -731,27 +1202,23 @@ final class TaskSurfaceController {
         final int taskId;
         final String packageName;
         final Object taskObject;
-        final Rect originalBounds;
-        final int originalWindowingMode;
+        final int originalDisplayId;
 
         volatile int state;
-        volatile Rect lastBounds;
         volatile long lastSeenElapsed;
+        volatile VirtualWindow window;
 
         ManagedTask(
                 int taskId,
                 String packageName,
                 Object taskObject,
-                Rect originalBounds,
-                int originalWindowingMode,
+                int originalDisplayId,
                 int state
         ) {
             this.taskId = taskId;
             this.packageName = packageName;
             this.taskObject = taskObject;
-            this.originalBounds = originalBounds == null
-                    ? null : new Rect(originalBounds);
-            this.originalWindowingMode = originalWindowingMode;
+            this.originalDisplayId = originalDisplayId;
             this.state = state;
             this.lastSeenElapsed = SystemClock.elapsedRealtime();
         }
