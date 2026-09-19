@@ -9,13 +9,9 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
-        <receiver
-            android:name="com.yagay.alwaysforeground.RootBridgeReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.yagay.alwaysforeground.action.ROOT_BRIDGE" />
-            </intent-filter>
-        </receiver>
+        <activity
+            android:name="com.yagay.alwaysforeground.TargetAppsActivity"
+            android:exported="false" />
 
         <activity
             android:name="com.yagay.alwaysforeground.MainActivity"
