@@ -4,6 +4,7 @@ import android.app.ActivityManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.PixelFormat;
+import android.graphics.SurfaceTexture;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
@@ -14,8 +15,8 @@ import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -30,14 +31,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Original MiniWindowGuard VirtualDisplay window engine.
+ * MiniWindowGuard's own VirtualDisplay window engine.
  *
- * Design goals:
- * 1. A target task never becomes a resized display-0 task.
- * 2. The render Surface exists before the task is moved to the VirtualDisplay.
- * 3. The host view is never removed/re-added for z-order changes.
- * 4. Input is rebuilt with local SurfaceView coordinates and the target displayId.
- * 5. The VirtualDisplay owns focus, while it is prevented from stealing display-0 top focus.
+ * Public projects were used only to understand Android architecture. This
+ * implementation is written for MiniWindowGuard and does not reuse their
+ * window implementation source.
  */
 final class VirtualDisplayController {
     interface Logger {
@@ -45,7 +43,6 @@ final class VirtualDisplayController {
     }
 
     private static final long COMMAND_POLL_MS = 180L;
-    private static final long RESIZE_FRAME_MS = 16L;
 
     private static final int VD_FLAG_SECURE = 1 << 2;
     private static final int VD_FLAG_OWN_CONTENT_ONLY = 1 << 3;
@@ -74,6 +71,7 @@ final class VirtualDisplayController {
 
     private volatile int lastCommandSeq = Integer.MIN_VALUE;
     private volatile String pendingPackage = "";
+    private volatile int pendingState = ConfigKeys.STATE_WINDOW;
 
     VirtualDisplayController(
             Handler handler,
@@ -144,9 +142,10 @@ final class VirtualDisplayController {
     }
 
     int stateForPackage(String packageName) {
-        return isManagedPackage(packageName)
-                ? ConfigKeys.STATE_WINDOW
-                : ConfigKeys.STATE_RELEASED;
+        Session session = latestSession(packageName);
+        return session == null || !session.active
+                ? ConfigKeys.STATE_RELEASED
+                : session.state;
     }
 
     void capture(Object activityRecord, String packageName) {
@@ -178,18 +177,22 @@ final class VirtualDisplayController {
         Session existing = sessions.get(id);
         if (existing != null && existing.active) {
             existing.lastSeenElapsed = SystemClock.elapsedRealtime();
-            existing.host.focusRemoteTask("recapture");
             return;
         }
 
-        int originalDisplayId = taskDisplayId(task);
+        int initialState = packageName.equals(pendingPackage)
+                ? pendingState
+                : ConfigKeys.STATE_WINDOW;
+
         Session session = new Session(
                 id,
                 packageName,
                 task,
-                originalDisplayId);
+                taskDisplayId(task),
+                initialState);
 
         sessions.put(id, session);
+
         if (packageName.equals(pendingPackage)) {
             pendingPackage = "";
         }
@@ -197,7 +200,8 @@ final class VirtualDisplayController {
         log("VD_TASK_CAPTURED",
                 "pkg=" + packageName
                         + " taskId=" + id
-                        + " originalDisplay=" + originalDisplayId);
+                        + " originalDisplay=" + session.originalDisplayId
+                        + " state=" + initialState);
 
         handler.post(() -> openSession(session));
     }
@@ -205,7 +209,8 @@ final class VirtualDisplayController {
     void releasePackage(String packageName) {
         Session session = latestSession(packageName);
         if (session != null) {
-            handler.post(() -> closeSession(session, true, "release-package"));
+            handler.post(() ->
+                    closeSession(session, true, "release-package"));
         }
     }
 
@@ -236,22 +241,21 @@ final class VirtualDisplayController {
                                         "remote-command");
                             }
                         } else if (session != null) {
-                            session.host.focusRemoteTask(
-                                    "remote-command");
+                            applyState(session, state, "remote-command");
                         } else {
                             pendingPackage = pkg;
+                            pendingState = state;
                             log("VD_COMMAND_PENDING",
                                     "seq=" + seq
-                                            + " pkg=" + pkg);
+                                            + " pkg=" + pkg
+                                            + " state=" + state);
                         }
                     }
                 }
             } catch (Throwable t) {
                 log("VD_COMMAND_ERROR", String.valueOf(t));
             } finally {
-                handler.postDelayed(
-                        this,
-                        COMMAND_POLL_MS);
+                handler.postDelayed(this, COMMAND_POLL_MS);
             }
         }
     };
@@ -280,6 +284,33 @@ final class VirtualDisplayController {
         }
     }
 
+    private void applyState(
+            Session session,
+            int state,
+            String reason
+    ) {
+        if (session == null || !session.active) return;
+
+        int safeState = ConfigKeys.sanitizeState(state);
+        session.state = safeState;
+        session.lastSeenElapsed = SystemClock.elapsedRealtime();
+
+        if (safeState == ConfigKeys.STATE_RELEASED) {
+            closeSession(session, true, reason);
+            return;
+        }
+
+        if (session.host != null) {
+            session.host.applyState(safeState);
+        }
+
+        log("VD_STATE",
+                "pkg=" + session.packageName
+                        + " taskId=" + session.taskId
+                        + " state=" + safeState
+                        + " reason=" + reason);
+    }
+
     private void closeSession(
             Session session,
             boolean restoreTask,
@@ -288,6 +319,7 @@ final class VirtualDisplayController {
         if (session == null || !session.active) return;
 
         session.active = false;
+        session.state = ConfigKeys.STATE_RELEASED;
 
         try {
             if (session.host != null) {
@@ -317,8 +349,7 @@ final class VirtualDisplayController {
             }
 
             if (latest == null
-                    || session.lastSeenElapsed
-                    > latest.lastSeenElapsed) {
+                    || session.lastSeenElapsed > latest.lastSeenElapsed) {
                 latest = session;
             }
         }
@@ -326,7 +357,7 @@ final class VirtualDisplayController {
     }
 
     private final class WindowHost
-            implements SurfaceHolder.Callback {
+            implements TextureView.SurfaceTextureListener {
 
         private final Session session;
 
@@ -335,20 +366,25 @@ final class VirtualDisplayController {
         private DisplayManager displayManager;
 
         private VirtualDisplay virtualDisplay;
+        private Surface renderSurface;
         private int displayId = -1;
         private int densityDpi;
 
         private LinearLayout root;
         private LinearLayout titleBar;
-        private TextView titleView;
-        private SurfaceView surfaceView;
+        private TextureView textureView;
         private View resizeHandle;
+        private View restoreControl;
 
         private WindowManager.LayoutParams windowParams;
+        private WindowManager.LayoutParams restoreParams;
 
         private int contentWidth;
         private int contentHeight;
         private int titleHeight;
+
+        private int savedWindowX;
+        private int savedWindowY;
 
         private float dragStartRawX;
         private float dragStartRawY;
@@ -360,9 +396,8 @@ final class VirtualDisplayController {
         private int resizeStartWidth;
         private int resizeStartHeight;
 
-        private long lastResizeDispatchUptime;
-        private boolean resizePending;
         private boolean taskMoved;
+        private boolean surfaceReady;
         private boolean destroyed;
 
         WindowHost(Session session) {
@@ -403,8 +438,7 @@ final class VirtualDisplayController {
                                 * GuardConfig.containerWidth()
                                 / 100,
                         dp(260),
-                        Math.max(
-                                dp(260),
+                        Math.max(dp(260),
                                 metrics.widthPixels - dp(20)));
 
                 contentHeight = clamp(
@@ -412,14 +446,12 @@ final class VirtualDisplayController {
                                 * GuardConfig.containerHeight()
                                 / 100,
                         dp(320),
-                        Math.max(
-                                dp(320),
+                        Math.max(dp(320),
                                 metrics.heightPixels - dp(110)));
 
                 virtualDisplay =
                         displayManager.createVirtualDisplay(
-                                "MiniWindowGuard-"
-                                        + session.taskId,
+                                "MiniWindowGuard-" + session.taskId,
                                 contentWidth,
                                 contentHeight,
                                 densityDpi,
@@ -447,6 +479,7 @@ final class VirtualDisplayController {
                                 + "x" + contentHeight
                                 + " density=" + densityDpi
                                 + " flags=" + VIRTUAL_DISPLAY_FLAGS
+                                + " renderer=TextureView"
                                 + " surfaceReady=false");
 
                 return true;
@@ -467,30 +500,46 @@ final class VirtualDisplayController {
             titleBar = new LinearLayout(context);
             titleBar.setOrientation(LinearLayout.HORIZONTAL);
             titleBar.setGravity(Gravity.CENTER_VERTICAL);
-            titleBar.setPadding(dp(4), 0, dp(4), 0);
+            titleBar.setPadding(dp(3), 0, dp(3), 0);
 
             GradientDrawable titleBackground =
                     new GradientDrawable();
             titleBackground.setColor(0xEE202328);
-            titleBackground.setCornerRadius(dp(10));
+            titleBackground.setCornerRadius(dp(9));
             titleBar.setBackground(titleBackground);
 
             Button back = toolbarButton("‹");
             back.setTextSize(26);
             back.setOnClickListener(v -> injectBack());
 
-            titleView = new TextView(context);
-            titleView.setText(session.packageName);
-            titleView.setTextColor(0xFFFFFFFF);
-            titleView.setTextSize(12.5f);
-            titleView.setSingleLine(true);
-            titleView.setGravity(Gravity.CENTER_VERTICAL);
-            titleView.setPadding(dp(6), 0, dp(6), 0);
-            titleView.setOnTouchListener(
+            TextView title = new TextView(context);
+            title.setText(session.packageName);
+            title.setTextColor(0xFFFFFFFF);
+            title.setTextSize(12f);
+            title.setSingleLine(true);
+            title.setGravity(Gravity.CENTER_VERTICAL);
+            title.setPadding(dp(5), 0, dp(5), 0);
+            title.setOnTouchListener(
                     (v, event) -> handleWindowDrag(event));
 
+            Button minimize = toolbarButton("●");
+            minimize.setTextSize(15);
+            minimize.setOnClickListener(v ->
+                    applyState(
+                            session,
+                            ConfigKeys.STATE_ICON,
+                            "minimize-button"));
+
+            Button hide = toolbarButton("隐");
+            hide.setTextSize(13);
+            hide.setOnClickListener(v ->
+                    applyState(
+                            session,
+                            ConfigKeys.STATE_HIDDEN,
+                            "hide-button"));
+
             Button close = toolbarButton("×");
-            close.setTextSize(24);
+            close.setTextSize(23);
             close.setOnClickListener(v ->
                     handler.post(() ->
                             closeSession(
@@ -505,11 +554,23 @@ final class VirtualDisplayController {
                             titleHeight));
 
             titleBar.addView(
-                    titleView,
+                    title,
                     new LinearLayout.LayoutParams(
                             0,
                             titleHeight,
                             1f));
+
+            titleBar.addView(
+                    minimize,
+                    new LinearLayout.LayoutParams(
+                            titleHeight,
+                            titleHeight));
+
+            titleBar.addView(
+                    hide,
+                    new LinearLayout.LayoutParams(
+                            titleHeight,
+                            titleHeight));
 
             titleBar.addView(
                     close,
@@ -520,16 +581,11 @@ final class VirtualDisplayController {
             FrameLayout content =
                     new FrameLayout(context);
 
-            surfaceView =
-                    new SurfaceView(context);
-            surfaceView.setZOrderOnTop(false);
-            surfaceView.setZOrderMediaOverlay(false);
-            surfaceView.getHolder()
-                    .setFormat(PixelFormat.OPAQUE);
-            surfaceView.getHolder()
-                    .addCallback(this);
-
-            surfaceView.setOnTouchListener(
+            textureView =
+                    new TextureView(context);
+            textureView.setOpaque(true);
+            textureView.setSurfaceTextureListener(this);
+            textureView.setOnTouchListener(
                     (v, event) -> {
                         if (event.getActionMasked()
                                 == MotionEvent.ACTION_DOWN) {
@@ -538,15 +594,15 @@ final class VirtualDisplayController {
                         return forwardMotionEvent(event);
                     });
 
-            surfaceView.setOnGenericMotionListener(
+            textureView.setOnGenericMotionListener(
                     (v, event) ->
                             forwardMotionEvent(event));
 
-            FrameLayout.LayoutParams surfaceParams =
+            FrameLayout.LayoutParams textureParams =
                     new FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT);
-            content.addView(surfaceView, surfaceParams);
+            content.addView(textureView, textureParams);
 
             TextView resize =
                     new TextView(context);
@@ -561,8 +617,8 @@ final class VirtualDisplayController {
 
             FrameLayout.LayoutParams resizeParams =
                     new FrameLayout.LayoutParams(
-                            dp(44),
-                            dp(44),
+                            dp(42),
+                            dp(42),
                             Gravity.END | Gravity.BOTTOM);
             content.addView(resize, resizeParams);
 
@@ -595,6 +651,9 @@ final class VirtualDisplayController {
             windowParams.x = dp(12);
             windowParams.y = dp(72);
 
+            savedWindowX = windowParams.x;
+            savedWindowY = windowParams.y;
+
             windowManager.addView(root, windowParams);
         }
 
@@ -610,10 +669,155 @@ final class VirtualDisplayController {
             return button;
         }
 
+        void applyState(int state) {
+            if (destroyed) return;
+
+            if (state == ConfigKeys.STATE_WINDOW) {
+                restoreWindow();
+            } else if (state == ConfigKeys.STATE_ICON) {
+                parkWindow(false);
+            } else if (state == ConfigKeys.STATE_HIDDEN) {
+                parkWindow(true);
+            }
+        }
+
+        private void restoreWindow() {
+            removeRestoreControl();
+
+            windowParams.flags &=
+                    ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+
+            windowParams.x = savedWindowX;
+            windowParams.y = savedWindowY;
+            clampWindowPosition();
+            updateHostLayout();
+
+            focusRemoteTask("restore");
+
+            log("VD_RESTORE",
+                    "pkg=" + session.packageName
+                            + " displayId=" + displayId);
+        }
+
+        private void parkWindow(boolean hidden) {
+            if (windowParams == null) return;
+
+            if (session.state == ConfigKeys.STATE_WINDOW) {
+                savedWindowX = windowParams.x;
+                savedWindowY = windowParams.y;
+            }
+
+            DisplayMetrics metrics =
+                    context.getResources().getDisplayMetrics();
+
+            windowParams.flags |=
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+
+            // Keep the TextureView attached and its SurfaceTexture alive, but move
+            // the host completely outside display 0 so it cannot occlude or eat
+            // touches from the foreground app.
+            windowParams.x =
+                    metrics.widthPixels
+                            + contentWidth
+                            + dp(80);
+            windowParams.y = 0;
+            updateHostLayout();
+
+            showRestoreControl(hidden);
+
+            log(hidden
+                            ? "VD_HIDDEN"
+                            : "VD_MINIMIZED",
+                    "pkg=" + session.packageName
+                            + " displayId=" + displayId
+                            + " surfaceReady=" + surfaceReady);
+        }
+
+        private void showRestoreControl(boolean hidden) {
+            removeRestoreControl();
+
+            Button control = new Button(context);
+            control.setAllCaps(false);
+            control.setText(hidden ? "›" : "●");
+            control.setTextSize(hidden ? 18 : 16);
+            control.setTextColor(0xFFFFFFFF);
+            control.setMinWidth(0);
+            control.setMinimumWidth(0);
+            control.setPadding(0, 0, 0, 0);
+
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(0xEE202328);
+            bg.setCornerRadius(dp(hidden ? 8 : 28));
+            control.setBackground(bg);
+
+            control.setOnClickListener(v ->
+                    applyState(
+                            session,
+                            ConfigKeys.STATE_WINDOW,
+                            "restore-control"));
+
+            int width = dp(hidden ? 22 : 54);
+            int height = dp(hidden ? 54 : 54);
+
+            restoreParams =
+                    new WindowManager.LayoutParams(
+                            width,
+                            height,
+                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.TRANSLUCENT);
+
+            restoreParams.gravity =
+                    Gravity.TOP | Gravity.START;
+
+            DisplayMetrics metrics =
+                    context.getResources().getDisplayMetrics();
+
+            restoreParams.x =
+                    Math.max(0,
+                            metrics.widthPixels
+                                    - width
+                                    - dp(hidden ? 0 : 8));
+
+            restoreParams.y =
+                    clamp(
+                            savedWindowY,
+                            dp(80),
+                            Math.max(
+                                    dp(80),
+                                    metrics.heightPixels
+                                            - height
+                                            - dp(80)));
+
+            windowManager.addView(control, restoreParams);
+            restoreControl = control;
+        }
+
+        private void removeRestoreControl() {
+            if (restoreControl == null
+                    || windowManager == null) {
+                return;
+            }
+
+            try {
+                windowManager.removeViewImmediate(
+                        restoreControl);
+            } catch (Throwable ignored) {
+            }
+
+            restoreControl = null;
+            restoreParams = null;
+        }
+
         private boolean handleWindowDrag(
                 MotionEvent event
         ) {
-            if (windowParams == null) return false;
+            if (windowParams == null
+                    || session.state != ConfigKeys.STATE_WINDOW) {
+                return false;
+            }
 
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN -> {
@@ -645,6 +849,8 @@ final class VirtualDisplayController {
                 case MotionEvent.ACTION_UP,
                         MotionEvent.ACTION_CANCEL -> {
                     clampWindowPosition();
+                    savedWindowX = windowParams.x;
+                    savedWindowY = windowParams.y;
                     updateHostLayout();
                     return true;
                 }
@@ -658,6 +864,10 @@ final class VirtualDisplayController {
         private boolean handleResize(
                 MotionEvent event
         ) {
+            if (session.state != ConfigKeys.STATE_WINDOW) {
+                return false;
+            }
+
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN -> {
                     resizeStartRawX = event.getRawX();
@@ -692,15 +902,17 @@ final class VirtualDisplayController {
                                     dp(280),
                                     metrics.heightPixels - dp(90)));
 
-                    updateWindowSize();
-                    scheduleDisplayResize(false);
+                    // Preview only. TextureView scales the last VirtualDisplay frame.
+                    // Do NOT resize the VirtualDisplay here: every resize is a display
+                    // configuration change and causes expensive OEM transitions.
+                    updateWindowSizeOnly();
                     return true;
                 }
 
                 case MotionEvent.ACTION_UP,
                         MotionEvent.ACTION_CANCEL -> {
-                    updateWindowSize();
-                    scheduleDisplayResize(true);
+                    updateWindowSizeOnly();
+                    commitDisplaySize();
                     return true;
                 }
 
@@ -710,28 +922,60 @@ final class VirtualDisplayController {
             }
         }
 
-        private void updateWindowSize() {
-            if (windowParams == null
-                    || root == null) {
-                return;
-            }
+        private void updateWindowSizeOnly() {
+            if (windowParams == null || root == null) return;
 
             windowParams.width = contentWidth;
             windowParams.height =
                     contentHeight + titleHeight;
 
-            View content =
-                    root.getChildAt(1);
+            View content = root.getChildAt(1);
             if (content != null) {
-                LinearLayout.LayoutParams params =
+                content.setLayoutParams(
                         new LinearLayout.LayoutParams(
                                 contentWidth,
-                                contentHeight);
-                content.setLayoutParams(params);
+                                contentHeight));
             }
 
             clampWindowPosition();
             updateHostLayout();
+        }
+
+        private void commitDisplaySize() {
+            if (virtualDisplay == null
+                    || destroyed
+                    || !surfaceReady) {
+                return;
+            }
+
+            try {
+                SurfaceTexture texture =
+                        textureView == null
+                                ? null
+                                : textureView.getSurfaceTexture();
+
+                if (texture != null) {
+                    texture.setDefaultBufferSize(
+                            Math.max(1, contentWidth),
+                            Math.max(1, contentHeight));
+                }
+
+                virtualDisplay.resize(
+                        Math.max(1, contentWidth),
+                        Math.max(1, contentHeight),
+                        densityDpi);
+
+                log("VD_RESIZE_COMMIT",
+                        "pkg=" + session.packageName
+                                + " displayId=" + displayId
+                                + " size=" + contentWidth
+                                + "x" + contentHeight);
+            } catch (Throwable t) {
+                log("VD_RESIZE_ERROR",
+                        "pkg=" + session.packageName
+                                + " displayId=" + displayId
+                                + " error=" + t);
+            }
         }
 
         private void updateHostLayout() {
@@ -753,74 +997,14 @@ final class VirtualDisplayController {
             }
         }
 
-        private void scheduleDisplayResize(
-                boolean immediate
-        ) {
-            if (virtualDisplay == null
-                    || destroyed) {
-                return;
-            }
-
-            long now = SystemClock.uptimeMillis();
-            long elapsed =
-                    now - lastResizeDispatchUptime;
-
-            if (immediate
-                    || elapsed >= RESIZE_FRAME_MS) {
-                resizePending = false;
-                performDisplayResize();
-                return;
-            }
-
-            if (resizePending) return;
-            resizePending = true;
-
-            handler.postDelayed(
-                    () -> {
-                        resizePending = false;
-                        if (!destroyed) {
-                            performDisplayResize();
-                        }
-                    },
-                    Math.max(
-                            1L,
-                            RESIZE_FRAME_MS - elapsed));
-        }
-
-        private void performDisplayResize() {
-            if (virtualDisplay == null
-                    || destroyed) {
-                return;
-            }
-
-            try {
-                lastResizeDispatchUptime =
-                        SystemClock.uptimeMillis();
-
-                virtualDisplay.resize(
-                        Math.max(1, contentWidth),
-                        Math.max(1, contentHeight),
-                        densityDpi);
-
-                log("VD_RESIZE",
-                        "pkg=" + session.packageName
-                                + " displayId=" + displayId
-                                + " size=" + contentWidth
-                                + "x" + contentHeight);
-            } catch (Throwable t) {
-                log("VD_RESIZE_ERROR",
-                        "pkg=" + session.packageName
-                                + " displayId=" + displayId
-                                + " error=" + t);
-            }
-        }
-
         private boolean forwardMotionEvent(
                 MotionEvent source
         ) {
             if (source == null
                     || displayId < 0
-                    || destroyed) {
+                    || destroyed
+                    || !taskMoved
+                    || !surfaceReady) {
                 return false;
             }
 
@@ -834,6 +1018,7 @@ final class VirtualDisplayController {
             }
 
             int count = source.getPointerCount();
+
             MotionEvent.PointerProperties[] properties =
                     new MotionEvent.PointerProperties[count];
             MotionEvent.PointerCoords[] coords =
@@ -851,21 +1036,22 @@ final class VirtualDisplayController {
                 coords[i] = coord;
             }
 
-            MotionEvent forwarded = MotionEvent.obtain(
-                    source.getDownTime(),
-                    source.getEventTime(),
-                    source.getAction(),
-                    count,
-                    properties,
-                    coords,
-                    source.getMetaState(),
-                    source.getButtonState(),
-                    source.getXPrecision(),
-                    source.getYPrecision(),
-                    source.getDeviceId(),
-                    source.getEdgeFlags(),
-                    source.getSource(),
-                    source.getFlags());
+            MotionEvent forwarded =
+                    MotionEvent.obtain(
+                            source.getDownTime(),
+                            source.getEventTime(),
+                            source.getAction(),
+                            count,
+                            properties,
+                            coords,
+                            source.getMetaState(),
+                            source.getButtonState(),
+                            source.getXPrecision(),
+                            source.getYPrecision(),
+                            source.getDeviceId(),
+                            source.getEdgeFlags(),
+                            source.getSource(),
+                            source.getFlags());
 
             try {
                 setInputEventDisplayId(
@@ -879,8 +1065,7 @@ final class VirtualDisplayController {
                                 forwarded,
                                 0);
 
-                if (accepted == null
-                        || !accepted) {
+                if (accepted == null || !accepted) {
                     log("VD_INPUT_ERROR",
                             "pkg=" + session.packageName
                                     + " displayId=" + displayId
@@ -905,7 +1090,11 @@ final class VirtualDisplayController {
         }
 
         private void injectBack() {
-            if (displayId < 0 || destroyed) return;
+            if (displayId < 0
+                    || destroyed
+                    || !taskMoved) {
+                return;
+            }
 
             focusRemoteTask("back");
 
@@ -949,18 +1138,18 @@ final class VirtualDisplayController {
                 return;
             }
 
-            boolean focused = false;
             Object atm = activityTaskManager();
+            boolean requested = false;
 
             if (atm != null) {
-                focused |= invokeVoidLike(
-                        atm,
-                        "setFocusedRootTask",
-                        session.taskId);
-
-                focused |= invokeVoidLike(
+                requested |= invokeVoidLike(
                         atm,
                         "setFocusedTask",
+                        session.taskId);
+
+                requested |= invokeVoidLike(
+                        atm,
+                        "setFocusedRootTask",
                         session.taskId);
             }
 
@@ -973,7 +1162,7 @@ final class VirtualDisplayController {
                     am.moveTaskToFront(
                             session.taskId,
                             0);
-                    focused = true;
+                    requested = true;
                 }
             } catch (Throwable ignored) {
             }
@@ -983,7 +1172,7 @@ final class VirtualDisplayController {
                             + " taskId=" + session.taskId
                             + " displayId=" + displayId
                             + " reason=" + reason
-                            + " requested=" + focused);
+                            + " requested=" + requested);
         }
 
         private void clampWindowPosition() {
@@ -1012,25 +1201,36 @@ final class VirtualDisplayController {
         }
 
         @Override
-        public void surfaceCreated(
-                SurfaceHolder holder
+        public void onSurfaceTextureAvailable(
+                SurfaceTexture texture,
+                int width,
+                int height
         ) {
-            if (destroyed
-                    || virtualDisplay == null) {
-                return;
-            }
+            if (destroyed || virtualDisplay == null) return;
 
             try {
-                virtualDisplay.setSurface(
-                        holder.getSurface());
+                texture.setDefaultBufferSize(
+                        Math.max(1, contentWidth),
+                        Math.max(1, contentHeight));
 
-                performDisplayResize();
+                if (renderSurface != null) {
+                    try {
+                        renderSurface.release();
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                renderSurface = new Surface(texture);
+                virtualDisplay.setSurface(renderSurface);
+                surfaceReady = true;
 
                 log("VD_SURFACE_READY",
                         "pkg=" + session.packageName
                                 + " taskId=" + session.taskId
                                 + " displayId=" + displayId
-                                + " size=" + contentWidth
+                                + " texture=" + width
+                                + "x" + height
+                                + " buffer=" + contentWidth
                                 + "x" + contentHeight);
 
                 if (!taskMoved) {
@@ -1040,12 +1240,6 @@ final class VirtualDisplayController {
                                     displayId);
 
                     if (!taskMoved) {
-                        log("VD_MOVE_ERROR",
-                                "pkg=" + session.packageName
-                                        + " taskId=" + session.taskId
-                                        + " displayId=" + displayId
-                                        + " reason=surface-ready-move-failed");
-
                         handler.post(() ->
                                 closeSession(
                                         session,
@@ -1055,6 +1249,7 @@ final class VirtualDisplayController {
                     }
 
                     focusRemoteTask("surface-ready");
+                    applyState(session, session.state, "initial");
                 }
             } catch (Throwable t) {
                 log("VD_SURFACE_ERROR",
@@ -1065,21 +1260,21 @@ final class VirtualDisplayController {
         }
 
         @Override
-        public void surfaceChanged(
-                SurfaceHolder holder,
-                int format,
+        public void onSurfaceTextureSizeChanged(
+                SurfaceTexture texture,
                 int width,
                 int height
         ) {
-            if (!destroyed) {
-                scheduleDisplayResize(true);
-            }
+            // Host preview resize only. VirtualDisplay is committed once at the
+            // end of the resize gesture to avoid continuous display transitions.
         }
 
         @Override
-        public void surfaceDestroyed(
-                SurfaceHolder holder
+        public boolean onSurfaceTextureDestroyed(
+                SurfaceTexture texture
         ) {
+            surfaceReady = false;
+
             if (virtualDisplay != null) {
                 try {
                     virtualDisplay.setSurface(null);
@@ -1087,27 +1282,42 @@ final class VirtualDisplayController {
                 }
             }
 
+            if (renderSurface != null) {
+                try {
+                    renderSurface.release();
+                } catch (Throwable ignored) {
+                }
+                renderSurface = null;
+            }
+
             log("VD_SURFACE_LOST",
                     "pkg=" + session.packageName
                             + " taskId=" + session.taskId
                             + " displayId=" + displayId
                             + " hostDestroyed=" + destroyed);
+
+            return true;
+        }
+
+        @Override
+        public void onSurfaceTextureUpdated(
+                SurfaceTexture texture
+        ) {
         }
 
         void destroy(boolean restoreTask) {
             if (destroyed) return;
             destroyed = true;
 
+            removeRestoreControl();
+
             if (restoreTask && taskMoved) {
                 moveTaskToDisplay(
                         session.taskId,
-                        Math.max(
-                                0,
-                                session.originalDisplayId));
+                        Math.max(0, session.originalDisplayId));
             }
 
-            if (windowManager != null
-                    && root != null) {
+            if (windowManager != null && root != null) {
                 try {
                     windowManager.removeViewImmediate(root);
                 } catch (Throwable ignored) {
@@ -1119,7 +1329,17 @@ final class VirtualDisplayController {
                     virtualDisplay.setSurface(null);
                 } catch (Throwable ignored) {
                 }
+            }
 
+            if (renderSurface != null) {
+                try {
+                    renderSurface.release();
+                } catch (Throwable ignored) {
+                }
+                renderSurface = null;
+            }
+
+            if (virtualDisplay != null) {
                 try {
                     virtualDisplay.release();
                 } catch (Throwable ignored) {
@@ -1127,7 +1347,7 @@ final class VirtualDisplayController {
             }
 
             root = null;
-            surfaceView = null;
+            textureView = null;
             virtualDisplay = null;
             displayId = -1;
         }
@@ -1163,10 +1383,7 @@ final class VirtualDisplayController {
                     findCompatibleMethod(
                             atm.getClass(),
                             "moveRootTaskToDisplay",
-                            new Object[]{
-                                    taskId,
-                                    displayId
-                            });
+                            new Object[]{taskId, displayId});
 
             if (move == null) {
                 log("VD_MOVE_ERROR",
@@ -1177,10 +1394,7 @@ final class VirtualDisplayController {
             }
 
             move.setAccessible(true);
-            move.invoke(
-                    atm,
-                    taskId,
-                    displayId);
+            move.invoke(atm, taskId, displayId);
 
             log("VD_TASK_MOVED",
                     "taskId=" + taskId
@@ -1238,8 +1452,7 @@ final class VirtualDisplayController {
     ) {
         try {
             ClassLoader loader =
-                    VirtualDisplayController.class
-                            .getClassLoader();
+                    VirtualDisplayController.class.getClassLoader();
 
             Class<?> serviceManagerClass =
                     Class.forName(
@@ -1248,10 +1461,9 @@ final class VirtualDisplayController {
                             loader);
 
             Method getService =
-                    serviceManagerClass
-                            .getDeclaredMethod(
-                                    "getService",
-                                    String.class);
+                    serviceManagerClass.getDeclaredMethod(
+                            "getService",
+                            String.class);
             getService.setAccessible(true);
 
             Object binder =
@@ -1275,9 +1487,7 @@ final class VirtualDisplayController {
                             IBinder.class);
             asInterface.setAccessible(true);
 
-            return asInterface.invoke(
-                    null,
-                    binder);
+            return asInterface.invoke(null, binder);
         } catch (Throwable t) {
             log("VD_BINDER_ERROR",
                     "service=" + serviceName
@@ -1287,98 +1497,51 @@ final class VirtualDisplayController {
         }
     }
 
-    private static Object activityTask(
-            Object activityRecord
-    ) {
-        Object task =
-                invokeNoArg(
-                        activityRecord,
-                        "getTask");
+    private static Object activityTask(Object activityRecord) {
+        Object task = invokeNoArg(activityRecord, "getTask");
         if (task != null) return task;
 
-        task =
-                fieldValue(
-                        activityRecord,
-                        "task");
+        task = fieldValue(activityRecord, "task");
         if (task != null) return task;
 
-        return fieldValue(
-                activityRecord,
-                "mTask");
+        return fieldValue(activityRecord, "mTask");
     }
 
     private static int taskId(Object task) {
         if (task == null) return -1;
 
-        Object value =
-                invokeNoArg(
-                        task,
-                        "getTaskId");
-
+        Object value = invokeNoArg(task, "getTaskId");
         if (value instanceof Integer) {
             return (Integer) value;
         }
 
-        value =
-                fieldValue(
-                        task,
-                        "mTaskId");
-
-        return value instanceof Integer
-                ? (Integer) value
-                : -1;
+        value = fieldValue(task, "mTaskId");
+        return value instanceof Integer ? (Integer) value : -1;
     }
 
     private static int taskDisplayId(Object task) {
-        Object value =
-                invokeNoArg(
-                        task,
-                        "getDisplayId");
-
+        Object value = invokeNoArg(task, "getDisplayId");
         if (value instanceof Integer) {
             return (Integer) value;
         }
 
-        Object displayArea =
-                invokeNoArg(
-                        task,
-                        "getDisplayArea");
-
-        Object displayId =
-                invokeNoArg(
-                        displayArea,
-                        "getDisplayId");
+        Object displayArea = invokeNoArg(task, "getDisplayArea");
+        Object displayId = invokeNoArg(displayArea, "getDisplayId");
 
         return displayId instanceof Integer
                 ? (Integer) displayId
                 : 0;
     }
 
-    private static Context deriveSystemContext(
-            Object task
-    ) {
-        Object service =
-                fieldValue(
-                        task,
-                        "mAtmService");
-
+    private static Context deriveSystemContext(Object task) {
+        Object service = fieldValue(task, "mAtmService");
         if (service == null) {
-            service =
-                    fieldValue(
-                            task,
-                            "mService");
+            service = fieldValue(task, "mService");
         }
 
-        Object context =
-                fieldValue(
-                        service,
-                        "mUiContext");
-
+        Object context = fieldValue(service, "mUiContext");
         if (!(context instanceof Context)) {
-            context =
-                    fieldValue(
-                            service,
-                            "mContext");
+            context = fieldValue(service, "mContext");
         }
 
         return context instanceof Context
@@ -1386,26 +1549,17 @@ final class VirtualDisplayController {
                 : null;
     }
 
-    private static String activityPackage(
-            Object activityRecord
-    ) {
-        Object value =
-                fieldValue(
-                        activityRecord,
-                        "packageName");
-
+    private static String activityPackage(Object activityRecord) {
+        Object value = fieldValue(activityRecord, "packageName");
         if (value instanceof String) {
             return (String) value;
         }
 
         Object component =
-                fieldValue(
-                        activityRecord,
-                        "mActivityComponent");
+                fieldValue(activityRecord, "mActivityComponent");
 
         if (component instanceof ComponentName) {
-            return ((ComponentName) component)
-                    .getPackageName();
+            return ((ComponentName) component).getPackageName();
         }
 
         return null;
@@ -1427,9 +1581,7 @@ final class VirtualDisplayController {
 
         try {
             method.setAccessible(true);
-            method.invoke(
-                    event,
-                    displayId);
+            method.invoke(event, displayId);
         } catch (Throwable ignored) {
         }
     }
@@ -1451,10 +1603,7 @@ final class VirtualDisplayController {
 
         try {
             method.setAccessible(true);
-            Object result =
-                    method.invoke(
-                            receiver,
-                            args);
+            Object result = method.invoke(receiver, args);
 
             if (result instanceof Boolean) {
                 return (Boolean) result;
@@ -1483,9 +1632,7 @@ final class VirtualDisplayController {
 
         try {
             method.setAccessible(true);
-            method.invoke(
-                    receiver,
-                    args);
+            method.invoke(receiver, args);
             return true;
         } catch (Throwable ignored) {
             return false;
@@ -1522,22 +1669,15 @@ final class VirtualDisplayController {
         if (type == null) return null;
 
         for (Method method : type.getMethods()) {
-            if (methodMatches(
-                    method,
-                    name,
-                    args)) {
+            if (methodMatches(method, name, args)) {
                 return method;
             }
         }
 
         Class<?> current = type;
         while (current != null) {
-            for (Method method :
-                    current.getDeclaredMethods()) {
-                if (methodMatches(
-                        method,
-                        name,
-                        args)) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (methodMatches(method, name, args)) {
                     return method;
                 }
             }
@@ -1556,17 +1696,13 @@ final class VirtualDisplayController {
             return false;
         }
 
-        Class<?>[] parameters =
-                method.getParameterTypes();
-
+        Class<?>[] parameters = method.getParameterTypes();
         if (parameters.length != args.length) {
             return false;
         }
 
         for (int i = 0; i < parameters.length; i++) {
-            if (!compatible(
-                    parameters[i],
-                    args[i])) {
+            if (!compatible(parameters[i], args[i])) {
                 return false;
             }
         }
@@ -1633,8 +1769,7 @@ final class VirtualDisplayController {
 
         while (current != null) {
             try {
-                return current
-                        .getDeclaredField(name);
+                return current.getDeclaredField(name);
             } catch (NoSuchFieldException ignored) {
                 current = current.getSuperclass();
             }
@@ -1649,15 +1784,10 @@ final class VirtualDisplayController {
             int max
     ) {
         if (max < min) return min;
-        return Math.max(
-                min,
-                Math.min(max, value));
+        return Math.max(min, Math.min(max, value));
     }
 
-    private void log(
-            String event,
-            String detail
-    ) {
+    private void log(String event, String detail) {
         if (logger != null) {
             logger.log(event, detail);
         }
@@ -1670,6 +1800,7 @@ final class VirtualDisplayController {
         final int originalDisplayId;
 
         volatile boolean active = true;
+        volatile int state;
         volatile long lastSeenElapsed =
                 SystemClock.elapsedRealtime();
         volatile WindowHost host;
@@ -1678,13 +1809,14 @@ final class VirtualDisplayController {
                 int taskId,
                 String packageName,
                 Object taskObject,
-                int originalDisplayId
+                int originalDisplayId,
+                int state
         ) {
             this.taskId = taskId;
             this.packageName = packageName;
             this.taskObject = taskObject;
-            this.originalDisplayId =
-                    originalDisplayId;
+            this.originalDisplayId = originalDisplayId;
+            this.state = state;
         }
     }
 }
