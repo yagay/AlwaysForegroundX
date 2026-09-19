@@ -710,8 +710,7 @@ public final class GuardModule extends XposedModule {
 
                     String pkg = activityPackage(token);
                     int state = current.stateForPackage(pkg);
-                    if (state != ConfigKeys.STATE_ICON
-                            && state != ConfigKeys.STATE_HIDDEN) {
+                    if (state == ConfigKeys.STATE_RELEASED) {
                         return chain.proceed();
                     }
 
