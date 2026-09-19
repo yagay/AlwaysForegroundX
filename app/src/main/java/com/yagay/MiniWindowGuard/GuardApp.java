@@ -27,6 +27,7 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_KEEP_MINI_RESUMED,
             ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME,
             ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT,
+            ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW,
             ConfigKeys.AOSP_FREEFORM_FALLBACK,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };

@@ -244,6 +244,7 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.SYSTEM_KEEP_MINI_RESUMED);
         keys.add(ConfigKeys.SYSTEM_OPLUS_MULTI_RESUME);
         keys.add(ConfigKeys.SYSTEM_FORCE_ZOOM_SUPPORT);
+        keys.add(ConfigKeys.SYSTEM_AUTO_SMALL_WINDOW);
         keys.add(ConfigKeys.AOSP_FREEFORM_FALLBACK);
         return keys;
     }
