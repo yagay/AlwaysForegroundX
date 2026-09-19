@@ -1,5 +1,22 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.5 — 普通后台播放常驻通知
+
+新增只针对普通 `BACKGROUND_PROTECTED` 状态的通知：
+
+- 仅普通后台显示；OPlus 小窗、FloatHandle、单纯前台锁屏不显示；
+- 进入普通后台且目标 App 仍有活跃音频播放时显示；
+- 通知使用 ongoing 模式，普通滑动不可清除；
+- 点击通知直接返回对应目标 App；
+- 返回目标 App 前台时立即撤销通知；
+- system_server 使用 `AudioManager.AudioPlaybackCallback` 监听真实音频状态；
+- 当目标 App 已无 active playback configuration 时自动撤销通知；
+- 多个后台播放 App 各自显示独立通知；
+- 通知由 MiniWindowGuard 发布，不伪装成目标 App；
+- Android 13+ 首次需要授予通知权限。
+
+Bootstrap API 仍为 4，本版未新增固定 system_server Hook；Bootstrap 4 环境可直接热重载。
+
 ## 5.3.4 — 兼容 Home/Recents 的 userLeaving=false 路径
 
 新诊断确认 OxygenOS 16 普通全屏按 Home/手势退后台存在另一条合法路径：
