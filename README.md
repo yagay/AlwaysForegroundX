@@ -1,289 +1,135 @@
 # MiniWindowGuard / 小窗守护
 
-## 4.6.0 — OPlus 系统小窗
+## 5.0.0 — OPlus FlexibleWindow Hook 重构
 
-4.6.0 默认不再创建 MiniWindowGuard 自己的 VirtualDisplay 小窗。
+MiniWindowGuard 5.0.0 不再实现自己的窗口。
 
-新的默认架构：
+整个项目现在建立在 OxygenOS / ColorOS 原生小窗之上：
 
 ```
-目标 App Task
-      ↓
+选择 App
+  ↓
+Activity 正常启动
+  ↓
+MiniWindowGuard 捕获 RESUMED Task
+  ↓
+Hook OPlus FlexibleWindow 支持判断
+  ↓
 OplusActivityTaskManager.toggleFlexibleWindow(...)
-      ↓
-OxygenOS / ColorOS FlexibleWindow
-      ↓
-系统负责窗口、视频 Surface、拖动、缩放、动画和输入
-
-MiniWindowGuard system_server hooks
-      ↓
-只负责前台保护
+  ↓
+OxygenOS 原生小窗
 ```
 
-### 一加系统小窗
-
-默认开启：
-
-`使用一加系统小窗（推荐）`
-
-目标 Activity 进入 RESUMED 后，MiniWindowGuard 会：
-
-- 获取当前真实 Task / taskId；
-- 动态探测 `android.app.OplusActivityTaskManager`；
-- 调用系统 `toggleFlexibleWindow(IBinder, int, boolean, boolean)`；
-- 不创建 VirtualDisplay；
-- 不创建 TextureView；
-- 不迁移 Task 到副屏；
-- 不自己绘制标题栏；
-- 不自己做视频缩放或触摸映射。
-
-系统小窗的拖动、缩放、最小化、恢复、关闭等操作全部使用 OxygenOS 自己的 UI。
-
-### 前台保护
-
-进入系统小窗后继续使用原 MiniWindowGuard 的 system_server 保护：
-
-- 进程状态保持 TOP；
-- ActivityTaskManager 视为存在 Resumed Activity；
-- 保持 Resumed；
-- 保持 Visible；
-- 阻止最近任务/OEM 清理链路强杀。
-
-显示逻辑和前台保护已经拆开：
-
-- OxygenOS FlexibleWindow 负责显示；
-- MiniWindowGuard 只负责守护。
-
-### 冷启动捕获
-
-保留 4.5.6 的最小冷启动修复。
-
-Activity 在 180ms command poll 之前进入 RESUMED 时，也会同步识别尚未消费的新启动命令，避免冷启动 App 错过 capture。
-
-### VirtualDisplay 兼容模式
-
-旧 VirtualDisplay 引擎没有删除。
-
-关闭：
-
-`使用一加系统小窗（推荐）`
-
-然后点击：
-
-`立即重新加载 System Engine`
-
-即可回到原 VirtualDisplay / TextureView 方案。
-
-VirtualDisplay 的宽度、高度设置只在兼容模式下生效。
-
-### 诊断
-
-新增关键日志：
-
-- `OPLUS_ENGINE_READY`
-- `OPLUS_API_READY`
-- `OPLUS_API_ERROR`
-- `OPLUS_TASK_CAPTURED`
-- `OPLUS_IMMEDIATE_COMMAND`
-- `OPLUS_FLEX_TOGGLE`
-- `OPLUS_FLEX_VERIFY`
-- `OPLUS_FLEX_ALREADY`
-- `OPLUS_FLEX_FAILED`
-- `OPLUS_TASK_RELEASED`
-
-诊断导出还会过滤：
-
-- FlexibleWindowManager
-- FlexibleWindowManagerService
-- FlexibleTaskController
-- FlexibleWindowUtils
-- OplusActivityTaskManager
-
-MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
-
-## 4.3.0
-
-4.3.0 引入 **固定 Bootstrap + 可热重载 Engine**。
-
-目标是解决开发测试阶段最麻烦的问题：以前每次更新 APK 后，system_server 里仍然运行旧模块 ClassLoader，因此必须重启手机。现在只有 Hook 注册层固定驻留，窗口、VirtualDisplay、输入、前台策略和大部分运行逻辑都放进可重新加载的 Engine。
-
-### 第一次升级
-
-从 4.2.x 或更早版本升级到 4.3.0：
-
-1. 安装 4.3.0 APK。
-2. 仍然需要 **最后重启一次手机**。
-3. 重启后，新的 Bootstrap 会进入 system_server。
-4. 设置页会显示：
-   - Bootstrap code
-   - Engine code
-   - 热重载可用
-   - Engine generation
-   - 活动小窗数量
-   - 上一次 reload 结果
-
-完成这一次之后，正常 APK 更新不再需要重启手机。
-
-### 以后更新 APK
-
-Bootstrap 每 2 秒检查：
-
-- 当前安装 APK 的 versionCode
-- 当前运行 Engine 的 versionCode
-- 手动 reload sequence
-- 当前活动小窗数量
-
-默认开启 **自动热重载**。
-
-如果安装新版 APK 时没有活动小窗：
-
-```
-APK 更新
-  ↓
-Bootstrap 检测 versionCode 不一致
-  ↓
-停止旧 Engine
-  ↓
-从当前安装 APK sourceDir 创建新的 PathClassLoader
-  ↓
-加载 HotReloadEngine
-  ↓
-启动新版 VirtualDisplay / 输入 / 前台逻辑
-  ↓
-原子切换 current Engine
-```
-
-整个过程不重启 system_server，也不重启手机。
-
-如果更新时仍有活动小窗，自动 reload 会暂缓，避免突然关闭正在运行的窗口。可以：
-
-- 先关闭当前小窗，Bootstrap 会自动加载新版；
-- 或在设置页点击 **“立即重新加载 System Engine”**，强制 reload。强制 reload 会关闭当前小窗并把对应 Task 恢复到原 display。
-
-### Reload 失败保护
-
-新版 Engine 会先完成：
-
-- APK 路径解析
-- ClassLoader 创建
-- Engine 类实例化
-- Bootstrap API 兼容性检查
-
-确认候选 Engine 可以加载后，才停止旧 Engine。
-
-如果新版启动失败：
-
-- Bootstrap 尝试重新启动旧 Engine；
-- 保留旧 Engine 引用；
-- 写入 `ENGINE_RELOAD_FAILED`；
-- 如果回滚也失败，会记录 `ENGINE_ROLLBACK_FAILED`。
-
-### Bootstrap 与 Engine
-
-Bootstrap 负责：
-
-- LSPosed system_server Hook 注册
-- Hook 回调入口
-- Engine ClassLoader 生命周期
-- 自动/手动热重载
-- Engine 状态上报
-
-Engine 负责：
+### 已删除
 
 - VirtualDisplay
-- TextureView / Surface
-- 输入注入
-- 小窗拖动 / resize
-- 图标 / 隐藏 / 恢复
-- 当前受管 Task
-- 前台策略数据
-- Engine 级运行逻辑
+- TextureView
+- 自定义 Overlay 小窗
+- 自定义标题栏
+- 自定义拖动/缩放
+- 小窗宽度/高度设置
+- Task 迁移到副屏
+- 输入映射
+- 固定 48% 画布
+- NativeBounds / 自建 Freeform
+- `shouldPauseActivity` 强制拦截
+- `makeInvisible` 强制拦截
+- `setVisible(false)` 强制拦截
+- `setVisibleRequested(false)` 强制拦截
+- `TaskFragment.startPausing` 强制拦截
+- `WindowToken` 可见性强制 Hook
 
-Bootstrap Hook 只安装一次，不会因为 reload 重复注册。
+窗口生命周期、Surface、焦点、导航键、动画全部交还 OxygenOS。
 
-### 什么时候仍然需要重启
+## OPlus Hook
 
-普通功能更新原则上不需要重启，例如：
+system_server 会动态 Hook：
 
-- 修复黑屏
-- 修复输入
-- 修改 VirtualDisplay
-- 修改窗口 UI
-- 修改 resize
-- 修改图标 / 隐藏
-- 修改 Engine 内部前台策略
-- 修改诊断
+- `com.android.server.wm.FlexibleWindowUtils`
+- `com.android.server.wm.FlexibleTaskController`
+- `com.android.server.wm.FlexibleWindowManagerService`
+- `com.android.server.wm.OplusZoomWindowConfig`
+- `android.app.OplusActivityTaskManager`
 
-只有以后修改了 **Bootstrap 本身**，例如：
+对当前选择/跟踪的 App：
 
-- 新增以前没有注册过的 system_server Hook 点
-- 改变 Bootstrap / Engine 接口版本
-- 修改 LSPosed 初始化方式
+- 强制通过 `isSupportFlexibleWindow`
+- 绕过 FlexibleWindow 黑名单检查
+- 兼容旧 ZoomWindow 支持检查
+- 监听 OPlus Task appeared / changed / vanished
+- 使用系统 `toggleFlexibleWindow` 切换真实 Task
 
-才可能再次需要重启 system_server / 手机。
+不会全局修改其他 App 的小窗支持。
 
-## 4.2 窗口架构
+## 前台保护
 
-窗口层继续使用 MiniWindowGuard 自己实现的 VirtualDisplay 引擎：
+前台保护现在完全依赖 **一加自己的小窗状态**。
 
-- system_server 创建独立 VirtualDisplay；
-- 使用稳定 `TextureView + SurfaceTexture + Surface`；
-- Surface 就绪后才迁移 Task；
-- 宿主窗口存活期间不 remove/add 根 View；
-- VirtualDisplay 使用 `SUPPORTS_TOUCH / TRUSTED / OWN_FOCUS / STEAL_TOP_FOCUS_DISABLED`；
-- 触摸事件重新构造并带目标 displayId 注入；
-- resize 手势移动阶段只预览，松手时才提交一次 VirtualDisplay resize；
-- 标题栏直接提供返回、缩小成图标、隐藏和关闭。
+只有以下状态才认为 App 需要保护：
 
-## 始终前台
+1. Task 当前 bounds 与 maxBounds 不同；
+2. OPlus TaskInfo 报告 `isInFlexibleEmbedded=true`；
+3. Task 位于一加 `FloatHandleController` 的 FloatingList（贴边/最小化）。
 
-MiniWindowGuard 保留自己的 system_server 前台保护：
+只有这些状态下才会：
 
-- 进程状态保持前台级别；
-- `hasResumedActivity(uid)` 保持为 true；
-- 拦截真实 pause / stop；
-- 保持客户端可见；
-- 阻止普通最近任务 / OEM 清理链路强杀。
+- `getPackageProcessState → TOP`
+- `getUidProcessState → TOP`
+- `isAppForeground → true`
+- `hasResumedActivity → true`
+- 阻止 removed-task / Athena / OPlus 清理链路中的特定 SIGKILL
+
+如果一加把 App 真正恢复成普通全屏：
+
+- 不再伪装 TOP；
+- 不再伪装 Resumed；
+- 不拦 pause；
+- 不拦 invisible；
+- 不拦导航键；
+- 不拦普通全屏生命周期。
+
+因此不会再出现“剧集进入全屏后覆盖屏幕、Home/返回/最近任务失效”的旧问题。
+
+## Activity 切换
+
+同一个被跟踪 Task 内如果启动新的 Activity，例如视频/剧集页面：
+
+- MiniWindowGuard 只观察新的 `RESUMED`；
+- OPlus 支持 Hook 继续把该包视为可使用系统小窗；
+- 120ms 后重新检查并请求系统 FlexibleWindow；
+- 不直接修改 Activity 生命周期或 Task bounds。
+
+## 设置
+
+5.0.0 只保留：
+
+- 启用小窗守护
+- 自动热重载
+- 强制允许所选应用使用一加小窗
+- 小窗进程状态保持 TOP
+- 小窗视为存在 Resumed Activity
+- 阻止一加清理链路强杀小窗
+- 详细诊断
 
 ## 诊断
 
-诊断 ZIP 现在额外记录：
-
-- `bootstrapVersionCode`
-- `loadedEngineVersionCode`
-- `hotReloadAvailable`
-- `engineGeneration`
-- `engineActiveSessions`
-- `engineReloadMessage`
-- `engine_reload_seq`
-
 关键日志：
 
-- `ENGINE_RELOAD_BEGIN`
-- `ENGINE_RELOAD_SUCCESS`
-- `ENGINE_RELOAD_FAILED`
-- `ENGINE_RELOAD_PENDING`
-- `ENGINE_ROLLBACK_FAILED`
-- `VD_TASK_CAPTURED`
-- `VD_WINDOW_CREATED`
-- `VD_SURFACE_READY`
-- `VD_TASK_MOVED`
-- `VD_FOCUS`
-- `VD_INPUT_DOWN`
-- `VD_RESIZE_COMMIT`
-- `VD_MINIMIZED`
-- `VD_HIDDEN`
-- `VD_RESTORE`
+- `OPLUS_ENGINE_READY`
+- `OPLUS_API_READY`
+- `OPLUS_COMMAND_PENDING`
+- `OPLUS_TASK_TRACKED`
+- `OPLUS_ACTIVITY_CHANGED`
+- `OPLUS_FLEX_TOGGLE`
+- `OPLUS_FLEX_VERIFY`
+- `OPLUS_TASK_INFO`
+- `OPLUS_TASK_VANISHED`
+- `OPLUS_SUPPORT_FORCE`
+- `OPLUS_RESTRICTION_BYPASS`
+- `AMS_PACKAGE_STATE`
+- `AMS_UID_STATE`
+- `AMS_FOREGROUND`
+- `ATMS_HAS_RESUMED`
+- `KILL_GUARD_BLOCK`
 
-## 开源架构参考
-
-设计过程中研究过：
-
-- YAMF² / YAMFsquared
-- YAMF
-- FreeformShell
-- Android AOSP DisplayManager / ActivityTaskManager / InputManager
-
-这些项目用于理解公开架构与系统行为。MiniWindowGuard 当前窗口与热重载 Engine 均为本项目重新实现。
-
-本仓库使用 GPLv3。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。
+> 5.0.0 修改了 system_server 的 Bootstrap Hook 注册集合。安装后需要完整重启手机一次。之后只有 Engine 内部变化时仍可继续热重载。
