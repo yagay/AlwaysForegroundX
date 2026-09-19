@@ -199,18 +199,18 @@ public final class MainActivity extends Activity {
                 "ActivityTaskManagerService.hasResumedActivity(uid) 返回 true。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
-        addSwitch(card, "容器任务保持 Resumed",
-                "被 TaskSurface 容器接管后阻止 Activity 因窗口态/图标态/隐藏态被 pause。",
+        addSwitch(card, "窗口态保持 Resumed",
+                "仅窗口可见时阻止 Activity 被 pause；图标/隐藏态恢复系统正常生命周期，避免黑屏。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED);
 
-        addSwitch(card, "容器任务保持 Visible",
-                "system_server 可见性判断对已接管 Activity 保持 true，避免隐藏 Surface 时任务被停止。",
+        addSwitch(card, "窗口态保持 Visible",
+                "仅窗口态强制可见；图标/隐藏态允许 Task 正常退到后台。",
                 ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
     }
 
     private void addWindowCard(LinearLayout parent) {
         LinearLayout card = card(parent, "自有 TaskSurface 小窗",
-                "目标 App 仍是 display 0 上的真实 Task。MiniWindowGuard 直接控制 Task bounds/focus/Surface，不再调用 OPlus 小窗 API。");
+                "目标 App 仍是 display 0 上的真实 Task。窗口态通过 WindowContainerTransaction 正式提交 bounds/windowing mode；不再直接改 Task 内部字段。");
 
         addSwitch(card, "自动接管受保护 App",
                 "受保护 App 进入 RESUMED 后自动交给 TaskSurfaceController。",
@@ -225,9 +225,9 @@ public final class MainActivity extends Activity {
         addForm(forms, ConfigKeys.STATE_WINDOW,
                 "窗口", "真实 Task 缩放到自有窗口区域，触摸仍直接属于目标 App。");
         addForm(forms, ConfigKeys.STATE_ICON,
-                "图标", "Task 保持运行，Surface 透明并移出屏幕，显示 MiniWindowGuard 图标。");
+                "图标", "Task 正式退到后台，显示 MiniWindowGuard 图标；不再透明顶层 Task，因此不会黑屏。");
         addForm(forms, ConfigKeys.STATE_HIDDEN,
-                "完全隐藏", "Task 保持运行但不显示任何图标，可从常驻通知恢复。");
+                "完全隐藏", "Task 正式退到后台且不显示图标，通过常驻通知恢复窗口。");
 
         int currentState = ConfigKeys.sanitizeState(
                 GuardApp.getInt(ConfigKeys.CONTAINER_DEFAULT_STATE));
@@ -305,7 +305,7 @@ public final class MainActivity extends Activity {
 
         card.addView(detailBlock("诊断内容",
                 "• system_server Hook 安装/命中和每次强制结果。\n"
-                        + "• TaskSurface：taskId、bounds、windowing mode、容器状态、Surface alpha。\n"
+                        + "• TaskSurface：taskId、请求/实际 bounds、windowing mode、WCT 后端和容器状态。\n"
                         + "• ActivityRecord pause/visible 决策和关键调用栈。\n"
                         + "• Root 策略命令及返回值。\n"
                         + "• Activity/Task/进程/OOM/Window/Doze/NetPolicy/Power/Audio/MediaSession 快照。\n"
@@ -412,8 +412,8 @@ public final class MainActivity extends Activity {
                         + "• 目标 App 的画面不是截图，也不是 Overlay View，而是真实 Task Surface。"));
 
         card.addView(detailBlock("容器状态",
-                "• 窗口：真实 Task 在屏幕内，直接接收触摸。\n"
-                        + "• 图标/隐藏：Task 保持同样尺寸，移出屏幕并把 Surface alpha 设为 0。\n"
+                "• 窗口：WCT 正式提交 MULTI_WINDOW/FREEFORM + bounds。\n"
+                        + "• 图标/隐藏：Task reorder 到后台，不再把顶层 Surface 透明，因此不会留下黑屏。\n"
                         + "• 释放：恢复接管前的 bounds 和 windowing mode。"));
     }
 

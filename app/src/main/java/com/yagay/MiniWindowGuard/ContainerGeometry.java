@@ -30,17 +30,6 @@ final class ContainerGeometry {
         return new Rect(left, top, left + width, top + height);
     }
 
-    static Rect offscreenBounds(Resources resources, Rect visible) {
-        DisplayMetrics dm = resources.getDisplayMetrics();
-        int gap = Math.max(64, Math.round(32 * Math.max(1f, dm.density)));
-        int left = dm.widthPixels + gap;
-        return new Rect(
-                left,
-                visible.top,
-                left + visible.width(),
-                visible.top + visible.height());
-    }
-
     static int dp(Resources resources, float value) {
         return Math.round(value * resources.getDisplayMetrics().density);
     }
