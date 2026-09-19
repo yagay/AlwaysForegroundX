@@ -245,8 +245,6 @@ final class DiagnosticsManager {
             out.append(key).append('=')
                     .append(GuardApp.getBoolean(key)).append('\n');
         }
-        out.append(ConfigKeys.CONTAINER_DEFAULT_STATE).append('=')
-                .append(GuardApp.getInt(ConfigKeys.CONTAINER_DEFAULT_STATE)).append('\n');
         out.append(ConfigKeys.CONTAINER_WIDTH).append('=')
                 .append(GuardApp.getInt(ConfigKeys.CONTAINER_WIDTH)).append('\n');
         out.append(ConfigKeys.CONTAINER_HEIGHT).append('=')
