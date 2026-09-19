@@ -13,7 +13,7 @@ import java.io.InputStreamReader;
  * The target app never receives root. Only the AlwaysForegroundX companion process executes su.
  */
 public final class RootSmallWindowReceiver extends BroadcastReceiver {
-    static final String ACTION = "com.jieei.alwaysforeground.action.ROOT_SMALL_WINDOW";
+    static final String ACTION = "com.yagay.alwaysforeground.action.ROOT_SMALL_WINDOW";
 
     static final String EXTRA_TOKEN = "token";
     static final String EXTRA_INTENT_URI = "intent_uri";
