@@ -1,5 +1,32 @@
 # MiniWindowGuard / 小窗守护
 
+## 4.5.1
+
+4.5.1 修复 4.5.0 中目标 App 启动过快时 Native Freeform 没有真正接管的问题。
+
+根因是：
+
+- App 页面先写入 `container_command_seq/package/state`；
+- 然后立即 `startActivity()`；
+- Engine 原来每 180ms 才轮询一次命令；
+- 某些 App 在这 180ms 内已经进入 RESUMED；
+- ActivityRecord.setState Hook 检查时 `pendingPackage` 还没更新，因此错过 capture。
+
+现在 `wantsPackage()` 会同步读取尚未被轮询线程消费的新命令：
+
+- command seq 不等于 Engine 已消费 seq；
+- package 与当前 RESUMED Activity 一致；
+- state 不是 RELEASED；
+
+满足后直接 capture，不需要等待轮询。
+
+这个修复同时应用于：
+
+- Native Freeform 主引擎；
+- VirtualDisplay 后备引擎。
+
+这样既消除启动竞态，也不会让已经消费过的旧命令永久生效。
+
 ## 4.5.0
 
 4.5.0 新增 **Native Freeform / Task Bounds 主引擎**。
