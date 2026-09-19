@@ -12,7 +12,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.IBinder;
 import android.provider.Settings;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -95,9 +94,8 @@ public final class ContainerOverlayService extends Service {
     }
 
     private void render() {
-        removeViews();
-
         if (currentState == ConfigKeys.STATE_RELEASED) {
+            removeViews();
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return;
@@ -107,13 +105,20 @@ public final class ContainerOverlayService extends Service {
             return;
         }
 
+        // State changes only replace the target-App presentation. The three-dot
+        // controller and an already-open action menu are independent overlays and
+        // must survive WINDOW / ICON / HIDDEN transitions.
+        removeTaskVisuals();
+
         if (currentState == ConfigKeys.STATE_WINDOW) {
             showTitleBar();
-            showWindowHandle();
         } else if (currentState == ConfigKeys.STATE_ICON) {
             showMiniIcon();
         }
-        // Hidden state intentionally has no overlay. Notification remains the restore path.
+        // STATE_HIDDEN deliberately renders no target-App window/icon.
+
+        // Re-create the handle last so it always stays above the window/title bar.
+        showWindowHandleOnTop();
     }
 
     private void showTitleBar() {
@@ -167,8 +172,16 @@ public final class ContainerOverlayService extends Service {
         }
     }
 
-    private void showWindowHandle() {
-        if (windowManager == null || windowHandle != null) return;
+    private void showWindowHandleOnTop() {
+        if (windowManager == null) return;
+
+        if (windowHandle != null) {
+            try {
+                windowManager.removeViewImmediate(windowHandle);
+            } catch (Throwable ignored) {
+            }
+            windowHandle = null;
+        }
 
         Rect bounds = ContainerGeometry.visibleBounds(
                 getResources(),
@@ -257,14 +270,6 @@ public final class ContainerOverlayService extends Service {
                 "隐藏",
                 ConfigKeys.STATE_HIDDEN));
 
-        panel.setOnTouchListener((v, event) -> {
-            if (event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
-                dismissActionMenu();
-                return true;
-            }
-            return false;
-        });
-
         int menuWidth = ContainerGeometry.dp(getResources(), 176);
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 menuWidth,
@@ -272,7 +277,6 @@ public final class ContainerOverlayService extends Service {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
@@ -309,7 +313,9 @@ public final class ContainerOverlayService extends Service {
                 ContainerGeometry.dp(getResources(), 14),
                 0);
         button.setOnClickListener(v -> {
-            dismissActionMenu();
+            // WINDOW / ICON / HIDDEN only change the target App presentation.
+            // Keep this control menu visible. RELEASED intentionally tears down
+            // the whole container and render() removes every controller view.
             sendState(state);
         });
         return button;
@@ -384,10 +390,8 @@ public final class ContainerOverlayService extends Service {
                 PixelFormat.TRANSLUCENT);
     }
 
-    private void removeViews() {
+    private void removeTaskVisuals() {
         if (windowManager == null) return;
-
-        dismissActionMenu();
 
         if (titleBar != null) {
             try {
@@ -396,6 +400,14 @@ public final class ContainerOverlayService extends Service {
             }
             titleBar = null;
         }
+
+    }
+
+    private void removeViews() {
+        if (windowManager == null) return;
+
+        removeTaskVisuals();
+        dismissActionMenu();
 
         if (windowHandle != null) {
             try {
