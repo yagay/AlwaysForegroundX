@@ -13,7 +13,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -22,12 +21,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -35,31 +31,23 @@ public final class TargetAppsActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ArrayList<AppItem> allApps = new ArrayList<>();
     private final ArrayList<AppItem> filteredApps = new ArrayList<>();
-    private final LinkedHashSet<String> selected = new LinkedHashSet<>();
 
     private AppAdapter adapter;
-    private TextView countView;
     private ProgressBar progress;
     private EditText search;
+    private TextView countView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         try {
-            selected.addAll(GuardApp.getTargetPackages());
             buildUi();
             loadAppsAsync();
         } catch (Throwable t) {
             CrashStore.record(this, "TargetAppsActivity.onCreate", t);
             showFatal(t);
         }
-    }
-
-    @Override
-    protected void onPause() {
-        persistSelection(false);
-        super.onPause();
     }
 
     @Override
@@ -75,14 +63,14 @@ public final class TargetAppsActivity extends Activity {
         root.setBackgroundColor(0xFFF5F6F8);
 
         TextView title = new TextView(this);
-        title.setText("受保护应用");
+        title.setText("打开小窗");
         title.setTextSize(26);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("勾选后立即自动保存，不需要再点保存。"
-                + "这里只是小窗守护自己的保护名单；LSPosed 已固定为 system_server（system），目标 App 不需要加入作用域。");
+        help.setText("选择应用后直接创建独立 VirtualDisplay 小窗。"
+                + "目标 Task 会从主屏 display 0 移到独立显示，不再用 Freeform/分屏伪装。");
         help.setTextSize(13.5f);
         help.setTextColor(0xFF666A73);
         help.setPadding(0, dp(4), 0, dp(10));
@@ -96,48 +84,15 @@ public final class TargetAppsActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-
-        Button all = new Button(this);
-        all.setText("全选");
-        all.setAllCaps(false);
-        all.setOnClickListener(v -> {
-            for (AppItem item : new ArrayList<>(filteredApps)) {
-                selected.add(item.packageName);
-            }
-            persistSelection(true);
-            resortVisibleApps();
-        });
-        actions.addView(all, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        Button none = new Button(this);
-        none.setText("取消当前");
-        none.setAllCaps(false);
-        none.setOnClickListener(v -> {
-            for (AppItem item : new ArrayList<>(filteredApps)) {
-                selected.remove(item.packageName);
-            }
-            persistSelection(true);
-            resortVisibleApps();
-        });
-        actions.addView(none, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        root.addView(actions);
-
         countView = new TextView(this);
         countView.setTextSize(13.5f);
         countView.setTextColor(0xFF3F444C);
-        countView.setPadding(0, dp(4), 0, dp(6));
+        countView.setPadding(0, dp(6), 0, dp(6));
         root.addView(countView);
 
         progress = new ProgressBar(this);
         progress.setIndeterminate(true);
-        root.addView(progress, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(progress);
 
         ListView list = new ListView(this);
         list.setDividerHeight(1);
@@ -148,14 +103,11 @@ public final class TargetAppsActivity extends Activity {
                 0,
                 1f));
 
-        Button save = new Button(this);
-        save.setText("完成（勾选已自动保存）");
-        save.setAllCaps(false);
-        save.setOnClickListener(v -> {
-            persistSelection(true);
-            finish();
-        });
-        root.addView(save);
+        Button close = new Button(this);
+        close.setText("返回");
+        close.setAllCaps(false);
+        close.setOnClickListener(v -> finish());
+        root.addView(close);
 
         setContentView(root);
 
@@ -170,12 +122,11 @@ public final class TargetAppsActivity extends Activity {
 
             @Override public void afterTextChanged(Editable s) {}
         });
-
-        refreshCount();
     }
 
     private void loadAppsAsync() {
         progress.setVisibility(View.VISIBLE);
+
         executor.execute(() -> {
             ArrayList<AppItem> loaded = new ArrayList<>();
             Throwable failure = null;
@@ -196,35 +147,28 @@ public final class TargetAppsActivity extends Activity {
                     if (info == null || info.packageName == null) continue;
                     if (getPackageName().equals(info.packageName)) continue;
 
+                    Intent launch = pm.getLaunchIntentForPackage(info.packageName);
+                    if (launch == null) continue;
+
                     String label;
                     try {
-                        CharSequence labelCs = info.loadLabel(pm);
-                        label = labelCs == null
-                                ? info.packageName
-                                : labelCs.toString().trim();
+                        CharSequence cs = info.loadLabel(pm);
+                        label = cs == null ? info.packageName : cs.toString().trim();
                         if (label.isEmpty()) label = info.packageName;
                     } catch (Throwable ignored) {
                         label = info.packageName;
                     }
 
-                    boolean system = (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+                    boolean system =
+                            (info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
                     loaded.add(new AppItem(label, info.packageName, system));
                 }
 
-                for (String pkg : selected) {
-                    boolean present = false;
-                    for (AppItem item : loaded) {
-                        if (item.packageName.equals(pkg)) {
-                            present = true;
-                            break;
-                        }
-                    }
-                    if (!present) loaded.add(new AppItem(pkg, pkg, false));
-                }
-
                 loaded.sort(Comparator
-                        .comparing((AppItem a) -> a.label, String.CASE_INSENSITIVE_ORDER)
-                        .thenComparing(a -> a.packageName));
+                        .comparing(
+                                (AppItem item) -> item.label,
+                                String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing(item -> item.packageName));
             } catch (Throwable t) {
                 failure = t;
             }
@@ -236,10 +180,14 @@ public final class TargetAppsActivity extends Activity {
                 progress.setVisibility(View.GONE);
 
                 if (finalFailure != null) {
-                    CrashStore.record(this, "TargetAppsActivity.loadApps", finalFailure);
+                    CrashStore.record(
+                            this,
+                            "TargetAppsActivity.loadApps",
+                            finalFailure);
                     Toast.makeText(
                             this,
-                            "读取应用列表失败：" + finalFailure.getClass().getSimpleName(),
+                            "读取应用列表失败："
+                                    + finalFailure.getClass().getSimpleName(),
                             Toast.LENGTH_LONG).show();
                 }
 
@@ -256,135 +204,77 @@ public final class TargetAppsActivity extends Activity {
                 : raw.trim().toLowerCase(Locale.ROOT);
 
         filteredApps.clear();
+
         if (query.isEmpty()) {
             filteredApps.addAll(allApps);
         } else {
             for (AppItem item : allApps) {
                 if (item.label.toLowerCase(Locale.ROOT).contains(query)
-                        || item.packageName.toLowerCase(Locale.ROOT).contains(query)) {
+                        || item.packageName
+                                .toLowerCase(Locale.ROOT)
+                                .contains(query)) {
                     filteredApps.add(item);
                 }
             }
         }
 
-        filteredApps.sort(appComparator());
-
         if (adapter != null) adapter.notifyDataSetChanged();
-        refreshCount();
-    }
-
-    private void resortVisibleApps() {
-        String query = search == null ? "" : search.getText().toString();
-        applyFilter(query);
-    }
-
-    private Comparator<AppItem> appComparator() {
-        return Comparator
-                .comparing((AppItem item) ->
-                        selected.contains(item.packageName) ? 0 : 1)
-                .thenComparing(
-                        item -> item.label,
-                        String.CASE_INSENSITIVE_ORDER)
-                .thenComparing(item -> item.packageName);
-    }
-
-    private void refreshCount() {
-        if (countView == null) return;
-        countView.setText("已选 " + selected.size()
-                + " 个 · 当前显示 " + filteredApps.size()
-                + " 个");
-    }
-
-    private void persistSelection(boolean applyRoot) {
-        Set<String> before = new LinkedHashSet<>(GuardApp.getTargetPackages());
-        Set<String> after = new LinkedHashSet<>(selected);
-
-        if (before.equals(after)) return;
-
-        GuardApp.setTargetPackages(after);
-
-        if (applyRoot) {
-            executor.execute(() -> {
-                try {
-                    RootPolicyManager.reconcile(this, before, after);
-                } catch (Throwable t) {
-                    CrashStore.record(
-                            this,
-                            "TargetAppsActivity.persistSelection",
-                            t);
-                }
-            });
+        if (countView != null) {
+            countView.setText("当前显示 " + filteredApps.size() + " 个应用");
         }
     }
 
-    private void launchContainer(AppItem item, Button button) {
-        if (!selected.contains(item.packageName)) {
-            selected.add(item.packageName);
-            persistSelection(true);
-            resortVisibleApps();
-        }
-
+    private void openInWindow(AppItem item, Button button) {
         if (!GuardApp.isSystemEngineActive()) {
-            String message = !GuardApp.hasSystemScope()
-                    ? "LSPosed 实际作用域不包含 system，请检查模块作用域。当前："
-                            + GuardApp.getFrameworkScope()
-                    : "作用域已有 system，但本次开机没有检测到有效的 system_server 引擎心跳。"
-                            + "请检查 LSPosed 模块是否启用，并重启手机。";
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            Toast.makeText(
+                    this,
+                    "System 引擎未激活，请确认 LSPosed 作用域为 system 并重启手机。",
+                    Toast.LENGTH_LONG).show();
             return;
         }
 
         if (GuardApp.isEngineUpdatePending()) {
             Toast.makeText(
                     this,
-                    "system_server 正在运行旧版引擎 code "
+                    "system_server 仍在运行旧版引擎 code "
                             + GuardApp.getLoadedEngineVersionCode()
-                            + "；本次仍可使用，重启手机后加载当前版本。",
+                            + "，请重启手机后再测试新版 VirtualDisplay。",
                     Toast.LENGTH_LONG).show();
         }
 
         button.setEnabled(false);
 
-        executor.execute(() -> {
-            Throwable failure = null;
+        try {
+            GuardApp.sendContainerCommand(
+                    item.packageName,
+                    ConfigKeys.STATE_WINDOW);
 
-            try {
-                RootPolicyManager.apply(this, item.packageName);
-
-                Intent launch = getPackageManager()
-                        .getLaunchIntentForPackage(item.packageName);
-                if (launch == null) {
-                    throw new IllegalStateException("No launch intent");
-                }
-
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(launch);
-            } catch (Throwable t) {
-                failure = t;
-                CrashStore.record(
-                        this,
-                        "TargetAppsActivity.launchContainer:" + item.packageName,
-                        t);
+            Intent launch = getPackageManager()
+                    .getLaunchIntentForPackage(item.packageName);
+            if (launch == null) {
+                throw new IllegalStateException("No launch intent");
             }
 
-            Throwable finalFailure = failure;
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(launch);
 
-                button.setEnabled(true);
-                if (finalFailure != null) {
-                    Toast.makeText(
-                            this,
-                            "容器启动失败：" + finalFailure.getClass().getSimpleName(),
-                            Toast.LENGTH_LONG).show();
-                } else {
-                    Toast.makeText(
-                            this,
-                            "已启动，system_server 将接管真实 Task",
-                            Toast.LENGTH_SHORT).show();
-                }
-            });
-        });
+            Toast.makeText(
+                    this,
+                    "正在移动到独立 VirtualDisplay…",
+                    Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            CrashStore.record(
+                    this,
+                    "TargetAppsActivity.openInWindow:"
+                            + item.packageName,
+                    t);
+            Toast.makeText(
+                    this,
+                    "启动失败：" + t.getClass().getSimpleName(),
+                    Toast.LENGTH_LONG).show();
+        } finally {
+            button.setEnabled(true);
+        }
     }
 
     private void showFatal(Throwable t) {
@@ -393,15 +283,16 @@ public final class TargetAppsActivity extends Activity {
         root.setPadding(dp(18), dp(18), dp(18), dp(18));
 
         TextView title = new TextView(this);
-        title.setText("受保护应用页面启动失败");
+        title.setText("应用列表启动失败");
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         root.addView(title);
 
         TextView detail = new TextView(this);
-        detail.setText(t.getClass().getName() + "\n"
+        detail.setText(t.getClass().getName()
+                + "\n"
                 + String.valueOf(t.getMessage())
-                + "\n\n错误已写入诊断崩溃日志。");
+                + "\n\n错误已写入诊断日志。");
         detail.setTextSize(14);
         detail.setPadding(0, dp(10), 0, dp(10));
         root.addView(detail);
@@ -415,7 +306,8 @@ public final class TargetAppsActivity extends Activity {
     }
 
     private int dp(float value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return Math.round(
+                value * getResources().getDisplayMetrics().density);
     }
 
     private final class AppAdapter extends BaseAdapter {
@@ -435,16 +327,16 @@ public final class TargetAppsActivity extends Activity {
         }
 
         @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
+        public View getView(
+                int position,
+                View convertView,
+                ViewGroup parent
+        ) {
             RowHolder holder;
-            if (convertView instanceof LinearLayout) {
-                Object tag = convertView.getTag();
-                if (tag instanceof RowHolder) {
-                    holder = (RowHolder) tag;
-                } else {
-                    holder = createRow();
-                    convertView = holder.root;
-                }
+
+            if (convertView instanceof LinearLayout
+                    && convertView.getTag() instanceof RowHolder) {
+                holder = (RowHolder) convertView.getTag();
             } else {
                 holder = createRow();
                 convertView = holder.root;
@@ -452,23 +344,11 @@ public final class TargetAppsActivity extends Activity {
 
             AppItem item = filteredApps.get(position);
             holder.title.setText(item.label);
-            holder.subtitle.setText(item.packageName
-                    + (item.system ? " · 系统应用" : ""));
-            holder.check.setOnCheckedChangeListener(null);
-            holder.check.setChecked(selected.contains(item.packageName));
-            holder.check.setOnCheckedChangeListener((buttonView, isChecked) -> {
-                if (isChecked) selected.add(item.packageName);
-                else selected.remove(item.packageName);
-
-                persistSelection(true);
-
-                // Reorder after the checkbox callback completes so ListView does
-                // not recycle the currently-bound row midway through the event.
-                buttonView.post(TargetAppsActivity.this::resortVisibleApps);
-            });
-
-            holder.launch.setOnClickListener(
-                    v -> launchContainer(item, holder.launch));
+            holder.subtitle.setText(
+                    item.packageName
+                            + (item.system ? " · 系统应用" : ""));
+            holder.open.setOnClickListener(
+                    v -> openInWindow(item, holder.open));
 
             return convertView;
         }
@@ -479,31 +359,36 @@ public final class TargetAppsActivity extends Activity {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(0, dp(6), 0, dp(6));
 
-            CheckBox check = new CheckBox(TargetAppsActivity.this);
-            row.addView(check);
-
-            LinearLayout texts = new LinearLayout(TargetAppsActivity.this);
+            LinearLayout texts =
+                    new LinearLayout(TargetAppsActivity.this);
             texts.setOrientation(LinearLayout.VERTICAL);
 
-            TextView title = new TextView(TargetAppsActivity.this);
+            TextView title =
+                    new TextView(TargetAppsActivity.this);
             title.setTextSize(15);
             title.setTextColor(0xFF202124);
             texts.addView(title);
 
-            TextView subtitle = new TextView(TargetAppsActivity.this);
+            TextView subtitle =
+                    new TextView(TargetAppsActivity.this);
             subtitle.setTextSize(12);
             subtitle.setTextColor(0xFF70757A);
             texts.addView(subtitle);
 
-            row.addView(texts, new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(
+                    texts,
+                    new LinearLayout.LayoutParams(
+                            0,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            1f));
 
-            Button launch = new Button(TargetAppsActivity.this);
-            launch.setText("容器");
-            launch.setAllCaps(false);
-            row.addView(launch);
+            Button open = new Button(TargetAppsActivity.this);
+            open.setText("打开小窗");
+            open.setAllCaps(false);
+            row.addView(open);
 
-            RowHolder holder = new RowHolder(row, check, title, subtitle, launch);
+            RowHolder holder =
+                    new RowHolder(row, title, subtitle, open);
             row.setTag(holder);
             return holder;
         }
@@ -511,23 +396,20 @@ public final class TargetAppsActivity extends Activity {
 
     private static final class RowHolder {
         final LinearLayout root;
-        final CheckBox check;
         final TextView title;
         final TextView subtitle;
-        final Button launch;
+        final Button open;
 
         RowHolder(
                 LinearLayout root,
-                CheckBox check,
                 TextView title,
                 TextView subtitle,
-                Button launch
+                Button open
         ) {
             this.root = root;
-            this.check = check;
             this.title = title;
             this.subtitle = subtitle;
-            this.launch = launch;
+            this.open = open;
         }
     }
 
