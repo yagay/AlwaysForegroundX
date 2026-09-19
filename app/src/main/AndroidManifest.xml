@@ -2,10 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="com.yagay.MiniWindowGuard.GuardApp"
@@ -21,24 +17,6 @@
             android:directBootAware="true"
             android:exported="true"
             android:grantUriPermissions="false" />
-
-        <service
-            android:name="com.yagay.MiniWindowGuard.ContainerOverlayService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Persistent controls for user-managed TaskSurface mini-window containers" />
-        </service>
-
-        <receiver
-            android:name="com.yagay.MiniWindowGuard.SystemEventReceiver"
-            android:exported="true"
-            android:permission="android.permission.MANAGE_ACTIVITY_TASKS">
-            <intent-filter>
-                <action android:name="com.yagay.MiniWindowGuard.action.TASK_CAPTURED" />
-            </intent-filter>
-        </receiver>
 
         <activity
             android:name="com.yagay.MiniWindowGuard.TargetAppsActivity"
