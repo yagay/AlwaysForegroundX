@@ -97,6 +97,46 @@ public final class GuardApp extends Application {
         return service != null;
     }
 
+    static long getExpectedVersionCode() {
+        GuardApp app = instance;
+        if (app == null) return -1L;
+        try {
+            return app.getPackageManager()
+                    .getPackageInfo(app.getPackageName(), 0)
+                    .getLongVersionCode();
+        } catch (Throwable ignored) {
+            return -1L;
+        }
+    }
+
+    static long getLoadedEngineVersionCode() {
+        XposedService current = service;
+        if (current == null) return -1L;
+        try {
+            return current.getRemotePreferences(ConfigKeys.REMOTE_GROUP)
+                    .getLong(ConfigKeys.ENGINE_VERSION_CODE, -1L);
+        } catch (Throwable ignored) {
+            return -1L;
+        }
+    }
+
+    static long getEngineStartedAt() {
+        XposedService current = service;
+        if (current == null) return 0L;
+        try {
+            return current.getRemotePreferences(ConfigKeys.REMOTE_GROUP)
+                    .getLong(ConfigKeys.ENGINE_STARTED_AT, 0L);
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+    }
+
+    static boolean isSystemEngineCurrent() {
+        long expected = getExpectedVersionCode();
+        long loaded = getLoadedEngineVersionCode();
+        return expected > 0 && loaded == expected;
+    }
+
     static String getFrameworkName() {
         return frameworkName.isEmpty() ? "未连接" : frameworkName;
     }
