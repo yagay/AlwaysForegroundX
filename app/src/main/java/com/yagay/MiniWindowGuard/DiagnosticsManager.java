@@ -299,6 +299,7 @@ final class DiagnosticsManager {
         keys.add(ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
         keys.add(ConfigKeys.AUTO_CONTAINER);
+        keys.add(ConfigKeys.NATIVE_FREEFORM_ENGINE);
         keys.add(ConfigKeys.FIXED_INTERNAL_DISPLAY);
         return keys;
     }
@@ -317,6 +318,11 @@ final class DiagnosticsManager {
                 "CONTAINER",
                 "VirtualDisplay",
                 "VD_",
+                "NATIVE_",
+                "NATIVE_FREEFORM_APPLIED",
+                "NATIVE_FREEFORM_FAILED",
+                "NATIVE_FALLBACK_TO_VD",
+                "NATIVE_FOCUS",
                 "VD_FOCUS",
                 "VD_INPUT_DOWN",
                 "VD_SURFACE_READY",
