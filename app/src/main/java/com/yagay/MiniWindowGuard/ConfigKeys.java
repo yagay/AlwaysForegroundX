@@ -6,6 +6,7 @@ final class ConfigKeys {
 
     static final String MASTER_ENABLED = "master_enabled";
     static final String ENGINE_AUTO_RELOAD = "engine_auto_reload";
+    static final String ENGINE_RELOAD_SEQ = "engine_reload_seq";
 
     static final String OPLUS_FORCE_SUPPORT =
             "oplus_force_support";
