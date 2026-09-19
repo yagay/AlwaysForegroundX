@@ -264,7 +264,7 @@ final class DiagnosticsManager {
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
-        out.append("31-logcat-filtered.txt: VirtualDisplay/foreground/lifecycle/audio focused view\n");
+        out.append("31-logcat-filtered.txt: VirtualDisplay/surface/input/focus/lifecycle/audio focused view\n");
         out.append("11-24: system state snapshots + LSPosed file/log capture\n");
         out.append("targets/: package/appops/standby/meminfo for the last window package\n");
 
@@ -294,11 +294,18 @@ final class DiagnosticsManager {
                 "CONTAINER",
                 "VirtualDisplay",
                 "VD_",
+                "VD_FOCUS",
+                "VD_INPUT_DOWN",
+                "VD_SURFACE_READY",
+                "VD_SURFACE_LOST",
                 "DisplayManager",
                 "DisplayDevice",
                 "moveRootTaskToDisplay",
                 "InputDispatcher",
                 "InputManager",
+                "OWN_FOCUS",
+                "FLAG_OWN_FOCUS",
+                "NOT_FOCUSABLE",
                 "TaskSurface",
                 "SurfaceControl",
                 "OplusHans",
