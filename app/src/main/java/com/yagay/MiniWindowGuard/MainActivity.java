@@ -140,7 +140,7 @@ public final class MainActivity extends Activity {
 
     private void addTargetCard(LinearLayout parent) {
         LinearLayout card = card(parent, "受保护应用",
-                "勾选后立即自动保存。只有首页显示“System 引擎：已加载当前版本”时，TaskSurface 容器才会生效。");
+                "勾选后立即自动保存。System 引擎只要显示“已激活”即可使用；若显示旧版本，重启手机后会加载当前模块版本。");
 
         targetCount = statusLine("");
         card.addView(targetCount);
@@ -446,22 +446,33 @@ public final class MainActivity extends Activity {
             long loaded = GuardApp.getLoadedEngineVersionCode();
             boolean connected = GuardApp.isXposedServiceConnected();
             boolean hasSystem = GuardApp.hasSystemScope();
+            boolean active = GuardApp.isSystemEngineActive();
             boolean current = GuardApp.isSystemEngineCurrent();
 
             if (!connected) {
                 engineStatus.setText("System 引擎：LSPosed 服务未连接");
+                engineStatus.setTextColor(0xFFB3261E);
             } else if (!hasSystem) {
                 engineStatus.setText("System 引擎：作用域缺少 system · 实际="
                         + GuardApp.getFrameworkScope());
+                engineStatus.setTextColor(0xFFB3261E);
             } else if (current) {
-                engineStatus.setText("System 引擎：已激活 · code " + loaded
+                engineStatus.setText("System 引擎：已激活当前版本 · code " + loaded
                         + " · pid " + GuardApp.getEnginePid()
                         + " · hooks " + GuardApp.getEngineHookCount());
+                engineStatus.setTextColor(0xFF16794A);
+            } else if (active) {
+                engineStatus.setText("System 引擎：已激活旧版本 · system=" + loaded
+                        + " / App=" + expected
+                        + " · pid " + GuardApp.getEnginePid()
+                        + " · hooks " + GuardApp.getEngineHookCount()
+                        + " · 重启手机加载新版");
+                engineStatus.setTextColor(0xFF9A6700);
             } else {
-                engineStatus.setText("System 引擎：scope 已包含 system，但本次开机未收到心跳"
-                        + " · App=" + expected + " / heartbeat=" + loaded);
+                engineStatus.setText("System 引擎：未检测到本次开机的有效心跳"
+                        + " · scope=" + GuardApp.getFrameworkScope());
+                engineStatus.setTextColor(0xFFB3261E);
             }
-            engineStatus.setTextColor(current ? 0xFF16794A : 0xFFB3261E);
         }
 
         if (overlayStatus != null) {
