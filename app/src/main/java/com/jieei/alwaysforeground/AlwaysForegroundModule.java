@@ -356,7 +356,22 @@ public final class AlwaysForegroundModule extends XposedModule {
                     return result;
                 }
 
-                return handleLifecyclePause(chain, sink, true);
+                Object player = chain.getThisObject();
+                int playerId = player == null ? 0 : System.identityHashCode(player);
+                boolean lifecycle = TargetConfig.getMode() >= ModeConfig.MODE_STRONG
+                        && isLifecycleTriggeredPause();
+                boolean wasPlaying = playerId != 0 && knownPlayingPlayers.contains(playerId);
+                if (!wasPlaying) {
+                    Boolean queried = queryPlaying(player);
+                    wasPlaying = Boolean.TRUE.equals(queried);
+                }
+
+                Object result = chain.proceed();
+                if (playerId != 0) knownPlayingPlayers.remove(playerId);
+                if (lifecycle && wasPlaying && player != null) {
+                    queuePendingResume(player, sink, true);
+                }
+                return result;
             });
             logInstalled("continuity endpoint " + sink);
         } catch (Throwable t) {
@@ -374,38 +389,29 @@ public final class AlwaysForegroundModule extends XposedModule {
                 if (TargetConfig.isDiagnosticsActiveFor(activePackage)) {
                     recordPlaybackEndpoint(chain.getThisObject(), sink, chain.getArgs());
                 }
-                return handleLifecyclePause(chain, sink, false);
+
+                Object player = chain.getThisObject();
+                int playerId = player == null ? 0 : System.identityHashCode(player);
+                boolean lifecycle = TargetConfig.getMode() >= ModeConfig.MODE_STRONG
+                        && isLifecycleTriggeredPause();
+                boolean wasPlaying = playerId != 0 && knownPlayingPlayers.contains(playerId);
+                if (!wasPlaying) {
+                    Boolean queried = queryPlaying(player);
+                    wasPlaying = Boolean.TRUE.equals(queried);
+                }
+
+                Object result = chain.proceed();
+                if (playerId != 0) knownPlayingPlayers.remove(playerId);
+                if (lifecycle && wasPlaying && player != null) {
+                    queuePendingResume(player, sink, false);
+                }
+                return result;
             });
             logInstalled("continuity endpoint " + sink);
         } catch (Throwable t) {
             endpointHooks.remove(signature);
             logSkipped("continuity endpoint " + sink, t);
         }
-    }
-
-    private Object handleLifecyclePause(
-            io.github.libxposed.api.XposedInterface.BeforeHookCallback chain,
-            String sink,
-            boolean setPlayWhenReady
-    ) throws Throwable {
-        Object player = chain.getThisObject();
-        int playerId = player == null ? 0 : System.identityHashCode(player);
-
-        boolean lifecycle = TargetConfig.getMode() >= ModeConfig.MODE_STRONG
-                && isLifecycleTriggeredPause();
-        boolean wasPlaying = playerId != 0 && knownPlayingPlayers.contains(playerId);
-        if (!wasPlaying) {
-            Boolean queried = queryPlaying(player);
-            wasPlaying = Boolean.TRUE.equals(queried);
-        }
-
-        Object result = chain.proceed();
-        if (playerId != 0) knownPlayingPlayers.remove(playerId);
-
-        if (lifecycle && wasPlaying && player != null) {
-            queuePendingResume(player, sink, setPlayWhenReady);
-        }
-        return result;
     }
 
     private void installStartEndpoint(Method method, String sink, boolean unused) {
