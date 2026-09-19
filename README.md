@@ -1,135 +1,204 @@
 # MiniWindowGuard / 小窗守护
 
-## 5.0.0 — OPlus FlexibleWindow Hook 重构
+## 5.1.0 — OPlus 小窗始终前台
 
-MiniWindowGuard 5.0.0 不再实现自己的窗口。
+5.1.0 不再负责启动 App，也不再主动调用 `toggleFlexibleWindow`。
 
-整个项目现在建立在 OxygenOS / ColorOS 原生小窗之上：
+所有进入/退出小窗、贴边、恢复、关闭都完全使用 OxygenOS / ColorOS 自己的方式。
+
+MiniWindowGuard 现在只做：
+
+1. 管理“始终前台应用”名单；
+2. 管理“强制允许一加小窗”名单；
+3. 被动监听 OPlus FlexibleWindow 状态；
+4. 只对白名单中的真实一加小窗做前台/后台播放保护。
+
+---
+
+## 启动方式
+
+目标 App 的启动完全由系统决定：
+
+- 桌面
+- 最近任务
+- 侧边栏
+- 通知
+- 一加系统小窗入口
+- 其他正常系统入口
+
+MiniWindowGuard 不再：
+
+- 启动目标 App；
+- 创建 VirtualDisplay；
+- 创建 Overlay；
+- 主动切换 FlexibleWindow；
+- 改 Task bounds；
+- 自己管理 Surface/输入。
+
+---
+
+## 始终前台应用
+
+设置页新增：
+
+`始终前台应用`
+
+支持多选。
+
+只有同时满足：
 
 ```
-选择 App
-  ↓
-Activity 正常启动
-  ↓
-MiniWindowGuard 捕获 RESUMED Task
-  ↓
-Hook OPlus FlexibleWindow 支持判断
-  ↓
-OplusActivityTaskManager.toggleFlexibleWindow(...)
-  ↓
-OxygenOS 原生小窗
+包名 ∈ 始终前台名单
+AND
+Task 当前真实属于 OPlus 小窗
 ```
 
-### 已删除
+才启用保护。
 
-- VirtualDisplay
-- TextureView
-- 自定义 Overlay 小窗
-- 自定义标题栏
-- 自定义拖动/缩放
-- 小窗宽度/高度设置
-- Task 迁移到副屏
-- 输入映射
-- 固定 48% 画布
-- NativeBounds / 自建 Freeform
-- `shouldPauseActivity` 强制拦截
-- `makeInvisible` 强制拦截
-- `setVisible(false)` 强制拦截
-- `setVisibleRequested(false)` 强制拦截
-- `TaskFragment.startPausing` 强制拦截
-- `WindowToken` 可见性强制 Hook
+普通全屏状态完全不干预。
 
-窗口生命周期、Surface、焦点、导航键、动画全部交还 OxygenOS。
+### 正常一加小窗
 
-## OPlus Hook
-
-system_server 会动态 Hook：
-
-- `com.android.server.wm.FlexibleWindowUtils`
-- `com.android.server.wm.FlexibleTaskController`
-- `com.android.server.wm.FlexibleWindowManagerService`
-- `com.android.server.wm.OplusZoomWindowConfig`
-- `android.app.OplusActivityTaskManager`
-
-对当前选择/跟踪的 App：
-
-- 强制通过 `isSupportFlexibleWindow`
-- 绕过 FlexibleWindow 黑名单检查
-- 兼容旧 ZoomWindow 支持检查
-- 监听 OPlus Task appeared / changed / vanished
-- 使用系统 `toggleFlexibleWindow` 切换真实 Task
-
-不会全局修改其他 App 的小窗支持。
-
-## 前台保护
-
-前台保护现在完全依赖 **一加自己的小窗状态**。
-
-只有以下状态才认为 App 需要保护：
-
-1. Task 当前 bounds 与 maxBounds 不同；
-2. OPlus TaskInfo 报告 `isInFlexibleEmbedded=true`；
-3. Task 位于一加 `FloatHandleController` 的 FloatingList（贴边/最小化）。
-
-只有这些状态下才会：
+真实 FlexibleWindow 时：
 
 - `getPackageProcessState → TOP`
 - `getUidProcessState → TOP`
 - `isAppForeground → true`
 - `hasResumedActivity → true`
-- 阻止 removed-task / Athena / OPlus 清理链路中的特定 SIGKILL
+- 防 removed-task / Athena / OPlus 清理链路误杀
 
-如果一加把 App 真正恢复成普通全屏：
+---
 
-- 不再伪装 TOP；
-- 不再伪装 Resumed；
-- 不拦 pause；
-- 不拦 invisible；
-- 不拦导航键；
-- 不拦普通全屏生命周期。
+## 贴边 / 最小化继续播放
 
-因此不会再出现“剧集进入全屏后覆盖屏幕、Home/返回/最近任务失效”的旧问题。
+OPlus 将小窗吸附到屏幕边缘时：
 
-## Activity 切换
+```
+FlexibleTaskController
+→ FloatHandleController.addFloatHandle
+→ TaskExtImpl.moveTaskToBackForPanorama
+```
 
-同一个被跟踪 Task 内如果启动新的 Activity，例如视频/剧集页面：
+5.1.0 允许 OxygenOS 正常完成：
 
-- MiniWindowGuard 只观察新的 `RESUMED`；
-- OPlus 支持 Hook 继续把该包视为可使用系统小窗；
-- 120ms 后重新检查并请求系统 FlexibleWindow；
-- 不直接修改 Activity 生命周期或 Task bounds。
+- 小窗动画；
+- FloatHandle/贴边图标；
+- Surface 隐藏；
+- OPlus 自己的窗口状态转换。
 
-## 设置
+但对于“始终前台”名单：
 
-5.0.0 只保留：
+- 识别 Task 已进入 `FloatHandleController` FloatingList；
+- 阻止最终的 `moveTaskToBackForPanorama`；
+- 将焦点转移给小窗下面的正常窗口；
+- 保持隐藏小窗 Surface 不重新占屏；
+- App 继续保持运行/播放。
 
-- 启用小窗守护
-- 自动热重载
-- 强制允许所选应用使用一加小窗
-- 小窗进程状态保持 TOP
-- 小窗视为存在 Resumed Activity
-- 阻止一加清理链路强杀小窗
-- 详细诊断
+不会重新使用旧版全局 `pause/invisible` 拦截。
 
-## 诊断
+---
 
-关键日志：
+## 锁屏继续播放
 
-- `OPLUS_ENGINE_READY`
-- `OPLUS_API_READY`
-- `OPLUS_COMMAND_PENDING`
+如果白名单 App 在按电源键前确实是 OPlus 小窗/贴边小窗：
+
+`FlexibleTaskController.notifyKeyguardStateChanged(...)`
+
+会把该 Task 标记为锁屏保活。
+
+锁屏期间只对这个 Task/UID 精准处理：
+
+- `TaskFragment.sleepIfPossible(...)`
+  - 阻止该 OPlus 小窗因为 display sleep 进入真正 pause/stop；
+- `HansCGroup.hansFreezeLocked(...)`
+  - 阻止 ColorOS/OxygenOS Hans freezer 冻结；
+- `CachedAppOptimizer.freezeAppAsyncInternalLSP(...)`
+  - 阻止 AOSP freezer；
+- `ActivityManagerService.doStopUidLocked(...)`
+  - 阻止锁屏 force-idle 停止该 UID。
+
+解锁后有短暂 grace period，然后恢复完全由系统状态判断。
+
+普通全屏 App 即使在名单里，也不会命中锁屏保活。
+
+---
+
+## 强制允许一加小窗
+
+设置页另有：
+
+`强制允许一加小窗应用`
+
+这是独立名单。
+
+仅对勾选 App 修改：
+
+- `FlexibleWindowUtils.isSupportFlexibleWindow`
+- `FlexibleTaskController.isSupportFlexibleWindow`
+- FlexibleWindow 黑名单判断
+- 旧 `OplusZoomWindowConfig.isSupportZoomMode`
+
+它只负责“允许系统小窗”。
+
+不会：
+
+- 自动启动 App；
+- 自动打开小窗；
+- 自动加入始终前台名单。
+
+两个名单互相独立。
+
+---
+
+## 安全边界
+
+5.1.0 不再使用这些全局强制生命周期 Hook：
+
+- `ActivityRecord.makeInvisible`
+- `setVisible(false)`
+- `setVisibleRequested(false)`
+- 全局 `shouldPauseActivity=false`
+- 全局 `TaskFragment.startPausing` 拦截
+
+因此普通全屏页面、Home、返回、最近任务、导航键都继续由系统控制。
+
+---
+
+## 诊断日志
+
+新增/重点关注：
+
 - `OPLUS_TASK_TRACKED`
-- `OPLUS_ACTIVITY_CHANGED`
-- `OPLUS_FLEX_TOGGLE`
-- `OPLUS_FLEX_VERIFY`
 - `OPLUS_TASK_INFO`
-- `OPLUS_TASK_VANISHED`
-- `OPLUS_SUPPORT_FORCE`
-- `OPLUS_RESTRICTION_BYPASS`
+- `OPLUS_STATE`
+- `OPLUS_EDGE_KEEPALIVE`
+- `OPLUS_EDGE_MOVE_BACK_BLOCK`
+- `OPLUS_EDGE_SURFACE_HIDE`
+- `OPLUS_EDGE_FOCUS_REDIRECT`
+- `OPLUS_KEYGUARD_STATE`
+- `OPLUS_LOCK_KEEPALIVE`
+- `OPLUS_LOCK_SLEEP_BLOCK`
+- `OPLUS_HANS_FREEZE_BLOCK`
+- `OPLUS_AOSP_FREEZE_BLOCK`
+- `OPLUS_STOP_UID_BLOCK`
 - `AMS_PACKAGE_STATE`
 - `AMS_UID_STATE`
 - `AMS_FOREGROUND`
 - `ATMS_HAS_RESUMED`
-- `KILL_GUARD_BLOCK`
 
-> 5.0.0 修改了 system_server 的 Bootstrap Hook 注册集合。安装后需要完整重启手机一次。之后只有 Engine 内部变化时仍可继续热重载。
+---
+
+## 升级说明
+
+5.1.0 新增了 system_server Bootstrap Hook：
+
+- `TaskExtImpl.moveTaskToBackForPanorama`
+- `Task.prepareSurfaces`
+- `DisplayContent.setFocusedApp`
+- `FlexibleTaskController.notifyKeyguardStateChanged`
+- `TaskFragment.sleepIfPossible`
+- Hans / CachedAppOptimizer / doStopUidLocked
+
+因此从 5.0.0 升级到 5.1.0 后需要 **完整重启手机一次**。
+
+后续如果只修改动态 Engine，仍可继续使用热重载。
