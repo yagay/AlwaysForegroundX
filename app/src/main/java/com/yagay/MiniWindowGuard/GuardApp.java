@@ -17,6 +17,7 @@ public final class GuardApp extends Application {
 
     private static final String[] BOOLEAN_KEYS = {
             ConfigKeys.MASTER_ENABLED,
+            ConfigKeys.ENGINE_AUTO_RELOAD,
             ConfigKeys.SYSTEM_IMPORTANCE_TOP,
             ConfigKeys.SYSTEM_HAS_RESUMED,
             ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED,
@@ -29,6 +30,7 @@ public final class GuardApp extends Application {
     private static final String[] INT_KEYS = {
             ConfigKeys.CONTAINER_WIDTH,
             ConfigKeys.CONTAINER_HEIGHT,
+            ConfigKeys.ENGINE_RELOAD_SEQ,
             ConfigKeys.CONTAINER_COMMAND_STATE,
             ConfigKeys.CONTAINER_COMMAND_SEQ
     };
@@ -196,6 +198,26 @@ public final class GuardApp extends Application {
         return getEngineStatus().hookCount;
     }
 
+    static long getBootstrapVersionCode() {
+        return getEngineStatus().bootstrapVersionCode;
+    }
+
+    static boolean isHotReloadAvailable() {
+        return getEngineStatus().hotReload;
+    }
+
+    static long getEngineGeneration() {
+        return getEngineStatus().generation;
+    }
+
+    static String getEngineReloadMessage() {
+        return getEngineStatus().reloadMessage;
+    }
+
+    static int getEngineActiveSessions() {
+        return getEngineStatus().activeSessions;
+    }
+
     static boolean isSystemEngineActive() {
         EngineStatusProvider.Status status =
                 getEngineStatus();
@@ -338,6 +360,20 @@ public final class GuardApp extends Application {
                 .apply();
 
         syncAll();
+    }
+
+
+    static boolean requestEngineReload() {
+        int seq = getInt(ConfigKeys.ENGINE_RELOAD_SEQ) + 1;
+
+        localPrefs()
+                .edit()
+                .putInt(
+                        ConfigKeys.ENGINE_RELOAD_SEQ,
+                        seq)
+                .apply();
+
+        return syncAll();
     }
 
     static void resetDefaults() {
