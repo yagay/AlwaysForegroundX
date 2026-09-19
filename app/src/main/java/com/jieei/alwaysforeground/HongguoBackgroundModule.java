@@ -90,6 +90,7 @@ public final class HongguoBackgroundModule extends XposedModule {
         ClassLoader classLoader = param.getClassLoader();
 
         // Primary, version-resistant path.
+        installHongguoForegroundSemantics(classLoader);
         installActivityBackgroundTracking();
         installStablePlayerEndpoints(classLoader);
 
@@ -100,6 +101,62 @@ public final class HongguoBackgroundModule extends XposedModule {
         log(Log.INFO, TAG, "INSTALLED Hongguo resilient background-play strategy"
                 + " windowMs=" + BACKGROUND_TRANSITION_WINDOW_MS
                 + " process=" + safeProcessName());
+    }
+
+    /**
+     * Hongguo has its own foreground gates in completion logic. Red Fruit 7.3.5.32
+     * onShortComplete explicitly calls ActivityRecordHelper.isForeground() before the
+     * auto_to_single / key_is_auto_enter_inner flow. In background it logs that it will skip
+     * entering the inner/detail feed. Spoof only these app-owned foreground queries in strong
+     * mode so Hongguo's own autoplay/navigation logic keeps running.
+     */
+    private void installHongguoForegroundSemantics(ClassLoader classLoader) {
+        installBooleanForegroundHook(
+                classLoader,
+                "com.dragon.read.base.util.ActivityRecordHelper",
+                "isForeground"
+        );
+        installBooleanForegroundHook(
+                classLoader,
+                "com.dragon.read.app.ActivityRecordManager",
+                "isAppForeground"
+        );
+    }
+
+    private void installBooleanForegroundHook(
+            ClassLoader classLoader,
+            String className,
+            String methodName
+    ) {
+        try {
+            Class<?> clazz = classLoader.loadClass(className);
+            int installed = 0;
+
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (!methodName.equals(method.getName())) continue;
+                if (method.getParameterCount() != 0) continue;
+                if (method.getReturnType() != boolean.class) continue;
+
+                method.setAccessible(true);
+                hook(method).intercept(chain -> {
+                    if (getMode() >= ModeConfig.MODE_STRONG) {
+                        return true;
+                    }
+                    return chain.proceed();
+                });
+                installed++;
+            }
+
+            if (installed > 0) {
+                log(Log.INFO, TAG, "INSTALLED Hongguo foreground semantic "
+                        + className + "." + methodName + " methods=" + installed);
+            }
+        } catch (ClassNotFoundException ignored) {
+            // App versions may move one helper while keeping the other.
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "SKIPPED Hongguo foreground semantic "
+                    + className + "." + methodName + ": " + t, t);
+        }
     }
 
     /**
