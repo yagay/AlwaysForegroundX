@@ -1,5 +1,29 @@
 # MiniWindowGuard / 小窗守护
 
+## 4.4.1
+
+4.4.1 修复首次把 Task 迁移到 VirtualDisplay 后偶发没有 focused window 的竞态。
+
+诊断中已经确认：
+
+- VirtualDisplay 774×1330 创建成功；
+- Task 已经进入副屏；
+- 视频 SurfaceView 720×1280 已经创建；
+- 失败点是 InputDispatcher 报 `Application does not have a focused window`；
+- 第二次重新打开同尺寸时，focused window 正常建立，视频也能显示。
+
+因此 4.4.1：
+
+- 移除副屏任务上的 `ActivityManager.moveTaskToFront()`；
+- 避免 OxygenOS 把 display 0 的 MiniWindowGuard/Launcher 再拉回 Resumed；
+- Task 迁移后增加 80 / 220 / 480 / 900 / 1500 / 2300ms 多次焦点重试；
+- 触摸 DOWN 仍会补一次焦点；
+- 固定内部 48% 与外部自由缩放逻辑不变。
+
+新增日志：
+
+- `VD_FOCUS_RETRY`
+
 MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
 
 ## 4.4.0
