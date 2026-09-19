@@ -1,5 +1,30 @@
 # MiniWindowGuard / 小窗守护
 
+## 4.5.3 — 恢复版
+
+4.5.3 将显示逻辑恢复到 **4.3.1 / 固定 48% 之前** 的行为。
+
+已撤回：
+
+- 固定内部 VirtualDisplay 48% 画布；
+- 内部/外部尺寸分离；
+- Native Freeform；
+- NativeBounds；
+- NativeTaskOverlay；
+- 相关实验性设置和诊断逻辑。
+
+恢复后的行为：
+
+- 窗口宽度和高度继续独立设置；
+- 首次 VirtualDisplay 直接使用当前宽高设置；
+- 拖动缩放时只做宿主窗口预览；
+- 松手时只提交一次 `VirtualDisplay.resize()`；
+- TextureView buffer 跟随新的 VirtualDisplay 尺寸；
+- 保留 4.3.x 的热重载 Bootstrap；
+- 保留设置页中“首次打开时建议宽高比例相同”的兼容提示。
+
+这是一版功能回退/稳定基线，方便从已经验证过的行为重新分析问题。
+
 MiniWindowGuard 是一个仅作用于 `system / system_server` 的 LSPosed 模块。
 
 ## 4.3.0
