@@ -110,8 +110,8 @@ public final class MainActivity extends Activity {
                 parent,
                 "VirtualDisplay 小窗",
                 "完全重写的 system_server VirtualDisplay 引擎："
-                        + "先建立稳定 SurfaceView，再把目标 Task 从 display 0 "
-                        + "移入独立显示，不使用原开源项目源码。");
+                        + "使用稳定 TextureView Surface，Surface 就绪后再迁移 Task；"
+                        + "不使用原开源项目窗口实现源码。");
 
         Button openApps = button("选择应用并打开小窗");
         openApps.setOnClickListener(v -> {
@@ -134,8 +134,9 @@ public final class MainActivity extends Activity {
 
         card.addView(detailBlock(
                 "窗口操作",
-                "窗口只保留最小控制：拖动、缩放、返回和关闭。"
-                        + "已删除旧三点菜单、图标态、隐藏态和早期 Overlay 状态切换。"));
+                "标题栏直接提供返回、缩小成图标、隐藏和关闭；"
+                        + "不再使用旧三点菜单。图标/隐藏只把宿主窗口移出屏幕，"
+                        + "VirtualDisplay 与 TextureView Surface 保持存活，点击恢复控件即可还原。"));
     }
 
     private void addForegroundCard(LinearLayout parent) {
@@ -284,7 +285,8 @@ public final class MainActivity extends Activity {
         card.addView(detailBlock(
                 "诊断重点",
                 "• VD_WINDOW_CREATED / VD_SURFACE_READY / VD_TASK_MOVED\n"
-                        + "• VD_FOCUS / VD_INPUT_DOWN / VD_INPUT_ERROR / VD_RESIZE\n"
+                        + "• VD_FOCUS / VD_INPUT_DOWN / VD_INPUT_ERROR\n"
+                        + "• VD_RESIZE_COMMIT / VD_MINIMIZED / VD_HIDDEN / VD_RESTORE\n"
                         + "• Activity pause/visible/resumed 拦截\n"
                         + "• 进程状态、Audio、MediaSession、Window、Task 快照\n"
                         + "• 最近 30000 行 logcat"));
