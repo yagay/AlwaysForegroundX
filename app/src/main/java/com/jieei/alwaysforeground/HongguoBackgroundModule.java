@@ -10,22 +10,19 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * Narrow Hongguo compatibility hook discovered from automatic playback-endpoint tracing.
+ * Hongguo / Tomato short-video background-play compatibility.
  *
- * Home/feed background chain:
- * AbsFragment.onPause -> VideoFeedTabFragment.onInvisible -> VideoFeedTabFragmentImpl.Q0 ->
- * SeriesBookMallTabFragment.D9 -> view.adapter.a.x -> x05.w.pause -> TTVideoEngine.pause.
+ * The old implementation relied on one very specific stack:
+ *   Fragment.onPause/onStop -> ... -> adapter.a.x() -> player.pause()
  *
- * Episode/detail has been observed through two background lifecycle paths:
- * 1) Fragment.performPause/LifecycleRegistry -> gp4.d.onLifeCycleOnPause ->
- *    ShortSeriesSingleFragment.P0 -> view.adapter.f.x -> view.adapter.a.x -> pause.
- * 2) Fragment.performStop -> ShortSeriesSingleFragment.onStop ->
- *    ShortSeriesSingleFragment.P0 -> view.adapter.f.x -> view.adapter.a.x -> pause.
+ * In newer Hongguo builds adapter.a.x() is still the small pause-only endpoint, but new
+ * lifecycle paths (for example ShortSeriesLandFragment.onPause) can reach it without the
+ * exact historical stack.  Keep the narrow pause endpoint hook, but classify background
+ * lifecycle calls by stable lifecycle/component markers instead of one complete call chain.
  *
- * DEX analysis shows a.x() is void/no-arg and only does:
- *   player.isPlaying(); if true -> player.pause();
- * It does not perform Fragment or page-state bookkeeping. Therefore only suppress it when the
- * current stack proves this invocation came from one of the captured background lifecycle paths.
+ * A TTVideoEngine.pause() fallback is also installed.  It only suppresses pause when the
+ * current stack proves the call came from a Hongguo short-video background lifecycle path,
+ * so manual pause / explicit user actions still proceed normally.
  */
 public final class HongguoBackgroundModule extends XposedModule {
     private static final String TAG = "AlwaysForeground";
@@ -33,9 +30,18 @@ public final class HongguoBackgroundModule extends XposedModule {
     private static final String PLAYER_ADAPTER =
             "com.dragon.read.component.shortvideo.impl.v2.view.adapter.a";
 
+    private static final String[] VIDEO_ENGINE_CLASSES = {
+            "com.ss.ttvideoengine.TTVideoEngine",
+            "com.ss.ttvideoengine.TTVideoEngineImpl"
+    };
+
     private volatile SharedPreferences preferences;
+
     private volatile boolean firstFeedBlockedLogged;
     private volatile boolean firstEpisodeBlockedLogged;
+    private volatile boolean firstLandscapeBlockedLogged;
+    private volatile boolean firstGenericBlockedLogged;
+    private volatile boolean firstEngineBlockedLogged;
 
     @Override
     public void onModuleLoaded(XposedModuleInterface.ModuleLoadedParam param) {
@@ -52,43 +58,101 @@ public final class HongguoBackgroundModule extends XposedModule {
         if (!param.isFirstPackage()) return;
         if (!HONGGUO_PACKAGE.equals(param.getPackageName())) return;
         if (!isMainProcess()) {
-            log(Log.INFO, TAG, "SKIPPED Hongguo precise background pause in process="
+            log(Log.INFO, TAG, "SKIPPED Hongguo background-play hooks in process="
                     + safeProcessName());
             return;
         }
 
+        installPauseOnlyAdapterHook(param.getClassLoader());
+        installVideoEngineFallbacks(param.getClassLoader());
+    }
+
+    /**
+     * Primary hook.  In the current APK adapter.a.x() still only performs:
+     *   player.isPlaying(); if (true) player.pause();
+     *
+     * That makes suppressing this method safe when the stack is a proven background lifecycle
+     * transition.  We deliberately do not suppress unrelated invocations so manual pause keeps
+     * working.
+     */
+    private void installPauseOnlyAdapterHook(ClassLoader classLoader) {
         try {
-            Class<?> clazz = param.getClassLoader().loadClass(PLAYER_ADAPTER);
+            Class<?> clazz = classLoader.loadClass(PLAYER_ADAPTER);
             Method method = clazz.getDeclaredMethod("x");
+            if (method.getParameterCount() != 0 || method.getReturnType() != void.class) {
+                log(Log.WARN, TAG, "SKIPPED Hongguo adapter pause endpoint: unexpected signature "
+                        + method);
+                return;
+            }
+
             method.setAccessible(true);
             hook(method).intercept(chain -> {
                 if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
 
                 int path = backgroundPausePath();
-                if (path == 1) {
-                    if (!firstFeedBlockedLogged) {
-                        firstFeedBlockedLogged = true;
-                        log(Log.INFO, TAG,
-                                "HIT Hongguo feed background pause blocked "
-                                        + PLAYER_ADAPTER + ".x package=" + HONGGUO_PACKAGE);
-                    }
-                    return null;
-                }
-                if (path == 2) {
-                    if (!firstEpisodeBlockedLogged) {
-                        firstEpisodeBlockedLogged = true;
-                        log(Log.INFO, TAG,
-                                "HIT Hongguo episode background pause blocked "
-                                        + PLAYER_ADAPTER + ".x package=" + HONGGUO_PACKAGE);
-                    }
-                    return null;
-                }
-                return chain.proceed();
+                if (path == 0) return chain.proceed();
+
+                logBlockedPathOnce(path, PLAYER_ADAPTER + ".x");
+                return null;
             });
-            log(Log.INFO, TAG, "INSTALLED Hongguo precise background pause "
+
+            log(Log.INFO, TAG, "INSTALLED Hongguo pause-only endpoint "
                     + PLAYER_ADAPTER + ".x process=" + safeProcessName());
         } catch (Throwable t) {
-            log(Log.WARN, TAG, "SKIPPED Hongguo precise background pause: " + t, t);
+            // Do not fail the whole compatibility layer.  New versions may rename the adapter;
+            // the engine-level fallback below can still keep background playback alive.
+            log(Log.WARN, TAG, "SKIPPED Hongguo adapter pause endpoint: " + t, t);
+        }
+    }
+
+    /**
+     * Future-proof fallback for adapter/method renames.  Only no-arg void pause() methods are
+     * considered and they are suppressed only when the stack contains a verified Hongguo
+     * short-video background lifecycle path.
+     */
+    private void installVideoEngineFallbacks(ClassLoader classLoader) {
+        for (String className : VIDEO_ENGINE_CLASSES) {
+            installVideoEngineFallback(classLoader, className);
+        }
+    }
+
+    private void installVideoEngineFallback(ClassLoader classLoader, String className) {
+        try {
+            Class<?> clazz = classLoader.loadClass(className);
+            int installed = 0;
+
+            for (Method method : clazz.getDeclaredMethods()) {
+                if (!"pause".equals(method.getName())) continue;
+                if (method.getParameterCount() != 0) continue;
+                if (method.getReturnType() != void.class) continue;
+
+                method.setAccessible(true);
+                hook(method).intercept(chain -> {
+                    if (getMode() < ModeConfig.MODE_STRONG) return chain.proceed();
+
+                    int path = backgroundPausePath();
+                    if (path == 0) return chain.proceed();
+
+                    if (!firstEngineBlockedLogged) {
+                        firstEngineBlockedLogged = true;
+                        log(Log.INFO, TAG, "HIT Hongguo engine background pause blocked "
+                                + className + ".pause path=" + pathName(path)
+                                + " package=" + HONGGUO_PACKAGE);
+                    }
+                    return null;
+                });
+                installed++;
+            }
+
+            if (installed > 0) {
+                log(Log.INFO, TAG, "INSTALLED Hongguo engine pause fallback "
+                        + className + " methods=" + installed);
+            }
+        } catch (ClassNotFoundException ignored) {
+            // Some Hongguo versions package only one TTVideoEngine implementation.
+        } catch (Throwable t) {
+            log(Log.WARN, TAG, "SKIPPED Hongguo engine pause fallback "
+                    + className + ": " + t, t);
         }
     }
 
@@ -104,7 +168,11 @@ public final class HongguoBackgroundModule extends XposedModule {
     }
 
     /**
-     * @return 0 = unrelated pause, 1 = home/feed background path, 2 = episode/detail path.
+     * @return 0 = unrelated/user pause
+     *         1 = home/feed background path
+     *         2 = episode/detail background path
+     *         3 = landscape/fullscreen background path
+     *         4 = other verified short-video Fragment background lifecycle path
      */
     private static int backgroundPausePath() {
         boolean fragmentPause = false;
@@ -113,19 +181,23 @@ public final class HongguoBackgroundModule extends XposedModule {
         boolean shortSeriesSingleP0 = false;
         boolean shortSeriesSingleStop = false;
         boolean lifecyclePause = false;
+        boolean landscapePause = false;
+        boolean shortVideoLifecycle = false;
 
         StackTraceElement[] stack = Thread.currentThread().getStackTrace();
         for (StackTraceElement frame : stack) {
             String cls = frame.getClassName();
             String method = frame.getMethodName();
 
-            if (("com.dragon.read.base.AbsFragment".equals(cls) && "onPause".equals(method))
+            if (("com.dragon.read.base.AbsFragment".equals(cls)
+                    && ("onPause".equals(method) || "onStop".equals(method)))
                     || ("androidx.fragment.app.Fragment".equals(cls)
                     && "performPause".equals(method))) {
                 fragmentPause = true;
             }
 
-            if (("androidx.fragment.app.Fragment".equals(cls) && "performStop".equals(method))
+            if (("androidx.fragment.app.Fragment".equals(cls)
+                    && "performStop".equals(method))
                     || ("androidx.fragment.app.FragmentManager".equals(cls)
                     && "dispatchStop".equals(method))) {
                 fragmentStop = true;
@@ -144,11 +216,26 @@ public final class HongguoBackgroundModule extends XposedModule {
                 if ("onStop".equals(method)) shortSeriesSingleStop = true;
             }
 
+            if ("com.dragon.read.component.shortvideo.impl.fullscreen.ShortSeriesLandFragment"
+                    .equals(cls) && "onPause".equals(method)) {
+                landscapePause = true;
+            }
+
             if (("gp4.d".equals(cls) && "onLifeCycleOnPause".equals(method))
                     || ("androidx.lifecycle.LifecycleRegistry".equals(cls)
                     && ("handleLifecycleEvent".equals(method)
                     || "backwardPass".equals(method)))) {
                 lifecyclePause = true;
+            }
+
+            // Stable future-compatible rule: only lifecycle callbacks from Hongguo's own
+            // short-video component qualify.  Button-click/manual pause stacks do not contain
+            // these lifecycle method names.
+            if (cls.startsWith("com.dragon.read.component.shortvideo.")
+                    && ("onPause".equals(method)
+                    || "onStop".equals(method)
+                    || "onInvisible".equals(method))) {
+                shortVideoLifecycle = true;
             }
         }
 
@@ -158,7 +245,46 @@ public final class HongguoBackgroundModule extends XposedModule {
         boolean episodeStopPath = fragmentStop && shortSeriesSingleP0 && shortSeriesSingleStop;
         if (episodePausePath || episodeStopPath) return 2;
 
+        if (landscapePause && (fragmentPause || fragmentStop)) return 3;
+
+        if ((fragmentPause || fragmentStop) && shortVideoLifecycle) return 4;
+
         return 0;
+    }
+
+    private void logBlockedPathOnce(int path, String endpoint) {
+        switch (path) {
+            case 1 -> {
+                if (firstFeedBlockedLogged) return;
+                firstFeedBlockedLogged = true;
+            }
+            case 2 -> {
+                if (firstEpisodeBlockedLogged) return;
+                firstEpisodeBlockedLogged = true;
+            }
+            case 3 -> {
+                if (firstLandscapeBlockedLogged) return;
+                firstLandscapeBlockedLogged = true;
+            }
+            default -> {
+                if (firstGenericBlockedLogged) return;
+                firstGenericBlockedLogged = true;
+            }
+        }
+
+        log(Log.INFO, TAG, "HIT Hongguo background pause blocked endpoint="
+                + endpoint + " path=" + pathName(path)
+                + " package=" + HONGGUO_PACKAGE);
+    }
+
+    private static String pathName(int path) {
+        return switch (path) {
+            case 1 -> "feed";
+            case 2 -> "episode";
+            case 3 -> "landscape";
+            case 4 -> "shortvideo-lifecycle";
+            default -> "unknown";
+        };
     }
 
     private static boolean isMainProcess() {
