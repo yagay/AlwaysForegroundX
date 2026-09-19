@@ -24,11 +24,11 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * OPlus-only system_server bootstrap.
+ * System-server keepalive bootstrap.
  *
- * OxygenOS owns window lifecycle, visibility, surfaces, focus and navigation.
- * MiniWindowGuard hooks OPlus FlexibleWindow itself, then applies foreground
- * and anti-cleanup policy only while the OEM task is actually flexible/floating.
+ * OPlus FlexibleWindow protection stays OEM-state-driven. A second independent
+ * BACKGROUND_PROTECTED state keeps selected normal fullscreen tasks alive when
+ * focus moves to Home/another package or the display sleeps, without timers.
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
@@ -593,39 +593,105 @@ public final class GuardModule extends XposedModule {
                     }
 
                     hook(method).intercept(chain -> {
-                        String reason = null;
+                        List<Object> args =
+                                chain.getArgs();
 
-                        for (Object arg :
-                                chain.getArgs()) {
+                        String reason = null;
+                        Object resumingActivity = null;
+                        int booleanCount = 0;
+                        boolean firstBoolean = false;
+                        boolean secondBoolean = false;
+
+                        for (Object arg : args) {
                             if (arg instanceof String) {
                                 reason = (String) arg;
+                            } else if (arg instanceof Boolean value) {
+                                if (booleanCount == 0) {
+                                    firstBoolean = value;
+                                } else if (booleanCount == 1) {
+                                    secondBoolean = value;
+                                }
+                                booleanCount++;
+                            } else if (arg != null
+                                    && arg.getClass()
+                                    .getName()
+                                    .endsWith(
+                                            ".ActivityRecord")) {
+                                resumingActivity = arg;
                             }
                         }
 
+                        boolean userLeaving =
+                                booleanCount >= 2
+                                        && firstBoolean;
+                        boolean uiSleeping =
+                                booleanCount >= 2
+                                        ? secondBoolean
+                                        : booleanCount == 1
+                                        && firstBoolean;
+
+                        Object task =
+                                taskFromContainer(
+                                        chain.getThisObject());
+
+                        EngineBridge current = engine;
+
                         if (reason != null
                                 && reason.contains(
-                                "pauseInRecentsAnim")) {
-                            Object task =
-                                    taskFromContainer(
-                                            chain.getThisObject());
+                                "pauseInRecentsAnim")
+                                && current != null
+                                && task != null
+                                && current
+                                .shouldSuppressRecentsPause(
+                                        task)) {
+                            diag(
+                                    "OPLUS_EDGE_PAUSE_BLOCK",
+                                    "taskId="
+                                            + taskId(task)
+                                            + " pkg="
+                                            + packageFromObject(task)
+                                            + " reason=" + reason);
+                            return false;
+                        }
 
-                            EngineBridge current = engine;
+                        if (current != null
+                                && task != null) {
+                            Object resumedActivity =
+                                    fieldValue(
+                                            chain.getThisObject(),
+                                            "mResumedActivity");
 
-                            if (current != null
-                                    && task != null
-                                    && current
-                                    .shouldSuppressRecentsPause(
-                                            task)) {
+                            boolean finishing =
+                                    Boolean.TRUE.equals(
+                                            fieldValue(
+                                                    resumedActivity,
+                                                    "finishing"));
+
+                            String resumingPackage =
+                                    packageFromObject(
+                                            resumingActivity);
+
+                            if (current
+                                    .shouldSuppressBackgroundPause(
+                                            task,
+                                            resumingPackage,
+                                            userLeaving,
+                                            uiSleeping,
+                                            reason,
+                                            finishing)) {
                                 diag(
-                                        "OPLUS_EDGE_PAUSE_BLOCK",
-                                        "taskId="
-                                                + taskId(task)
+                                        "BACKGROUND_PAUSE_BLOCK",
+                                        "taskId=" + taskId(task)
                                                 + " pkg="
-                                                + packageFromObject(
-                                                task)
+                                                + packageFromObject(task)
+                                                + " resumingPkg="
+                                                + resumingPackage
+                                                + " userLeaving="
+                                                + userLeaving
+                                                + " uiSleeping="
+                                                + uiSleeping
                                                 + " reason="
                                                 + reason);
-
                                 return false;
                             }
                         }
@@ -806,6 +872,11 @@ public final class GuardModule extends XposedModule {
                                             "getTask");
 
                             EngineBridge current = engine;
+
+                            if (current != null) {
+                                current.onFocusedActivity(
+                                        args.get(0));
+                            }
 
                             if (current != null
                                     && current.isEdgeHungTask(
@@ -1609,7 +1680,12 @@ public final class GuardModule extends XposedModule {
                                     ? null
                                     : component.getPackageName();
 
-                    if (!isTargetPackage(pkg)) {
+                    EngineBridge current = engine;
+
+                    if (!isTargetPackage(pkg)
+                            || current == null
+                            || !current.shouldBlockTaskRemoval(
+                            pkg)) {
                         return chain.proceed();
                     }
 
@@ -1713,6 +1789,20 @@ public final class GuardModule extends XposedModule {
 
                     if (!isTaskRemovalKillStack(
                             stack)) {
+                        return chain.proceed();
+                    }
+
+                    EngineBridge current = engine;
+
+                    if (current == null
+                            || !current.shouldBlockTaskRemoval(
+                            targetPackage)) {
+                        diag(
+                                "KILL_GUARD_PASS",
+                                "reason=ordinary-background-task-removal"
+                                        + " pkg=" + targetPackage
+                                        + " pid=" + pid
+                                        + " process=" + processName);
                         return chain.proceed();
                     }
 
