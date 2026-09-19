@@ -1456,6 +1456,23 @@ final class OplusFlexibleWindowController {
 
         if (pkg != null) return pkg;
 
+        pkg =
+                objectPackage(
+                        task);
+
+        if (pkg != null) return pkg;
+
+        Object lastPaused =
+                fieldValue(
+                        task,
+                        "mLastPausedActivity");
+
+        pkg =
+                objectPackage(
+                        lastPaused);
+
+        if (pkg != null) return pkg;
+
         Object realActivity =
                 fieldValue(
                         task,
