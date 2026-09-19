@@ -325,7 +325,6 @@ final class DiagnosticsManager {
                 "REMOVE_TASK_SERVICES_BLOCK",
                 "am_kill",
                 "AudioService",
-                "AudioHardening",
                 "MediaSession",
                 "deviceidle",
                 "netpolicy",

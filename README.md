@@ -1,37 +1,5 @@
 # MiniWindowGuard / 小窗守护
 
-## 5.1.2 — OPlus multi-resume 补强
-
-5.1.2 保持 5.1.1 的“始终前台白名单 + 被动监听一加小窗 + 贴边/锁屏保活”架构不变。
-
-根据旧版 2.3.1 诊断重新核对后，恢复旧版中对 OPlus 小窗真正有价值、且风险较低的一层：
-
-- 动态 Hook OPlus / ColorOS 的 `supportMultiResume` / `*multiResume*` 布尔判断；
-- 仅当参数解析到“始终前台应用”白名单中的包名时返回 `true`；
-- 覆盖旧/新 OPlus 可能使用的：
-  - `OplusCompactWindowManagerService`
-  - `OplusZoomWindowManagerService`
-  - `FlexibleTaskController`
-  - `FlexibleWindowManagerService`
-  - `FlexibleWindowUtils`
-- 不重新引入全局 `shouldPauseActivity=false`；
-- 不修改普通全屏 Activity 的 pause/visible/navigation。
-
-新增诊断：
-
-- `OPLUS_MULTI_RESUME_FORCE`
-- `AudioHardening` 日志过滤
-
-旧版 2.3.1 诊断中虽然出现：
-
-```
-AudioHardening background playback would be muted
-```
-
-但红果 AudioTrack 后续仍重新 `started` 并继续播放，因此 5.1.2 不直接改 AudioService；优先通过 OPlus multi-resume、真实小窗前台状态、贴边/锁屏保活来保持系统对该 App 的前台认知。
-
-> 5.1.2 新增 system_server Bootstrap Hook。安装后需要完整重启手机一次。
-
 ## 5.1.1 — 锁屏继续播放修复
 
 5.1.1 保持 5.1.0 的 OPlus 小窗白名单架构不变，只修正锁屏保活时序。

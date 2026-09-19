@@ -101,8 +101,6 @@ public final class GuardModule extends XposedModule {
 
         installOplusFlexibleWindowHooks(
                 systemClassLoader);
-        installOplusMultiResumeHooks(
-                systemClassLoader);
         installOplusEdgeKeepaliveHooks(
                 systemClassLoader);
         installOplusLockKeepaliveHooks(
@@ -456,97 +454,6 @@ public final class GuardModule extends XposedModule {
             } catch (Throwable t) {
                 installedHooks.remove(
                         method.toGenericString());
-            }
-        }
-    }
-
-    /**
-     * Keep selected OPlus windows eligible for OEM multi-resume.
-     *
-     * This restores the safe part of the old 2.3.1 behavior without globally
-     * blocking Activity pause/visibility. We only force boolean methods whose
-     * names explicitly contain "multiResume", and only when one of the
-     * arguments resolves to an app in the foreground whitelist.
-     */
-    private void installOplusMultiResumeHooks(
-            ClassLoader loader
-    ) {
-        String[] candidates = {
-                "com.android.server.wm.OplusCompactWindowManagerService",
-                "com.android.server.wm.OplusZoomWindowManagerService",
-                "com.android.server.wm.FlexibleTaskController",
-                "com.android.server.wm.FlexibleWindowManagerService",
-                "com.android.server.wm.FlexibleWindowUtils"
-        };
-
-        for (String className : candidates) {
-            Class<?> type =
-                    load(
-                            loader,
-                            className);
-
-            if (type == null) {
-                continue;
-            }
-
-            for (Method method :
-                    type.getDeclaredMethods()) {
-                String lower =
-                        method.getName()
-                                .toLowerCase();
-
-                if (method.getReturnType()
-                        != boolean.class
-                        || !lower.contains(
-                        "multiresume")) {
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    if (!installedHooks.add(
-                            method.toGenericString())) {
-                        continue;
-                    }
-
-                    hook(method).intercept(chain -> {
-                        String pkg =
-                                extractForegroundPackage(
-                                        chain.getArgs());
-
-                        if (pkg != null) {
-                            diag(
-                                    "OPLUS_MULTI_RESUME_FORCE",
-                                    "pkg=" + pkg
-                                            + " class="
-                                            + className
-                                            + " method="
-                                            + method.getName()
-                                            + " result=true");
-
-                            return true;
-                        }
-
-                        return chain.proceed();
-                    });
-
-                    log(
-                            Log.INFO,
-                            TAG,
-                            "SYSTEM_SCOPE installed OPlus multi-resume hook "
-                                    + method.toGenericString());
-                } catch (Throwable t) {
-                    installedHooks.remove(
-                            method.toGenericString());
-
-                    log(
-                            Log.WARN,
-                            TAG,
-                            "SYSTEM_SCOPE skipped OPlus multi-resume hook "
-                                    + method.toGenericString()
-                                    + " error=" + t);
-                }
             }
         }
     }
@@ -1964,30 +1871,6 @@ public final class GuardModule extends XposedModule {
 
             if (pkg != null
                     && isKnownPackage(pkg)) {
-                return pkg;
-            }
-        }
-
-        return null;
-    }
-
-    private String extractForegroundPackage(
-            List<Object> args
-    ) {
-        if (args == null) return null;
-
-        EngineBridge current = engine;
-        if (current == null || !enabled()) {
-            return null;
-        }
-
-        for (Object arg : args) {
-            String pkg =
-                    packageFromObject(arg);
-
-            if (pkg != null
-                    && current.isForegroundPackage(
-                    pkg)) {
                 return pkg;
             }
         }
