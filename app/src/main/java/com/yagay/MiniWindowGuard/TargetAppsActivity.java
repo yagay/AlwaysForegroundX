@@ -70,8 +70,8 @@ public final class TargetAppsActivity extends Activity {
 
         TextView help = new TextView(this);
         help.setText("选择应用后直接创建独立 VirtualDisplay 小窗。"
-                + "新版会先建立稳定 SurfaceView，再把目标 Task 从 display 0 移入独立显示，"
-                + "避免黑屏和触摸失焦。");
+                + "新版使用稳定 TextureView Surface，先完成显示桥再迁移 Task；"
+                + "缩放只在松手后提交一次，减少卡顿。");
         help.setTextSize(13.5f);
         help.setTextColor(0xFF666A73);
         help.setPadding(0, dp(4), 0, dp(10));
