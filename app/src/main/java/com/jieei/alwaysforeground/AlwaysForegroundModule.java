@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Application;
 import android.app.Instrumentation;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.media.AudioTrack;
 import android.media.MediaPlayer;
@@ -76,6 +79,10 @@ public final class AlwaysForegroundModule extends XposedModule {
     private final ThreadLocal<Boolean> tracingEndpoint = ThreadLocal.withInitial(() -> false);
     private final ThreadLocal<Boolean> selfContinuityResume =
             ThreadLocal.withInitial(() -> false);
+    private final ThreadLocal<Boolean> virtualLaunchBypass =
+            ThreadLocal.withInitial(() -> false);
+    private final BackgroundVirtualDisplay backgroundVirtualDisplay =
+            new BackgroundVirtualDisplay();
 
     private volatile String activePackage;
     private volatile Handler mainHandler;
@@ -125,6 +132,7 @@ public final class AlwaysForegroundModule extends XposedModule {
 
         installRestrictionCompatibilityHooks();
         installLifecycleCauseEngine();
+        installBackgroundActivityVirtualization();
         installLifecycleDiagnostics();
 
         // Intentionally removed from the generic path:
@@ -191,6 +199,139 @@ public final class AlwaysForegroundModule extends XposedModule {
     }
 
     /**
+     * Background self-launch virtualization.
+     *
+     * When an already-backgrounded process starts one of its own Activities, Android would
+     * normally move the task to the primary display. In strong mode route that self-launch to a
+     * private virtual display instead. The Activity still receives a normal lifecycle and can
+     * host the app's own UI/player state, but the user stays on the primary display.
+     */
+    private void installBackgroundActivityVirtualization() {
+        int installed = 0;
+        for (Method method : Instrumentation.class.getDeclaredMethods()) {
+            if (!method.getName().startsWith("execStartActivity")) continue;
+
+            Class<?>[] types = method.getParameterTypes();
+            int intentIndex = -1;
+            int contextIndex = -1;
+            int requestCodeIndex = -1;
+
+            for (int i = 0; i < types.length; i++) {
+                if (types[i] == Intent.class && intentIndex < 0) {
+                    intentIndex = i;
+                    if (i + 1 < types.length && types[i + 1] == int.class) {
+                        requestCodeIndex = i + 1;
+                    }
+                }
+                if (Context.class.isAssignableFrom(types[i]) && contextIndex < 0) {
+                    contextIndex = i;
+                }
+            }
+
+            if (intentIndex < 0 || contextIndex < 0) continue;
+            if (method.getReturnType().isPrimitive() && method.getReturnType() != void.class) {
+                continue;
+            }
+
+            final int finalIntentIndex = intentIndex;
+            final int finalContextIndex = contextIndex;
+            final int finalRequestCodeIndex = requestCodeIndex;
+            final String signature = method.toGenericString();
+
+            try {
+                method.setAccessible(true);
+                hook(method).intercept(chain -> {
+                    if (Boolean.TRUE.equals(virtualLaunchBypass.get())
+                            || TargetConfig.getMode() < ModeConfig.MODE_STRONG
+                            || !appInBackground) {
+                        return chain.proceed();
+                    }
+
+                    List<Object> args = chain.getArgs();
+                    if (finalIntentIndex >= args.size()
+                            || finalContextIndex >= args.size()) {
+                        return chain.proceed();
+                    }
+
+                    Object rawIntent = args.get(finalIntentIndex);
+                    Object rawContext = args.get(finalContextIndex);
+                    if (!(rawIntent instanceof Intent intent)
+                            || !(rawContext instanceof Context context)) {
+                        return chain.proceed();
+                    }
+
+                    // If execution is already inside our hidden display, normal launches inherit
+                    // that display and should not be split into another task/display.
+                    if (backgroundVirtualDisplay.owns(context)) {
+                        return chain.proceed();
+                    }
+
+                    if (finalRequestCodeIndex >= 0
+                            && finalRequestCodeIndex < args.size()
+                            && args.get(finalRequestCodeIndex) instanceof Integer requestCode
+                            && requestCode >= 0) {
+                        return chain.proceed();
+                    }
+
+                    ComponentName target = resolveOwnActivity(context, intent);
+                    if (target == null || !activePackage.equals(target.getPackageName())) {
+                        return chain.proceed();
+                    }
+
+                    android.app.ActivityOptions options =
+                            backgroundVirtualDisplay.makeLaunchOptions(context);
+                    if (options == null) {
+                        log(Log.WARN, TAG, "GENERIC_VIRTUAL_LAUNCH unavailable"
+                                + " target=" + target.flattenToShortString()
+                                + " package=" + activePackage);
+                        return chain.proceed();
+                    }
+
+                    Intent virtualIntent = BackgroundVirtualDisplay.virtualizeIntent(intent);
+                    virtualLaunchBypass.set(true);
+                    try {
+                        context.startActivity(virtualIntent, options.toBundle());
+                        log(Log.INFO, TAG, "GENERIC_VIRTUAL_LAUNCH routed"
+                                + " target=" + target.flattenToShortString()
+                                + " displayId=" + backgroundVirtualDisplay.getDisplayId()
+                                + " via=" + signature
+                                + " package=" + activePackage);
+                        return null;
+                    } catch (Throwable t) {
+                        log(Log.WARN, TAG, "GENERIC_VIRTUAL_LAUNCH failed"
+                                + " target=" + target.flattenToShortString()
+                                + " package=" + activePackage, t);
+                        return chain.proceed();
+                    } finally {
+                        virtualLaunchBypass.set(false);
+                    }
+                });
+                installed++;
+            } catch (Throwable t) {
+                logSkipped("background activity virtualization " + signature, t);
+            }
+        }
+
+        if (installed > 0) {
+            logInstalled("background activity virtualization methods=" + installed);
+        }
+    }
+
+    private ComponentName resolveOwnActivity(Context context, Intent intent) {
+        ComponentName explicit = intent.getComponent();
+        if (explicit != null) return explicit;
+
+        try {
+            android.content.pm.ResolveInfo info = context.getPackageManager()
+                    .resolveActivity(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            if (info == null || info.activityInfo == null) return null;
+            return new ComponentName(info.activityInfo.packageName, info.activityInfo.name);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /**
      * Generic lifecycle-cause engine.
      *
      * A pause is not immediately treated as "the app is background": another Activity in the same
@@ -212,16 +353,37 @@ public final class AlwaysForegroundModule extends XposedModule {
                         ? (Activity) args.get(0) : null;
                 int id = activity == null ? 0 : System.identityHashCode(activity);
 
+                boolean virtualActivity = backgroundVirtualDisplay.owns(activity);
+
                 if (event == 1) {
+                    if (virtualActivity) {
+                        Object result = chain.proceed();
+                        log(Log.INFO, TAG, "GENERIC_VIRTUAL_ACTIVITY resumed"
+                                + " activity=" + className(activity)
+                                + " displayId=" + backgroundVirtualDisplay.getDisplayId()
+                                + " package=" + activePackage);
+                        return result;
+                    }
+
                     int serial = transitionSerial.incrementAndGet();
                     if (id != 0) resumedActivities.add(id);
                     appInBackground = false;
                     continuityLeaseUntil.clear();
                     clearPendingResumes("activity-resumed", false);
                     Object result = chain.proceed();
+
+                    // A real primary-display foreground entry wins over any hidden container.
+                    backgroundVirtualDisplay.release();
+
                     logTransitionOnce("GENERIC_FOREGROUND serial=" + serial
                             + " activity=" + className(activity));
                     return result;
+                }
+
+                // Hidden-display Activities are deliberately isolated from the primary-display
+                // foreground/background state machine.
+                if (virtualActivity) {
+                    return chain.proceed();
                 }
 
                 boolean configChange = activity != null && activity.isChangingConfigurations();
