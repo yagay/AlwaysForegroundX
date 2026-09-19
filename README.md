@@ -1,5 +1,22 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.6 — 后台-only App Session + 目标 App 图标
+
+修复只加入“后台播放应用”但没有加入“始终前台应用”的 App（例如抖音）无法建立 OPlus Task Session：
+
+- `onOplusTaskInfoChanged()` 现在使用 `wantsPackage()`，同时接受始终前台名单和后台播放名单；
+- 后台-only App 可以正常进入 `BACKGROUND_PROTECTED`、触发音频检测和后台通知；
+- OPlus 小窗/FloatHandle/锁屏小窗保护仍然继续严格检查 `foregroundPackage`，不会因为加入后台播放名单而自动获得小窗保护；
+- Task 真正消失或 Task 切换为其他包时会撤销旧后台通知，避免残留。
+
+通知显示优化：
+
+- 状态栏 small icon 仍使用 MiniWindowGuard 的单色通知图标，符合 Android 通知栏限制；
+- 展开通知后使用对应目标 App 的真实应用图标作为 large icon；
+- 点击通知仍直接返回对应 App。
+
+Bootstrap API 仍为 4，本版没有新增固定 system_server Hook，可热重载。
+
 ## 5.3.5 — 普通后台播放常驻通知
 
 新增只针对普通 `BACKGROUND_PROTECTED` 状态的通知：
