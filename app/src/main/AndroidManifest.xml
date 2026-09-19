@@ -13,7 +13,7 @@
             android:name=".RootForegroundReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.jieei.alwaysforeground.action.ROOT_VIRTUAL_FOREGROUND" />
+                <action android:name="com.yagay.alwaysforeground.action.ROOT_VIRTUAL_FOREGROUND" />
             </intent-filter>
         </receiver>
 
@@ -21,7 +21,7 @@
             android:name=".RootSmallWindowReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.jieei.alwaysforeground.action.ROOT_SMALL_WINDOW" />
+                <action android:name="com.yagay.alwaysforeground.action.ROOT_SMALL_WINDOW" />
             </intent-filter>
         </receiver>
 
