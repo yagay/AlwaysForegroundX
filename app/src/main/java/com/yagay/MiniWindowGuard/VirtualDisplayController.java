@@ -439,6 +439,8 @@ final class VirtualDisplayController {
         private boolean taskMoved;
         private boolean surfaceReady;
         private boolean destroyed;
+        private long surfaceReadyElapsed;
+        private Runnable pendingDisplayResize;
 
         WindowHost(Session session) {
             this.session = session;
@@ -496,12 +498,14 @@ final class VirtualDisplayController {
                                 outerMinHeight,
                                 metrics.heightPixels - dp(90)));
 
-                if (GuardConfig.fixedInternalDisplay()) {
+                if (GuardConfig.safeInitialDisplay()) {
                     int scale =
                             GuardConfig.internalDisplayScale();
 
-                    // Keep the target app on a stable, known-good internal
-                    // canvas. The visible host can be much smaller/larger.
+                    // Start both the visible host and the VirtualDisplay from
+                    // the same known-good geometry. After the app/video
+                    // Surface is established, user resize can switch back to
+                    // dynamic VirtualDisplay sizing.
                     displayWidth = clamp(
                             metrics.widthPixels * scale / 100,
                             dp(260),
@@ -515,6 +519,9 @@ final class VirtualDisplayController {
                             Math.max(
                                     dp(320),
                                     metrics.heightPixels - dp(110)));
+
+                    contentWidth = displayWidth;
+                    contentHeight = displayHeight;
                 } else {
                     displayWidth = contentWidth;
                     displayHeight = contentHeight;
@@ -550,8 +557,10 @@ final class VirtualDisplayController {
                                 + "x" + contentHeight
                                 + " internal=" + displayWidth
                                 + "x" + displayHeight
-                                + " fixedInternal="
-                                + GuardConfig.fixedInternalDisplay()
+                                + " safeInitial="
+                                + GuardConfig.safeInitialDisplay()
+                                + " followAfterStart="
+                                + GuardConfig.followWindowAfterStart()
                                 + " density=" + densityDpi
                                 + " flags=" + VIRTUAL_DISPLAY_FLAGS
                                 + " renderer=TextureView"
@@ -1026,14 +1035,67 @@ final class VirtualDisplayController {
                 return;
             }
 
-            if (GuardConfig.fixedInternalDisplay()) {
+            if (GuardConfig.safeInitialDisplay()
+                    && !GuardConfig.followWindowAfterStart()) {
                 log("VD_HOST_RESIZE_ONLY",
                         "pkg=" + session.packageName
                                 + " displayId=" + displayId
                                 + " host=" + contentWidth
                                 + "x" + contentHeight
                                 + " internal=" + displayWidth
+                                + "x" + displayHeight
+                                + " mode=fixed-after-start");
+                return;
+            }
+
+            long elapsed =
+                    Math.max(
+                            0L,
+                            SystemClock.elapsedRealtime()
+                                    - surfaceReadyElapsed);
+            long settle =
+                    GuardConfig.safeInitialDisplay()
+                            ? GuardConfig.startupSettleMs()
+                            : 0L;
+
+            if (elapsed < settle) {
+                long delay = settle - elapsed;
+
+                if (pendingDisplayResize != null) {
+                    handler.removeCallbacks(
+                            pendingDisplayResize);
+                }
+
+                pendingDisplayResize = () -> {
+                    pendingDisplayResize = null;
+                    commitDisplaySizeNow(
+                            "settle-delayed");
+                };
+
+                handler.postDelayed(
+                        pendingDisplayResize,
+                        delay);
+
+                log("VD_RESIZE_PENDING",
+                        "pkg=" + session.packageName
+                                + " displayId=" + displayId
+                                + " delayMs=" + delay
+                                + " host=" + contentWidth
+                                + "x" + contentHeight
+                                + " internal=" + displayWidth
                                 + "x" + displayHeight);
+                return;
+            }
+
+            commitDisplaySizeNow("user-release");
+        }
+
+        private void commitDisplaySizeNow(
+                String reason
+        ) {
+            if (virtualDisplay == null
+                    || destroyed
+                    || !surfaceReady) {
                 return;
             }
 
@@ -1061,7 +1123,10 @@ final class VirtualDisplayController {
                         "pkg=" + session.packageName
                                 + " displayId=" + displayId
                                 + " internal=" + displayWidth
-                                + "x" + displayHeight);
+                                + "x" + displayHeight
+                                + " host=" + contentWidth
+                                + "x" + contentHeight
+                                + " reason=" + reason);
             } catch (Throwable t) {
                 log("VD_RESIZE_ERROR",
                         "pkg=" + session.packageName
@@ -1361,6 +1426,8 @@ final class VirtualDisplayController {
                 renderSurface = new Surface(texture);
                 virtualDisplay.setSurface(renderSurface);
                 surfaceReady = true;
+                surfaceReadyElapsed =
+                        SystemClock.elapsedRealtime();
 
                 log("VD_SURFACE_READY",
                         "pkg=" + session.packageName
@@ -1452,6 +1519,12 @@ final class VirtualDisplayController {
         void destroy(boolean restoreTask) {
             if (destroyed) return;
             destroyed = true;
+
+            if (pendingDisplayResize != null) {
+                handler.removeCallbacks(
+                        pendingDisplayResize);
+                pendingDisplayResize = null;
+            }
 
             removeRestoreControl();
 
