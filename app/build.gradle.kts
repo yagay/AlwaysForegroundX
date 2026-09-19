@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.yagay.alwaysforeground"
+    namespace = "com.yagay.MiniWindowGuard"
     compileSdk = 37
 
     defaultConfig {
