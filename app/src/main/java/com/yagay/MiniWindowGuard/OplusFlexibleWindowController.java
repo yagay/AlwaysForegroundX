@@ -4,11 +4,16 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.graphics.Rect;
+import android.media.AudioManager;
+import android.media.AudioPlaybackConfiguration;
+import android.net.Uri;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.SystemClock;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,6 +33,13 @@ final class OplusFlexibleWindowController {
     private static final long UNLOCK_GRACE_MS = 2500L;
     private static final int EVENT_MINIMIZE_TO_FLOAT_HANDLE = 2002;
     private static final int EVENT_EXIT_TO_BACK = 2003;
+    private static final Uri ENGINE_STATUS_URI =
+            Uri.parse(
+                    "content://com.yagay.MiniWindowGuard.engine_status");
+    private static final String METHOD_BACKGROUND_PLAYBACK =
+            "backgroundPlaybackNotification";
+    private static final String KEY_PACKAGE_NAME = "package_name";
+    private static final String KEY_ACTIVE = "active";
 
     private final Handler handler;
     private final Logger logger;
@@ -37,6 +49,27 @@ final class OplusFlexibleWindowController {
     private volatile Context systemContext;
     private volatile boolean running;
     private volatile boolean keyguardShowing;
+    private volatile AudioManager audioManager;
+    private volatile boolean audioCallbackRegistered;
+
+    private final AudioManager.AudioPlaybackCallback
+            audioPlaybackCallback =
+            new AudioManager.AudioPlaybackCallback() {
+                @Override
+                public void onPlaybackConfigChanged(
+                        List<AudioPlaybackConfiguration> configs
+                ) {
+                    if (!running) return;
+
+                    for (Session session :
+                            sessions.values()) {
+                        updateBackgroundNotification(
+                                session,
+                                configs,
+                                "audio-callback");
+                    }
+                }
+            };
 
     OplusFlexibleWindowController(
             Handler handler,
@@ -51,6 +84,8 @@ final class OplusFlexibleWindowController {
     void start() {
         if (running) return;
         running = true;
+
+        ensureAudioPlaybackMonitor();
 
         log(
                 "OPLUS_ENGINE_READY",
@@ -71,6 +106,27 @@ final class OplusFlexibleWindowController {
 
     void shutdown() {
         running = false;
+
+        for (Session session :
+                sessions.values()) {
+            setBackgroundNotification(
+                    session,
+                    false,
+                    "engine-shutdown");
+        }
+
+        if (audioCallbackRegistered
+                && audioManager != null) {
+            try {
+                audioManager
+                        .unregisterAudioPlaybackCallback(
+                                audioPlaybackCallback);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        audioCallbackRegistered = false;
+        audioManager = null;
         sessions.clear();
     }
 
@@ -197,6 +253,8 @@ final class OplusFlexibleWindowController {
                     deriveSystemContext(task);
         }
 
+        ensureAudioPlaybackMonitor();
+
         int taskId =
                 taskId(task);
 
@@ -232,6 +290,11 @@ final class OplusFlexibleWindowController {
 
         if (session.backgroundProtected) {
             session.backgroundProtected = false;
+            session.backgroundNotificationEligible = false;
+            setBackgroundNotification(
+                    session,
+                    false,
+                    "activity-resumed");
 
             log(
                     "BACKGROUND_PROTECTED",
@@ -608,6 +671,11 @@ final class OplusFlexibleWindowController {
 
         if (finishing) {
             session.backgroundProtected = false;
+            session.backgroundNotificationEligible = false;
+            setBackgroundNotification(
+                    session,
+                    false,
+                    "finishing");
             return false;
         }
 
@@ -616,6 +684,11 @@ final class OplusFlexibleWindowController {
                 resumingPackage)) {
             if (session.backgroundProtected) {
                 session.backgroundProtected = false;
+                session.backgroundNotificationEligible = false;
+                setBackgroundNotification(
+                        session,
+                        false,
+                        "same-package-resume");
                 log(
                         "BACKGROUND_PROTECTED",
                         "pkg=" + session.packageName
@@ -649,10 +722,25 @@ final class OplusFlexibleWindowController {
             return false;
         }
 
+        boolean ordinaryBackground =
+                switchingPackage
+                        || explicitLeave
+                        || recentsBackground;
+
         session.backgroundProtected = true;
+
+        if (ordinaryBackground) {
+            session.backgroundNotificationEligible = true;
+        }
+
         session.taskObject = task;
         session.lastSeenElapsed =
                 SystemClock.elapsedRealtime();
+
+        updateBackgroundNotification(
+                session,
+                null,
+                "background-enter");
 
         log(
                 "BACKGROUND_PAUSE_SUPPRESS",
@@ -690,6 +778,11 @@ final class OplusFlexibleWindowController {
         }
 
         session.backgroundProtected = false;
+        session.backgroundNotificationEligible = false;
+        setBackgroundNotification(
+                session,
+                false,
+                "focused");
         session.activityRecord = activityRecord;
         session.taskObject = task;
         session.lastSeenElapsed =
@@ -719,6 +812,11 @@ final class OplusFlexibleWindowController {
 
         if (finishing) {
             session.backgroundProtected = false;
+            session.backgroundNotificationEligible = false;
+            setBackgroundNotification(
+                    session,
+                    false,
+                    "finishing");
             return false;
         }
 
@@ -737,6 +835,170 @@ final class OplusFlexibleWindowController {
                         + session.taskId);
 
         return true;
+    }
+
+    private void ensureAudioPlaybackMonitor() {
+        if (audioCallbackRegistered
+                || systemContext == null) {
+            return;
+        }
+
+        try {
+            AudioManager manager =
+                    systemContext.getSystemService(
+                            AudioManager.class);
+
+            if (manager == null) return;
+
+            manager.registerAudioPlaybackCallback(
+                    audioPlaybackCallback,
+                    handler);
+
+            audioManager = manager;
+            audioCallbackRegistered = true;
+
+            log(
+                    "BACKGROUND_AUDIO_MONITOR",
+                    "enabled=true");
+        } catch (Throwable t) {
+            log(
+                    "BACKGROUND_AUDIO_MONITOR",
+                    "enabled=false error="
+                            + t.getClass()
+                            .getSimpleName());
+        }
+    }
+
+    private void updateBackgroundNotification(
+            Session session,
+            List<AudioPlaybackConfiguration> configs,
+            String reason
+    ) {
+        if (session == null) return;
+
+        boolean shouldShow =
+                session.active
+                        && session.backgroundProtected
+                        && session.backgroundNotificationEligible
+                        && isPackagePlaybackActive(
+                                session.packageName,
+                                configs);
+
+        setBackgroundNotification(
+                session,
+                shouldShow,
+                reason);
+    }
+
+    private boolean isPackagePlaybackActive(
+            String packageName,
+            List<AudioPlaybackConfiguration> configs
+    ) {
+        if (systemContext == null
+                || packageName == null
+                || packageName.isBlank()) {
+            return false;
+        }
+
+        try {
+            int uid =
+                    systemContext
+                            .getPackageManager()
+                            .getPackageUid(
+                                    packageName,
+                                    0);
+
+            List<AudioPlaybackConfiguration> current =
+                    configs;
+
+            if (current == null) {
+                AudioManager manager =
+                        audioManager;
+
+                if (manager == null) return false;
+
+                current =
+                        manager
+                                .getActivePlaybackConfigurations();
+            }
+
+            if (current == null) return false;
+
+            for (AudioPlaybackConfiguration config :
+                    current) {
+                if (config != null
+                        && config.isActive()
+                        && config.getClientUid()
+                        == uid) {
+                    return true;
+                }
+            }
+        } catch (Throwable t) {
+            log(
+                    "BACKGROUND_AUDIO_QUERY",
+                    "pkg=" + packageName
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName());
+        }
+
+        return false;
+    }
+
+    private void setBackgroundNotification(
+            Session session,
+            boolean active,
+            String reason
+    ) {
+        if (session == null
+                || session.notificationVisible
+                == active) {
+            return;
+        }
+
+        Context context =
+                systemContext;
+
+        if (context == null) return;
+
+        try {
+            Bundle extras =
+                    new Bundle();
+
+            extras.putString(
+                    KEY_PACKAGE_NAME,
+                    session.packageName);
+            extras.putBoolean(
+                    KEY_ACTIVE,
+                    active);
+
+            context.getContentResolver()
+                    .call(
+                            ENGINE_STATUS_URI,
+                            METHOD_BACKGROUND_PLAYBACK,
+                            null,
+                            extras);
+
+            session.notificationVisible = active;
+
+            log(
+                    active
+                            ? "BACKGROUND_NOTIFICATION_SHOW"
+                            : "BACKGROUND_NOTIFICATION_HIDE",
+                    "pkg=" + session.packageName
+                            + " taskId="
+                            + session.taskId
+                            + " reason="
+                            + reason);
+        } catch (Throwable t) {
+            log(
+                    "BACKGROUND_NOTIFICATION_ERROR",
+                    "pkg=" + session.packageName
+                            + " active=" + active
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName());
+        }
     }
 
     boolean shouldSuppressRecentsPause(
@@ -1506,6 +1768,8 @@ final class OplusFlexibleWindowController {
         volatile boolean edgeHung;
         volatile boolean lockKeepAlive;
         volatile boolean backgroundProtected;
+        volatile boolean backgroundNotificationEligible;
+        volatile boolean notificationVisible;
 
         volatile long lastOplusStateElapsed;
         volatile long lastSeenElapsed =
