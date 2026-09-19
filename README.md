@@ -1,5 +1,66 @@
 # MiniWindowGuard / 小窗守护
 
+## 4.5.2
+
+4.5.2 根据 OxygenOS 16 实机诊断加入 **NativeBounds** 模式。
+
+实机已经确认：
+
+- 标准 `WINDOWING_MODE_FREEFORM` 会被 OxygenOS 拒绝，Task 仍保持 fullscreen；
+- 但同一个 display 0 上，Task 的真实 bounds 可以成功变成小窗尺寸；
+- `setAlwaysOnTop(true)` 也会生效；
+- 例如红果 Task 17044 已实际从 1272×2772 改成 774×1330；
+- 4.5.1 只是因为检测到 windowingMode 仍是 fullscreen，就误判失败并回退到 VirtualDisplay。
+
+4.5.2 不再强制要求 FREEFORM。
+
+Native 主引擎现在接受两种后端：
+
+1. `freeform`
+   - ROM 接受标准 Android FREEFORM；
+2. `bounded-fullscreen`
+   - ROM 保持 fullscreen mode；
+   - 但 Task bounds 已真正变小；
+   - Task 仍留在原 display；
+   - SurfaceView / MediaCodec / WebView / GL / 输入焦点继续属于原系统 Task。
+
+只有连真实 Task bounds 都无法修改时，才回退 VirtualDisplay。
+
+### 原生控制层
+
+NativeBounds 新增轻量控制层：
+
+- 返回
+- 拖动标题栏移动真实 Task
+- 缩小
+- 隐藏
+- 关闭/恢复原 Task
+- 右下角拖动改变真实 Task bounds
+- 最小化/隐藏后显示恢复按钮
+
+控制层只是 TYPE_APPLICATION_OVERLAY 按钮和手柄，不包含 App 画面。
+
+App 内容仍然由系统 WindowManager / SurfaceFlinger 直接显示，不经过 TextureView。
+
+### 关键日志
+
+- `NATIVE_BOUNDS_APPLIED`
+- `NATIVE_BOUNDS_CHANGED`
+- `NATIVE_BOUNDS_CHANGE_FAILED`
+- `NATIVE_OVERLAY_READY`
+- `NATIVE_OVERLAY_FAILED`
+- `NATIVE_FREEFORM_FAILED`
+- `NATIVE_FALLBACK_TO_VD`
+
+如果看到：
+
+```
+NATIVE_BOUNDS_APPLIED backend=bounded-fullscreen
+NATIVE_OVERLAY_READY
+```
+
+说明已经完全走 NativeBounds，不应该再创建 `MiniWindowGuard-<taskId>` VirtualDisplay。
+
 ## 4.5.1
 
 4.5.1 修复 4.5.0 中目标 App 启动过快时 Native Freeform 没有真正接管的问题。
