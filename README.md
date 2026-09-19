@@ -1,5 +1,20 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.0 — 修复真正的 Engine 热重载
+
+最新诊断确认：APK 已是 5.3.9/code89，但 system_server 在自动 reload 后仍加载出 version 88。根因是 EngineBridge 使用普通 PathClassLoader；Android 默认父优先，HotReloadEngine 会先从 system_server 已驻留的旧模块 ClassLoader 命中，所以之前的“热重载”实际上会重新实例化旧版本类。
+
+5.4.0 修复：
+
+- 新增专用 ReloadableEngineClassLoader；对 com.yagay.MiniWindowGuard.* 使用 child-first，优先从当前已安装 APK 查找 Engine 及其依赖；
+- Android/Java/framework 类仍走父加载器；
+- 强制校验 HotReloadEngine.class 的实际 ClassLoader 必须就是新的 reload loader；
+- 强制校验 candidate versionCode 必须等于 PackageManager 当前已安装版本；不再允许“reload success 但实际还是旧 Engine”；
+- reload 失败时保留并恢复旧 Engine，不破坏现有运行状态；
+- 后续只修改 HotReloadEngine/OplusFlexibleWindowController/GuardConfig 等 reloadable 逻辑时，升级 APK 后才会真正加载新代码。
+
+Bootstrap API 升为 5。因为这次修改的是固定驻留在 system_server 的 EngineBridge，本版安装后必须完整重启一次设备；从 Bootstrap 5 开始，后续纯 Engine 更新才可以可靠热重载。
+
 ## 5.3.9 — 后台通知与生命周期保护解耦
 
 5.3.8 新诊断确认：抖音退后台后虽然进入 PAUSED/STOPPED，但系统 MediaSession 仍持续 PLAYING 超过 8 秒。也就是说抖音本身可以后台播放，问题只是旧通知逻辑要求先建立 BACKGROUND_PROTECTED Session，导致“不需要保护也能播放”的 App 永远没有 MiniWindowGuard 通知。
