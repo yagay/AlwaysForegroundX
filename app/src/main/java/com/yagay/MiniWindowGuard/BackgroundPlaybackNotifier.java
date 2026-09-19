@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.drawable.Icon;
 
 final class BackgroundPlaybackNotifier {
     private static final String CHANNEL_ID =
@@ -41,6 +42,7 @@ final class BackgroundPlaybackNotifier {
                     context.getPackageManager();
 
             String label = packageName;
+            Icon targetIcon = null;
 
             try {
                 ApplicationInfo info =
@@ -56,6 +58,13 @@ final class BackgroundPlaybackNotifier {
                         && !cs.toString()
                         .isBlank()) {
                     label = cs.toString();
+                }
+
+                if (info.icon != 0) {
+                    targetIcon =
+                            Icon.createWithResource(
+                                    packageName,
+                                    info.icon);
                 }
             } catch (Throwable ignored) {
             }
@@ -78,6 +87,11 @@ final class BackgroundPlaybackNotifier {
                             .setOngoing(true)
                             .setAutoCancel(false)
                             .setShowWhen(false);
+
+            if (targetIcon != null) {
+                builder.setLargeIcon(
+                        targetIcon);
+            }
 
             Intent launch =
                     pm.getLaunchIntentForPackage(
