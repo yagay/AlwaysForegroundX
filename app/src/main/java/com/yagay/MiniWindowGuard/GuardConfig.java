@@ -57,6 +57,10 @@ final class GuardConfig {
         return bool(ConfigKeys.MASTER_ENABLED);
     }
 
+    static boolean useOplusSystemWindow() {
+        return bool(ConfigKeys.OPLUS_SYSTEM_WINDOW);
+    }
+
     static int containerWidth() {
         return ConfigKeys.sanitizePercent(
                 integer(ConfigKeys.CONTAINER_WIDTH),
