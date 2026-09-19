@@ -23,17 +23,14 @@ public final class GuardApp extends Application {
             ConfigKeys.SYSTEM_KEEP_CONTAINER_RESUMED,
             ConfigKeys.SYSTEM_KEEP_CONTAINER_VISIBLE,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
-            ConfigKeys.AUTO_CONTAINER,
-            ConfigKeys.OPLUS_SYSTEM_WINDOW,
+            ConfigKeys.OPLUS_FORCE_SUPPORT,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
 
     private static final String[] INT_KEYS = {
-            ConfigKeys.CONTAINER_WIDTH,
-            ConfigKeys.CONTAINER_HEIGHT,
             ConfigKeys.ENGINE_RELOAD_SEQ,
-            ConfigKeys.CONTAINER_COMMAND_STATE,
-            ConfigKeys.CONTAINER_COMMAND_SEQ
+            ConfigKeys.OPLUS_COMMAND_STATE,
+            ConfigKeys.OPLUS_COMMAND_SEQ
     };
 
     private static volatile GuardApp instance;
@@ -55,7 +52,7 @@ public final class GuardApp extends Application {
 
         if (isUserUnlocked()) {
             commandSeq.set(localPrefs().getInt(
-                    ConfigKeys.CONTAINER_COMMAND_SEQ,
+                    ConfigKeys.OPLUS_COMMAND_SEQ,
                     0));
         } else {
             commandSeq.set(0);
@@ -318,18 +315,18 @@ public final class GuardApp extends Application {
         syncAll();
     }
 
-    static int getContainerState() {
+    static int getOplusState() {
         return ConfigKeys.sanitizeState(
                 getInt(
-                        ConfigKeys.CONTAINER_COMMAND_STATE));
+                        ConfigKeys.OPLUS_COMMAND_STATE));
     }
 
-    static String getContainerPackage() {
+    static String getOplusPackage() {
         return getString(
-                ConfigKeys.CONTAINER_COMMAND_PACKAGE);
+                ConfigKeys.OPLUS_COMMAND_PACKAGE);
     }
 
-    static void sendContainerCommand(
+    static void sendOplusCommand(
             String packageName,
             int state
     ) {
@@ -339,7 +336,7 @@ public final class GuardApp extends Application {
         if (isUserUnlocked()) {
             commandSeq.accumulateAndGet(
                     getInt(
-                            ConfigKeys.CONTAINER_COMMAND_SEQ),
+                            ConfigKeys.OPLUS_COMMAND_SEQ),
                     Math::max);
         }
 
@@ -348,15 +345,15 @@ public final class GuardApp extends Application {
         localPrefs()
                 .edit()
                 .putString(
-                        ConfigKeys.CONTAINER_COMMAND_PACKAGE,
+                        ConfigKeys.OPLUS_COMMAND_PACKAGE,
                         packageName == null
                                 ? ""
                                 : packageName)
                 .putInt(
-                        ConfigKeys.CONTAINER_COMMAND_STATE,
+                        ConfigKeys.OPLUS_COMMAND_STATE,
                         safeState)
                 .putInt(
-                        ConfigKeys.CONTAINER_COMMAND_SEQ,
+                        ConfigKeys.OPLUS_COMMAND_SEQ,
                         seq)
                 .apply();
 
@@ -409,9 +406,9 @@ public final class GuardApp extends Application {
             }
 
             editor.putString(
-                    ConfigKeys.CONTAINER_COMMAND_PACKAGE,
+                    ConfigKeys.OPLUS_COMMAND_PACKAGE,
                     getString(
-                            ConfigKeys.CONTAINER_COMMAND_PACKAGE));
+                            ConfigKeys.OPLUS_COMMAND_PACKAGE));
 
             editor.putString(
                     ConfigKeys.DIAGNOSTICS_STARTED_AT,
