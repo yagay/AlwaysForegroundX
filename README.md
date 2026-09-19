@@ -1,5 +1,26 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.7 — 修复后台-only App 的 TaskInfo 包名识别
+
+5.3.6 已允许后台播放名单建立 OPlus Task Session，但新诊断确认 Controller 自己的
+`taskInfoPackage()` 提取逻辑比 Bootstrap 侧更窄，部分 OPlus TaskInfo（例如抖音）在
+GuardModule 能识别出包名，进入 HotReload Engine 后却变成 `null`，因此仍无法创建 Session。
+
+5.3.7 将 Controller 的包名识别补齐：
+
+- 支持 `packageName` 和 `mPackageName`；
+- 支持 `Intent` 的 component/package；
+- 支持 `baseIntent / intent / mIntent`；
+- 支持 `topActivity / baseActivity / realActivity / mActivityComponent`；
+- 支持 `topActivityInfo`；
+- 支持 `topRunningActivity()` 和 `getTopNonFinishingActivity()` 回退；
+- 统一包名 normalize，避免 `package/class` 形式造成名单匹配失败。
+
+这样只加入“后台播放应用”的 App 也能真正建立 Session，随后进入
+`BACKGROUND_PROTECTED → BACKGROUND_PAUSE_BLOCK → 音频检测 → BACKGROUND_NOTIFICATION_SHOW`。
+
+Bootstrap API 仍为 4，本版只有 HotReload Engine 改动，不需要新增完整重启。
+
 ## 5.3.6 — 后台-only App Session + 目标 App 图标
 
 修复只加入“后台播放应用”但没有加入“始终前台应用”的 App（例如抖音）无法建立 OPlus Task Session：
