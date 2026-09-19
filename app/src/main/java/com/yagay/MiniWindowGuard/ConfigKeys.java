@@ -23,8 +23,6 @@ final class ConfigKeys {
             "fixed_internal_display";
     static final String INTERNAL_DISPLAY_SCALE =
             "internal_display_scale";
-    static final String LOCK_WINDOW_ASPECT =
-            "lock_window_aspect";
     static final String OUTER_MIN_WIDTH_DP =
             "outer_min_width_dp";
     static final String OUTER_MIN_HEIGHT_DP =
@@ -61,8 +59,7 @@ final class ConfigKeys {
                     SYSTEM_KEEP_CONTAINER_VISIBLE,
                     SYSTEM_BLOCK_REMOVE_KILL,
                     AUTO_CONTAINER,
-                    FIXED_INTERNAL_DISPLAY,
-                    LOCK_WINDOW_ASPECT -> true;
+                    FIXED_INTERNAL_DISPLAY -> true;
             default -> false;
         };
     }
