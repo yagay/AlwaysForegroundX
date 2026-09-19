@@ -354,8 +354,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(activityRecord);
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_ICON
-                                && state != ConfigKeys.STATE_HIDDEN) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -408,8 +407,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(activityRecord);
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_ICON
-                                && state != ConfigKeys.STATE_HIDDEN) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -460,8 +458,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(activityRecord);
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_ICON
-                                && state != ConfigKeys.STATE_HIDDEN) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -525,9 +522,8 @@ public final class GuardModule extends XposedModule {
 
 
     /**
-     * Android 16 pauses a freeform/multi-window activity from TaskFragment.startPausing()
-     * when another task becomes focused. ActivityRecord.shouldPauseActivity() is not on
-     * that path, so icon/hidden mode must guard TaskFragment directly.
+     * Keep the top Activity of every managed VirtualDisplay task resumed. Android/OEM
+     * code can still enter TaskFragment.startPausing() when focus changes on display 0.
      */
     private void installTaskFragmentHooks(ClassLoader loader) {
         Class<?> taskFragment = load(
@@ -562,8 +558,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(resumed);
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_ICON
-                                && state != ConfigKeys.STATE_HIDDEN) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -609,8 +604,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(resumed);
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_ICON
-                                && state != ConfigKeys.STATE_HIDDEN) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -654,8 +648,7 @@ public final class GuardModule extends XposedModule {
 
                         String pkg = activityPackage(resumed);
                         int state = current.stateForPackage(pkg);
-                        if (state != ConfigKeys.STATE_ICON
-                                && state != ConfigKeys.STATE_HIDDEN) {
+                        if (state == ConfigKeys.STATE_RELEASED) {
                             return chain.proceed();
                         }
 
@@ -676,9 +669,8 @@ public final class GuardModule extends XposedModule {
     }
 
     /**
-     * OEM paths may call WindowToken.setClientVisible(false) directly after a task
-     * loses focus. Keep only the current managed top activity client-visible while
-     * icon/hidden mode uses SurfaceControl alpha for visual hiding.
+     * OEM paths may call WindowToken.setClientVisible(false) after focus changes.
+     * A managed VirtualDisplay task stays logically visible until it is released.
      */
     private void installWindowTokenHooks(ClassLoader loader) {
         Class<?> windowToken = load(
