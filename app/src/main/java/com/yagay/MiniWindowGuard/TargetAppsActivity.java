@@ -63,15 +63,15 @@ public final class TargetAppsActivity extends Activity {
         root.setBackgroundColor(0xFFF5F6F8);
 
         TextView title = new TextView(this);
-        title.setText("打开小窗");
+        title.setText("打开一加系统小窗");
         title.setTextSize(26);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("选择应用后直接创建独立 VirtualDisplay 小窗。"
-                + "新版使用稳定 TextureView Surface，先完成显示桥再迁移 Task；"
-                + "缩放只在松手后提交一次，减少卡顿。");
+        help.setText("选择应用后先正常启动目标 App，再由 system_server Hook "
+                + "OPlus FlexibleWindow 把真实 Task 切换为一加系统小窗。"
+                + "MiniWindowGuard 不创建任何替代窗口。");
         help.setTextSize(13.5f);
         help.setTextColor(0xFF666A73);
         help.setPadding(0, dp(4), 0, dp(10));
@@ -239,14 +239,15 @@ public final class TargetAppsActivity extends Activity {
                     this,
                     "system_server 仍在运行旧版引擎 code "
                             + GuardApp.getLoadedEngineVersionCode()
-                            + "，请先重新加载 System Engine。",
+                            + "。本次重构修改了 Bootstrap Hook，请重启手机一次后再测试。",
                     Toast.LENGTH_LONG).show();
+            return;
         }
 
         button.setEnabled(false);
 
         try {
-            GuardApp.sendContainerCommand(
+            GuardApp.sendOplusCommand(
                     item.packageName,
                     ConfigKeys.STATE_WINDOW);
 
@@ -261,9 +262,7 @@ public final class TargetAppsActivity extends Activity {
 
             Toast.makeText(
                     this,
-                    GuardApp.getBoolean(ConfigKeys.OPLUS_SYSTEM_WINDOW)
-                            ? "正在切换到一加系统小窗…"
-                            : "正在移动到 VirtualDisplay 兼容窗口…",
+                    "正在交给 OxygenOS 切换系统小窗…",
                     Toast.LENGTH_SHORT).show();
         } catch (Throwable t) {
             CrashStore.record(
@@ -386,7 +385,7 @@ public final class TargetAppsActivity extends Activity {
                             1f));
 
             Button open = new Button(TargetAppsActivity.this);
-            open.setText("打开小窗");
+            open.setText("系统小窗");
             open.setAllCaps(false);
             row.addView(open);
 
