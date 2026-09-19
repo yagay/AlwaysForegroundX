@@ -255,7 +255,7 @@ final class DiagnosticsManager {
 
         out.append("\n[files]\n");
         out.append("30-logcat-full-tail.txt: last 30000 lines from all logcat buffers\n");
-        out.append("31-logcat-filtered.txt: module/TaskSurface/ActivityTaskManager/target-focused view\n");
+        out.append("31-logcat-filtered.txt: module/WCT/TaskSurface/ActivityTaskManager/target-focused view\n");
         out.append("11-24: system state snapshots + LSPosed file/log capture\n");
         out.append("targets/: package/appops/standby/meminfo per protected app\n");
 
