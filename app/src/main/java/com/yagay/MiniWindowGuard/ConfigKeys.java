@@ -19,6 +19,7 @@ final class ConfigKeys {
     static final String SYSTEM_KEEP_MINI_RESUMED = "system_keep_mini_resumed";
     static final String SYSTEM_OPLUS_MULTI_RESUME = "system_oplus_multi_resume";
     static final String SYSTEM_FORCE_ZOOM_SUPPORT = "system_force_zoom_support";
+    static final String SYSTEM_AUTO_SMALL_WINDOW = "system_auto_small_window";
 
     static final String SMALL_WINDOW_FORM = "small_window_form";
     static final String SMALL_WINDOW_WIDTH = "small_window_width";
@@ -48,6 +49,7 @@ final class ConfigKeys {
                     SYSTEM_KEEP_MINI_RESUMED,
                     SYSTEM_OPLUS_MULTI_RESUME,
                     SYSTEM_FORCE_ZOOM_SUPPORT,
+                    SYSTEM_AUTO_SMALL_WINDOW,
                     AOSP_FREEFORM_FALLBACK -> true;
             default -> false;
         };
