@@ -128,8 +128,10 @@ public final class TargetAppsActivity extends Activity {
                         ? "勾选后仅放行该 App 的 OPlus FlexibleWindow 支持/黑名单判断。"
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
                         : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "勾选后，该 App 从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED。"
-                        + "同 App 页面跳转、Activity finishing、强制停止和真实关闭不拦截。"
+                        ? "勾选后会请求把该 App 加入 MiniWindowGuard 的 LSPosed 作用域。"
+                        + "系统层正常完成 Home/应用切换，App 进程层仅阻止生命周期触发的播放器暂停。"
+                        + "用户手动暂停、同 App 页面切换、Activity finishing、强制停止和真实关闭正常放行。"
+                        + "首次授权作用域后请重新打开目标 App。"
                         : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
                         + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
         help.setTextSize(13.5f);

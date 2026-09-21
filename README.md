@@ -1,5 +1,19 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.2 — 通用后台播放保护
+
+5.4.1 已解决返回桌面时 system_server / WMS 卡死，但允许正常 Activity Pause 后，部分 App（例如红果这类在 onPause 中主动暂停播放器的应用）会停止播放。5.4.2 不再恢复 system_server 生命周期强拦截，而是新增通用 App 进程播放保护层。
+
+- `system` 侧继续允许 Home、Recents、切换其他 App 的 Pause 正常完成，保留 5.4.1 的防卡死修复；
+- 模块改为 `staticScope=false`，后台播放列表中的 App 会通过 libxposed Service 请求加入模块作用域；未选择 App 不注入；
+- 目标 App 仅在主进程加载 Universal Playback Guard；
+- 通过 `Instrumentation.callActivityOnPause/callActivityOnStop` 精确标记生命周期退后台调用栈，不使用固定延迟；
+- 仅在这个生命周期调用栈内阻止播放器的 `pause()/stop()` 或 `setPlayWhenReady(false)`；
+- 用户点击暂停、切换视频、正常退出时没有生命周期保护标记，因此仍按原逻辑执行；
+- 通用覆盖 Android MediaPlayer/VideoView、Media3/ExoPlayer、IjkPlayer、TTVideoEngine/VideoShop、VLC、腾讯 TXVod、七牛 PLMediaPlayer、百度云播放器等常见播放栈；
+- BACKGROUND_PROTECTED 的防 Stop、防杀、防冻结逻辑继续由 system_server 负责，因此 App 的 onStop 通常不会到达，App 进程保护层主要解决 onPause 主动暂停；
+- 首次勾选某 App 时 LSPosed 会请求新增作用域；批准后重新打开目标 App 即可，不要求因为本次更新重启整机。
+
 ## 5.4.1 — 修复返回桌面导致 system_server 卡死
 
 本次诊断的关键时间线：14:28:45 Launcher 恢复前台，约 14:28:47 system_server 已开始阻塞；14:28:51 才按下电源键；14:29:55 Watchdog 报告 ActivityManager、Display、Animation 三条系统线程已连续阻塞 68 秒。因此触发点是“返回桌面/切换前台应用”，不是锁屏。

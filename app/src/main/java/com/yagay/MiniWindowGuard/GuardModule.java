@@ -46,12 +46,18 @@ public final class GuardModule extends XposedModule {
     private volatile ClassLoader systemClassLoader;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
+    private volatile String processName = "";
 
     @Override
     public void onModuleLoaded(
             XposedModuleInterface.ModuleLoadedParam param
     ) {
         try {
+            processName =
+                    param == null
+                            ? ""
+                            : String.valueOf(
+                            param.getProcessName());
             remotePrefs =
                     getRemotePreferences(
                             ConfigKeys.REMOTE_GROUP);
@@ -67,6 +73,56 @@ public final class GuardModule extends XposedModule {
                     Log.WARN,
                     TAG,
                     "SYSTEM_SCOPE remote settings unavailable",
+                    t);
+        }
+    }
+
+    @Override
+    public void onPackageReady(
+            XposedModuleInterface.PackageReadyParam param
+    ) {
+        if (param == null
+                || !param.isFirstPackage()) {
+            return;
+        }
+
+        String packageName =
+                param.getPackageName();
+
+        if (packageName == null
+                || packageName.isBlank()
+                || "system".equals(processName)
+                || !packageName.equals(processName)) {
+            return;
+        }
+
+        try {
+            GuardConfig.initialize(
+                    remotePrefs);
+
+            if (!GuardConfig.enabled()
+                    || !GuardConfig
+                    .backgroundPlaybackPackage(
+                            packageName)) {
+                return;
+            }
+
+            AppPlaybackGuard.install(
+                    this,
+                    packageName,
+                    param.getClassLoader());
+
+            log(
+                    Log.INFO,
+                    TAG,
+                    "APP_SCOPE playback guard ready pkg="
+                            + packageName);
+        } catch (Throwable t) {
+            log(
+                    Log.WARN,
+                    TAG,
+                    "APP_SCOPE playback guard failed pkg="
+                            + packageName,
                     t);
         }
     }

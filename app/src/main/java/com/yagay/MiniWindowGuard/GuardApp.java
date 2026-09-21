@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -34,6 +35,12 @@ public final class GuardApp extends Application {
             ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES,
             ConfigKeys.FORCE_SUPPORT_PACKAGES
     };
+
+    private static final String MANAGED_PLAYBACK_SCOPES =
+            "managed_playback_scopes";
+
+    private static final Set<String> pendingScopeRequests =
+            ConcurrentHashMap.newKeySet();
 
     private static volatile GuardApp instance;
     private static volatile XposedService service;
@@ -64,6 +71,7 @@ public final class GuardApp extends Application {
 
                         if (isUserUnlocked()) {
                             syncAll();
+                            reconcileBackgroundPlaybackScopes();
                         }
 
                         Log.i(
@@ -331,6 +339,11 @@ public final class GuardApp extends Application {
                                 : new HashSet<>(value))
                 .apply();
         syncAll();
+
+        if (ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES
+                .equals(key)) {
+            reconcileBackgroundPlaybackScopes();
+        }
     }
 
     static boolean packageSelected(
@@ -340,6 +353,198 @@ public final class GuardApp extends Application {
         return packageName != null
                 && getStringSet(key)
                 .contains(packageName);
+    }
+
+    static boolean hasPlaybackScope(
+            String packageName
+    ) {
+        return packageName != null
+                && getFrameworkScope()
+                .contains(packageName);
+    }
+
+    private static Set<String> managedPlaybackScopes() {
+        Set<String> value =
+                localPrefs().getStringSet(
+                        MANAGED_PLAYBACK_SCOPES,
+                        Collections.emptySet());
+
+        return value == null
+                ? new HashSet<>()
+                : new HashSet<>(value);
+    }
+
+    private static void saveManagedPlaybackScopes(
+            Set<String> value
+    ) {
+        localPrefs()
+                .edit()
+                .putStringSet(
+                        MANAGED_PLAYBACK_SCOPES,
+                        value == null
+                                ? Collections.emptySet()
+                                : new HashSet<>(value))
+                .apply();
+    }
+
+    static synchronized void reconcileBackgroundPlaybackScopes() {
+        XposedService current = service;
+
+        if (current == null
+                || !isUserUnlocked()) {
+            return;
+        }
+
+        Set<String> selected =
+                new HashSet<>(
+                        getStringSet(
+                                ConfigKeys
+                                        .BACKGROUND_PLAYBACK_PACKAGES));
+
+        Set<String> actual;
+
+        try {
+            actual =
+                    new HashSet<>(
+                            current.getScope());
+        } catch (Throwable t) {
+            Log.w(
+                    TAG,
+                    "Failed to read playback scopes",
+                    t);
+            return;
+        }
+
+        Set<String> managed =
+                managedPlaybackScopes();
+
+        for (String packageName : selected) {
+            if (packageName == null
+                    || packageName.isBlank()
+                    || actual.contains(packageName)
+                    || !pendingScopeRequests
+                    .add(packageName)) {
+                continue;
+            }
+
+            try {
+                current.requestScope(
+                        packageName,
+                        new XposedService
+                                .OnScopeEventListener() {
+                            @Override
+                            public void onScopeRequestApproved(
+                                    String approved
+                            ) {
+                                pendingScopeRequests.remove(
+                                        approved);
+
+                                Set<String> owned =
+                                        managedPlaybackScopes();
+                                owned.add(approved);
+                                saveManagedPlaybackScopes(
+                                        owned);
+
+                                Log.i(
+                                        TAG,
+                                        "Playback scope approved: "
+                                                + approved);
+                            }
+
+                            @Override
+                            public void onScopeRequestDenied(
+                                    String denied
+                            ) {
+                                pendingScopeRequests.remove(
+                                        denied);
+                                Log.w(
+                                        TAG,
+                                        "Playback scope denied: "
+                                                + denied);
+                            }
+
+                            @Override
+                            public void onScopeRequestTimeout(
+                                    String timedOut
+                            ) {
+                                pendingScopeRequests.remove(
+                                        timedOut);
+                                Log.w(
+                                        TAG,
+                                        "Playback scope timeout: "
+                                                + timedOut);
+                            }
+
+                            @Override
+                            public void onScopeRequestFailed(
+                                    String failed,
+                                    String message
+                            ) {
+                                pendingScopeRequests.remove(
+                                        failed);
+                                Log.w(
+                                        TAG,
+                                        "Playback scope failed: "
+                                                + failed
+                                                + " error="
+                                                + message);
+                            }
+                        });
+            } catch (Throwable t) {
+                pendingScopeRequests.remove(
+                        packageName);
+
+                Log.w(
+                        TAG,
+                        "Failed to request playback scope "
+                                + packageName,
+                        t);
+            }
+        }
+
+        boolean managedChanged = false;
+
+        for (String packageName :
+                new HashSet<>(managed)) {
+            if (selected.contains(packageName)) {
+                continue;
+            }
+
+            try {
+                String error =
+                        current.removeScope(
+                                packageName);
+
+                if (error == null) {
+                    managed.remove(
+                            packageName);
+                    managedChanged = true;
+
+                    Log.i(
+                            TAG,
+                            "Playback scope removed: "
+                                    + packageName);
+                } else {
+                    Log.w(
+                            TAG,
+                            "Playback scope remove failed: "
+                                    + packageName
+                                    + " error="
+                                    + error);
+                }
+            } catch (Throwable t) {
+                Log.w(
+                        TAG,
+                        "Failed to remove playback scope "
+                                + packageName,
+                        t);
+            }
+        }
+
+        if (managedChanged) {
+            saveManagedPlaybackScopes(
+                    managed);
+        }
     }
 
     static boolean requestEngineReload() {
