@@ -19,6 +19,7 @@ public final class EngineStatusProvider extends ContentProvider {
             "backgroundPlaybackNotification";
     static final String KEY_PACKAGE_NAME = "package_name";
     static final String KEY_ACTIVE = "active";
+    static final String KEY_REASON = "reason";
 
     private static final String PREFS = "engine_status";
     static final String KEY_VERSION = "version";
@@ -101,16 +102,19 @@ public final class EngineStatusProvider extends ContentProvider {
                                     KEY_ACTIVE,
                                     false);
 
+            String reason =
+                    extras == null
+                            ? ""
+                            : extras.getString(
+                                    KEY_REASON,
+                                    "");
+
             if (!packageName.isBlank()) {
-                if (active) {
-                    BackgroundPlaybackNotifier.show(
-                            context,
-                            packageName);
-                } else {
-                    BackgroundPlaybackNotifier.hide(
-                            context,
-                            packageName);
-                }
+                BackgroundPlaybackNotifier.update(
+                        context,
+                        packageName,
+                        active,
+                        reason);
             }
 
             Bundle result = new Bundle();
