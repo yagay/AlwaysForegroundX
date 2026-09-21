@@ -797,9 +797,12 @@ final class OplusFlexibleWindowController {
                 null,
                 "background-enter");
 
+        // Let Android complete Activity pause for Home, app switching and
+        // display sleep/keyguard. The app-process Universal Playback Guard
+        // keeps selected players running while framework visibility handling
+        // is free to hide the video surface.
         boolean suppressFrameworkPause =
-                uiSleeping
-                        && !ordinaryBackground;
+                false;
 
         log(
                 suppressFrameworkPause

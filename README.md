@@ -1,5 +1,19 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.5 — 锁屏只保播放，不保画面
+
+修复“App 在前台播放时锁屏后仍能看到视频”的问题。此前锁屏保活同时阻止了 Activity Pause 和窗口隐藏，导致播放状态与画面可见性被错误绑定。
+
+- 后台播放应用在 `uiSleeping/keyguard` 场景不再阻止 framework Pause；
+- Android 可以正常执行 Activity/窗口隐藏和 Surface 隐藏，因此锁屏后不再显示视频画面；
+- App 进程侧 Universal Playback Guard 继续只拦截生命周期触发的播放器 `pause()/stop()/setPlayWhenReady(false)`，尽量保持音频/播放不中断；
+- 删除锁屏期间对 `ActivityRecord.setVisibility(false)` / `makeInvisible()` 的强制阻止；
+- 一加小窗锁屏仍保留 `sleepIfPossible`、Hans/AOSP freezer、`doStopUidLocked`、进程重要性等保活保护；
+- 用户主动暂停、退出、强制停止仍正常执行；
+- 主页面作用域说明同步更新：system 为系统作用域，后台播放 App 按需动态加入。
+
+Bootstrap API 升到 6。本版修改了固定驻留在 system_server 的 GuardModule/EngineBridge，安装后需要完整重启手机一次，不能只依赖 Engine 热重载。
+
 ## 5.4.4 — 修复状态栏/导航栏遮挡
 
 - 新增统一 `SystemBarInsets` 适配层；

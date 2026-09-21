@@ -1268,109 +1268,12 @@ public final class GuardModule extends XposedModule {
             }
         }
 
-        // OPlus itself hides the flexible Activity inside
-        // FlexibleTaskController.onScreenLockedChanged. For an always-foreground
-        // OPlus task, suppress only those exact visibility calls while the OEM
-        // lock callback is on this thread. This is deliberately NOT a global
-        // Activity lifecycle override.
-        Class<?> lockActivityRecord =
-                load(
-                        loader,
-                        "com.android.server.wm.ActivityRecord");
-
-        if (lockActivityRecord != null) {
-            for (Method method :
-                    lockActivityRecord.getDeclaredMethods()) {
-                String name = method.getName();
-
-                boolean visibilityMethod =
-                        "setVisibility".equals(name)
-                                && method.getReturnType()
-                                == void.class
-                                && method.getParameterCount()
-                                >= 1;
-
-                boolean makeInvisibleMethod =
-                        "makeInvisible".equals(name)
-                                && method.getReturnType()
-                                == void.class;
-
-                if (!visibilityMethod
-                        && !makeInvisibleMethod) {
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    String hookKey =
-                            "lock-visibility:"
-                                    + method.toGenericString();
-
-                    if (!installedHooks.add(hookKey)) {
-                        continue;
-                    }
-
-                    hook(method).intercept(chain -> {
-                        if (visibilityMethod) {
-                            Boolean visible = null;
-
-                            for (Object arg :
-                                    chain.getArgs()) {
-                                if (arg instanceof Boolean) {
-                                    visible =
-                                            (Boolean) arg;
-                                    break;
-                                }
-                            }
-
-                            if (!Boolean.FALSE.equals(
-                                    visible)) {
-                                return chain.proceed();
-                            }
-                        }
-
-                        Object activityRecord =
-                                chain.getThisObject();
-
-                        String pkg =
-                                activityPackage(
-                                        activityRecord);
-
-                        Object task =
-                                invokeNoArg(
-                                        activityRecord,
-                                        "getTask");
-
-                        EngineBridge current = engine;
-
-                        if (current != null
-                                && task != null
-                                && current.shouldKeepTaskAwake(
-                                task)
-                                && isSleepingActivity(
-                                activityRecord)) {
-                            diag(
-                                    "OPLUS_LOCK_VISIBILITY_BLOCK",
-                                    "method=" + name
-                                            + " pkg=" + pkg
-                                            + " activity="
-                                            + fieldValue(
-                                            activityRecord,
-                                            "mActivityComponent"));
-
-                            return null;
-                        }
-
-                        return chain.proceed();
-                    });
-                } catch (Throwable t) {
-                    installedHooks.remove(
-                            "lock-visibility:"
-                                    + method.toGenericString());
-                }
-            }
-        }
+        // Do not suppress ActivityRecord.setVisibility(false) or
+        // makeInvisible() during keyguard. Playback keepalive and window
+        // visibility are separate: the task can stay alive while Android hides
+        // its surface behind the lock screen. Sleep/freezer/kill guards below
+        // remain active, and the app-process playback guard handles
+        // lifecycle-triggered player pause calls.
 
         Class<?> taskFragment =
                 load(

@@ -141,7 +141,7 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "运行状态",
-                        "核心运行在 system_server，目标 App 不需要加入 LSPosed 作用域。");
+                        "系统核心运行在 system_server；后台播放应用会按需加入 LSPosed 作用域以加载通用播放守护。");
 
         engineStatus =
                 statusLine(
@@ -151,7 +151,7 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 statusLine(
-                        "LSPosed 固定作用域：system / system_server"));
+                        "LSPosed 系统作用域：system；后台播放应用按需动态加入"));
 
         addSwitch(
                 card,
