@@ -53,10 +53,7 @@ final class AppPlaybackGuard {
                         Context context,
                         Intent intent
                 ) {
-                    if (intent == null
-                            || !PlaybackControlContract
-                            .ACTION_PAUSE.equals(
-                                    intent.getAction())) {
+                    if (intent == null) {
                         return;
                     }
 
@@ -71,7 +68,41 @@ final class AppPlaybackGuard {
                         return;
                     }
 
-                    pauseFromNotification();
+                    String action =
+                            intent.getAction();
+
+                    if (PlaybackControlContract
+                            .ACTION_PAUSE
+                            .equals(action)) {
+                        controlFromNotification(
+                                false,
+                                KeyEvent.KEYCODE_MEDIA_PAUSE);
+                        return;
+                    }
+
+                    if (PlaybackControlContract
+                            .ACTION_PLAY
+                            .equals(action)) {
+                        controlFromNotification(
+                                true,
+                                KeyEvent.KEYCODE_MEDIA_PLAY);
+                        return;
+                    }
+
+                    if (PlaybackControlContract
+                            .ACTION_PREVIOUS
+                            .equals(action)) {
+                        skipFromNotification(
+                                false);
+                        return;
+                    }
+
+                    if (PlaybackControlContract
+                            .ACTION_NEXT
+                            .equals(action)) {
+                        skipFromNotification(
+                                true);
+                    }
                 }
             };
 
@@ -624,9 +655,19 @@ final class AppPlaybackGuard {
 
             try {
                 IntentFilter filter =
-                        new IntentFilter(
-                                PlaybackControlContract
-                                        .ACTION_PAUSE);
+                        new IntentFilter();
+                filter.addAction(
+                        PlaybackControlContract
+                                .ACTION_PAUSE);
+                filter.addAction(
+                        PlaybackControlContract
+                                .ACTION_PLAY);
+                filter.addAction(
+                        PlaybackControlContract
+                                .ACTION_PREVIOUS);
+                filter.addAction(
+                        PlaybackControlContract
+                                .ACTION_NEXT);
 
                 if (Build.VERSION.SDK_INT >= 33) {
                     context.registerReceiver(
@@ -664,20 +705,70 @@ final class AppPlaybackGuard {
         }
     }
 
-    private void pauseFromNotification() {
+    private void controlFromNotification(
+            boolean play,
+            int fallbackKeyCode
+    ) {
         Object player =
                 currentPlayer.get();
 
-        if (player != null
-                && invokePause(player)) {
-            log(
-                    Log.INFO,
-                    "APP_PLAYBACK_CONTROL_PAUSE",
-                    "pkg=" + packageName
-                            + " mode=direct");
-            return;
+        boolean direct =
+                player != null
+                        && (play
+                        ? invokePlay(player)
+                        : invokePause(player));
+
+        if (!direct) {
+            dispatchMediaKey(
+                    fallbackKeyCode);
         }
 
+        log(
+                Log.INFO,
+                play
+                        ? "APP_PLAYBACK_CONTROL_PLAY"
+                        : "APP_PLAYBACK_CONTROL_PAUSE",
+                "pkg=" + packageName
+                        + " mode="
+                        + (direct
+                        ? "direct"
+                        : "media-key"));
+    }
+
+    private void skipFromNotification(
+            boolean next
+    ) {
+        Object player =
+                currentPlayer.get();
+
+        boolean direct =
+                player != null
+                        && invokeSkip(
+                        player,
+                        next);
+
+        if (!direct) {
+            dispatchMediaKey(
+                    next
+                            ? KeyEvent.KEYCODE_MEDIA_NEXT
+                            : KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+        }
+
+        log(
+                Log.INFO,
+                next
+                        ? "APP_PLAYBACK_CONTROL_NEXT"
+                        : "APP_PLAYBACK_CONTROL_PREVIOUS",
+                "pkg=" + packageName
+                        + " mode="
+                        + (direct
+                        ? "direct"
+                        : "media-key"));
+    }
+
+    private void dispatchMediaKey(
+            int keyCode
+    ) {
         Context context = appContext;
 
         if (context == null) {
@@ -702,7 +793,7 @@ final class AppPlaybackGuard {
                             now,
                             now,
                             KeyEvent.ACTION_DOWN,
-                            KeyEvent.KEYCODE_MEDIA_PAUSE,
+                            keyCode,
                             0));
 
             audioManager.dispatchMediaKeyEvent(
@@ -710,19 +801,15 @@ final class AppPlaybackGuard {
                             now,
                             now,
                             KeyEvent.ACTION_UP,
-                            KeyEvent.KEYCODE_MEDIA_PAUSE,
+                            keyCode,
                             0));
-
-            log(
-                    Log.INFO,
-                    "APP_PLAYBACK_CONTROL_PAUSE",
-                    "pkg=" + packageName
-                            + " mode=media-key");
         } catch (Throwable t) {
             log(
                     Log.WARN,
                     "APP_PLAYBACK_CONTROL_FAILED",
                     "pkg=" + packageName
+                            + " keyCode="
+                            + keyCode
                             + " error="
                             + t.getClass()
                             .getSimpleName());
@@ -732,18 +819,95 @@ final class AppPlaybackGuard {
     private boolean invokePause(
             Object player
     ) {
-        Class<?> type =
-                player.getClass();
+        if (invokeNoArg(
+                player,
+                "pause")) {
+            return true;
+        }
 
-        for (Class<?> current = type;
+        return invokeBoolean(
+                player,
+                "setPlayWhenReady",
+                false);
+    }
+
+    private boolean invokePlay(
+            Object player
+    ) {
+        if (invokeNoArg(
+                player,
+                "play")) {
+            return true;
+        }
+
+        if (invokeNoArg(
+                player,
+                "start")) {
+            return true;
+        }
+
+        if (invokeNoArg(
+                player,
+                "resume")) {
+            return true;
+        }
+
+        return invokeBoolean(
+                player,
+                "setPlayWhenReady",
+                true);
+    }
+
+    private boolean invokeSkip(
+            Object player,
+            boolean next
+    ) {
+        String[] names =
+                next
+                        ? new String[]{
+                        "seekToNextMediaItem",
+                        "seekToNext",
+                        "next",
+                        "playNext",
+                        "skipToNext"
+                }
+                        : new String[]{
+                        "seekToPreviousMediaItem",
+                        "seekToPrevious",
+                        "previous",
+                        "playPrevious",
+                        "skipToPrevious"
+                };
+
+        for (String name : names) {
+            if (invokeNoArg(
+                    player,
+                    name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean invokeNoArg(
+            Object target,
+            String methodName
+    ) {
+        if (target == null) {
+            return false;
+        }
+
+        for (Class<?> current =
+             target.getClass();
              current != null;
              current = current.getSuperclass()) {
             try {
-                Method pause =
+                Method method =
                         current.getDeclaredMethod(
-                                "pause");
-                pause.setAccessible(true);
-                pause.invoke(player);
+                                methodName);
+                method.setAccessible(true);
+                method.invoke(target);
                 return true;
             } catch (NoSuchMethodException ignored) {
             } catch (Throwable t) {
@@ -751,19 +915,31 @@ final class AppPlaybackGuard {
             }
         }
 
-        for (Class<?> current = type;
+        return false;
+    }
+
+    private boolean invokeBoolean(
+            Object target,
+            String methodName,
+            boolean value
+    ) {
+        if (target == null) {
+            return false;
+        }
+
+        for (Class<?> current =
+             target.getClass();
              current != null;
              current = current.getSuperclass()) {
             try {
-                Method setPlayWhenReady =
+                Method method =
                         current.getDeclaredMethod(
-                                "setPlayWhenReady",
+                                methodName,
                                 boolean.class);
-                setPlayWhenReady.setAccessible(
-                        true);
-                setPlayWhenReady.invoke(
-                        player,
-                        false);
+                method.setAccessible(true);
+                method.invoke(
+                        target,
+                        value);
                 return true;
             } catch (NoSuchMethodException ignored) {
             } catch (Throwable t) {
