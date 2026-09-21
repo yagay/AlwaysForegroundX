@@ -49,6 +49,7 @@ public final class TargetAppsActivity extends Activity {
     private ProgressBar progress;
     private EditText search;
     private TextView countView;
+    private Button scopeSyncButton;
     private String mode;
     private String preferenceKey;
 
@@ -153,6 +154,22 @@ public final class TargetAppsActivity extends Activity {
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        if (MODE_BACKGROUND_PLAYBACK
+                .equals(mode)) {
+            scopeSyncButton =
+                    new Button(this);
+            scopeSyncButton.setText(
+                    "同步到 LSPosed 作用域");
+            scopeSyncButton.setAllCaps(false);
+            scopeSyncButton.setOnClickListener(
+                    v -> syncSelectedScopes());
+            root.addView(
+                    scopeSyncButton,
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
 
         countView =
                 new TextView(this);
@@ -370,6 +387,22 @@ public final class TargetAppsActivity extends Activity {
             }
         }
 
+        filteredApps.sort(
+                Comparator
+                        .comparing(
+                                (AppItem item) ->
+                                        selected.contains(
+                                                item.packageName)
+                                                ? 0
+                                                : 1)
+                        .thenComparing(
+                                item ->
+                                        item.label,
+                                String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing(
+                                item ->
+                                        item.packageName));
+
         if (adapter != null) {
             adapter.notifyDataSetChanged();
         }
@@ -391,18 +424,126 @@ public final class TargetAppsActivity extends Activity {
                 preferenceKey,
                 selected);
 
-        refreshCount();
+        applyFilter(
+                search == null
+                        ? ""
+                        : search
+                        .getText()
+                        .toString());
+    }
+
+    private void syncSelectedScopes() {
+        if (!MODE_BACKGROUND_PLAYBACK
+                .equals(mode)) {
+            return;
+        }
+
+        if (selected.isEmpty()) {
+            Toast.makeText(
+                    this,
+                    "请先选择后台播放应用",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (scopeSyncButton != null) {
+            scopeSyncButton.setEnabled(
+                    false);
+            scopeSyncButton.setText(
+                    "正在请求 LSPosed…");
+        }
+
+        GuardApp.syncAll();
+
+        GuardApp.requestSelectedPlaybackScopes(
+                new HashSet<>(selected),
+                (selectedCount,
+                 alreadyPresent,
+                 addedCount,
+                 notAddedCount,
+                 error) ->
+                        runOnUiThread(() -> {
+                            if (scopeSyncButton != null) {
+                                scopeSyncButton.setEnabled(
+                                        true);
+                                scopeSyncButton.setText(
+                                        "同步到 LSPosed 作用域");
+                            }
+
+                            String message;
+
+                            if (error != null
+                                    && !error.isBlank()) {
+                                message =
+                                        "同步失败："
+                                                + error;
+                            } else if (notAddedCount > 0) {
+                                message =
+                                        "已选择 "
+                                                + selectedCount
+                                                + " 个，已在作用域 "
+                                                + alreadyPresent
+                                                + " 个，本次新增 "
+                                                + addedCount
+                                                + " 个，仍有 "
+                                                + notAddedCount
+                                                + " 个未加入";
+                            } else {
+                                message =
+                                        "同步完成：已选择 "
+                                                + selectedCount
+                                                + " 个，已在作用域 "
+                                                + alreadyPresent
+                                                + " 个，本次新增 "
+                                                + addedCount
+                                                + " 个";
+                            }
+
+                            Toast.makeText(
+                                    this,
+                                    message
+                                            + "\n新增后重新打开目标 App 生效",
+                                    notAddedCount > 0
+                                            || error != null
+                                            ? Toast.LENGTH_LONG
+                                            : Toast.LENGTH_SHORT)
+                                    .show();
+
+                            refreshCount();
+                        }));
     }
 
     private void refreshCount() {
         if (countView == null) return;
 
-        countView.setText(
-                "已选择 "
-                        + selected.size()
-                        + " 个 · 当前显示 "
-                        + filteredApps.size()
-                        + " 个");
+        if (MODE_BACKGROUND_PLAYBACK
+                .equals(mode)) {
+            int scoped = 0;
+
+            for (String packageName :
+                    selected) {
+                if (GuardApp.hasPlaybackScope(
+                        packageName)) {
+                    scoped++;
+                }
+            }
+
+            countView.setText(
+                    "已选择 "
+                            + selected.size()
+                            + " 个 · 已加入 LSPosed "
+                            + scoped
+                            + " 个 · 当前显示 "
+                            + filteredApps.size()
+                            + " 个");
+        } else {
+            countView.setText(
+                    "已选择 "
+                            + selected.size()
+                            + " 个 · 当前显示 "
+                            + filteredApps.size()
+                            + " 个");
+        }
     }
 
     private void showFatal(Throwable t) {

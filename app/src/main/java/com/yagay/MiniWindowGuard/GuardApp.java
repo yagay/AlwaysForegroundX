@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.UserManager;
 import android.util.Log;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -41,6 +42,16 @@ public final class GuardApp extends Application {
 
     private static final Set<String> pendingScopeRequests =
             ConcurrentHashMap.newKeySet();
+
+    interface PlaybackScopeSyncCallback {
+        void onResult(
+                int selectedCount,
+                int alreadyPresent,
+                int addedCount,
+                int notAddedCount,
+                String error
+        );
+    }
 
     private static volatile GuardApp instance;
     private static volatile XposedService service;
@@ -385,6 +396,186 @@ public final class GuardApp extends Application {
                                 ? Collections.emptySet()
                                 : new HashSet<>(value))
                 .apply();
+    }
+
+    static void requestSelectedPlaybackScopes(
+            Set<String> packages,
+            PlaybackScopeSyncCallback callback
+    ) {
+        XposedService current = service;
+
+        if (current == null) {
+            if (callback != null) {
+                callback.onResult(
+                        packages == null
+                                ? 0
+                                : packages.size(),
+                        0,
+                        0,
+                        packages == null
+                                ? 0
+                                : packages.size(),
+                        "LSPosed 服务未连接");
+            }
+            return;
+        }
+
+        Set<String> selected =
+                packages == null
+                        ? Collections.emptySet()
+                        : new HashSet<>(packages);
+
+        selected.removeIf(
+                packageName ->
+                        packageName == null
+                                || packageName.isBlank());
+
+        if (selected.isEmpty()) {
+            if (callback != null) {
+                callback.onResult(
+                        0,
+                        0,
+                        0,
+                        0,
+                        null);
+            }
+            return;
+        }
+
+        List<String> actual;
+
+        try {
+            actual =
+                    current.getScope();
+        } catch (Throwable t) {
+            if (callback != null) {
+                callback.onResult(
+                        selected.size(),
+                        0,
+                        0,
+                        selected.size(),
+                        "读取 LSPosed 作用域失败："
+                                + t.getClass()
+                                .getSimpleName());
+            }
+            return;
+        }
+
+        HashSet<String> actualSet =
+                new HashSet<>(
+                        actual == null
+                                ? Collections.emptyList()
+                                : actual);
+
+        ArrayList<String> missing =
+                new ArrayList<>();
+
+        for (String packageName : selected) {
+            if (!actualSet.contains(
+                    packageName)) {
+                missing.add(
+                        packageName);
+            }
+        }
+
+        int alreadyPresent =
+                selected.size()
+                        - missing.size();
+
+        if (missing.isEmpty()) {
+            if (callback != null) {
+                callback.onResult(
+                        selected.size(),
+                        alreadyPresent,
+                        0,
+                        0,
+                        null);
+            }
+            return;
+        }
+
+        pendingScopeRequests.removeAll(
+                missing);
+
+        try {
+            current.requestScope(
+                    missing,
+                    new XposedService
+                            .OnScopeEventListener() {
+                        @Override
+                        public void onScopeRequestApproved(
+                                List<String> approved
+                        ) {
+                            HashSet<String> approvedSet =
+                                    new HashSet<>(
+                                            approved == null
+                                                    ? Collections.emptyList()
+                                                    : approved);
+
+                            approvedSet.retainAll(
+                                    missing);
+
+                            Set<String> managed =
+                                    managedPlaybackScopes();
+                            managed.addAll(
+                                    approvedSet);
+                            saveManagedPlaybackScopes(
+                                    managed);
+
+                            pendingScopeRequests.removeAll(
+                                    missing);
+
+                            int added =
+                                    approvedSet.size();
+                            int notAdded =
+                                    missing.size()
+                                            - added;
+
+                            if (callback != null) {
+                                callback.onResult(
+                                        selected.size(),
+                                        alreadyPresent,
+                                        added,
+                                        notAdded,
+                                        null);
+                            }
+                        }
+
+                        @Override
+                        public void onScopeRequestFailed(
+                                String message
+                        ) {
+                            pendingScopeRequests.removeAll(
+                                    missing);
+
+                            if (callback != null) {
+                                callback.onResult(
+                                        selected.size(),
+                                        alreadyPresent,
+                                        0,
+                                        missing.size(),
+                                        message == null
+                                                || message.isBlank()
+                                                ? "LSPosed 拒绝或未完成作用域请求"
+                                                : message);
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            pendingScopeRequests.removeAll(
+                    missing);
+
+            if (callback != null) {
+                callback.onResult(
+                        selected.size(),
+                        alreadyPresent,
+                        0,
+                        missing.size(),
+                        "请求 LSPosed 作用域失败："
+                                + t.getClass()
+                                .getSimpleName());
+            }
+        }
     }
 
     static synchronized void reconcileBackgroundPlaybackScopes() {
