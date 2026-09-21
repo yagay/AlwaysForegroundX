@@ -429,63 +429,46 @@ public final class GuardApp extends Application {
 
             try {
                 current.requestScope(
-                        packageName,
+                        Collections.singletonList(
+                                packageName),
                         new XposedService
                                 .OnScopeEventListener() {
                             @Override
                             public void onScopeRequestApproved(
-                                    String approved
+                                    List<String> approved
                             ) {
                                 pendingScopeRequests.remove(
-                                        approved);
+                                        packageName);
+
+                                if (approved == null
+                                        || !approved.contains(
+                                        packageName)) {
+                                    return;
+                                }
 
                                 Set<String> owned =
                                         managedPlaybackScopes();
-                                owned.add(approved);
+                                owned.add(
+                                        packageName);
                                 saveManagedPlaybackScopes(
                                         owned);
 
                                 Log.i(
                                         TAG,
                                         "Playback scope approved: "
-                                                + approved);
-                            }
-
-                            @Override
-                            public void onScopeRequestDenied(
-                                    String denied
-                            ) {
-                                pendingScopeRequests.remove(
-                                        denied);
-                                Log.w(
-                                        TAG,
-                                        "Playback scope denied: "
-                                                + denied);
-                            }
-
-                            @Override
-                            public void onScopeRequestTimeout(
-                                    String timedOut
-                            ) {
-                                pendingScopeRequests.remove(
-                                        timedOut);
-                                Log.w(
-                                        TAG,
-                                        "Playback scope timeout: "
-                                                + timedOut);
+                                                + packageName);
                             }
 
                             @Override
                             public void onScopeRequestFailed(
-                                    String failed,
                                     String message
                             ) {
                                 pendingScopeRequests.remove(
-                                        failed);
+                                        packageName);
                                 Log.w(
                                         TAG,
                                         "Playback scope failed: "
-                                                + failed
+                                                + packageName
                                                 + " error="
                                                 + message);
                             }
@@ -511,27 +494,18 @@ public final class GuardApp extends Application {
             }
 
             try {
-                String error =
-                        current.removeScope(
-                                packageName);
+                current.removeScope(
+                        Collections.singletonList(
+                                packageName));
 
-                if (error == null) {
-                    managed.remove(
-                            packageName);
-                    managedChanged = true;
+                managed.remove(
+                        packageName);
+                managedChanged = true;
 
-                    Log.i(
-                            TAG,
-                            "Playback scope removed: "
-                                    + packageName);
-                } else {
-                    Log.w(
-                            TAG,
-                            "Playback scope remove failed: "
-                                    + packageName
-                                    + " error="
-                                    + error);
-                }
+                Log.i(
+                        TAG,
+                        "Playback scope removed: "
+                                + packageName);
             } catch (Throwable t) {
                 Log.w(
                         TAG,
