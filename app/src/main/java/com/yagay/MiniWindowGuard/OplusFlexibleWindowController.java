@@ -44,6 +44,7 @@ final class OplusFlexibleWindowController {
             "backgroundPlaybackNotification";
     private static final String KEY_PACKAGE_NAME = "package_name";
     private static final String KEY_ACTIVE = "active";
+    private static final String KEY_REASON = "reason";
 
     private final Handler handler;
     private final Logger logger;
@@ -1255,7 +1256,10 @@ final class OplusFlexibleWindowController {
                         backgroundNotificationStates
                                 .get(packageName));
 
-        if (visible == active) {
+        // A notification manually paused by the user can remain visible
+        // while audio is inactive. Always forward inactive events so the app
+        // process can distinguish audio-only inactivity from real cleanup.
+        if (active && visible) {
             return;
         }
 
@@ -1274,6 +1278,11 @@ final class OplusFlexibleWindowController {
             extras.putBoolean(
                     KEY_ACTIVE,
                     active);
+            extras.putString(
+                    KEY_REASON,
+                    reason == null
+                            ? ""
+                            : reason);
 
             context.getContentResolver()
                     .call(
