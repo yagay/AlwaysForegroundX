@@ -1,5 +1,23 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.7 — 完整通知媒体控制
+
+后台播放通知改为三键 MediaStyle，并按当前状态显示中间按钮：
+
+- 上一曲 ｜ 状态按钮 ｜ 下一曲；
+- ▶ 表示当前正在播放；点击后暂停并立即变为 ‖；
+- ‖ 表示当前已经暂停；再次点击恢复播放并立即变回 ▶；
+- 播放状态使用 ongoing 通知，不可滑动清除；
+- 暂停状态取消 ongoing，可以直接滑动清除；
+- 暂停后即使 AudioPlaybackCallback 报告 inactive，也保留通知，不会因为音频停止而自动消失；
+- 返回目标 App、退出、移出后台播放名单、Task 消失、Engine 关闭等真实清理场景仍会撤销通知；
+- 上一曲/下一曲优先调用常见播放器 previous/next/seekToPreviousMediaItem/seekToNextMediaItem 等入口；
+- 无法直接识别播放器时，回退标准 MEDIA_PREVIOUS / MEDIA_NEXT；播放/暂停同样有 MEDIA_PLAY / MEDIA_PAUSE 回退；
+- 通知按钮先由 MiniWindowGuard 自己接收并立即刷新 UI 状态，再定向转发给该通知对应的目标 App；
+- 点击整条通知仍然返回目标 App。
+
+Bootstrap API 仍为 6；本版不新增 system_server 固定 Hook。安装后重新打开目标后台播放 App，使新的 App 进程守护加载即可。
+
 ## 5.4.6 — 通知栏真正的“暂停”按钮
 
 - 原通知里的三角形是 small icon，并不是可点击按钮；Android 的通知小图标本身不能单独接点击事件；
