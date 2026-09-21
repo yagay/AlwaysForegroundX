@@ -1,5 +1,18 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.6 — 通知栏真正的“暂停”按钮
+
+- 原通知里的三角形是 small icon，并不是可点击按钮；Android 的通知小图标本身不能单独接点击事件；
+- 展开后台播放通知后新增明确的“双竖线 暂停” Action；
+- 通知 Action 使用目标包名发送，只控制该通知对应的后台播放 App；
+- Universal Playback Guard 会跟踪常见播放器最近的播放实例，优先直接调用该实例的 `pause()` / `setPlayWhenReady(false)`；
+- 如果无法识别播放器实例，再在目标 App 进程内退回标准 `KEYCODE_MEDIA_PAUSE`；
+- 点击整条通知仍然返回目标 App；
+- 暂停后 AudioPlaybackCallback 检测到不再播放时会自动撤销后台播放通知；
+- 控制广播使用 MiniWindowGuard 自定义 signature 权限，避免其他普通 App 随意发送暂停控制。
+
+Bootstrap API 仍为 6；本版未新增 system_server 固定 Hook。已运行 Bootstrap 6 的设备不需要因为本次更新再次完整重启，但需要重新打开目标 App，让新的 App 进程播放守护加载。
+
 ## 5.4.5 — 锁屏只保播放，不保画面
 
 修复“App 在前台播放时锁屏后仍能看到视频”的问题。此前锁屏保活同时阻止了 Activity Pause 和窗口隐藏，导致播放状态与画面可见性被错误绑定。

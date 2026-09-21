@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <permission
+        android:name="com.yagay.MiniWindowGuard.permission.CONTROL_PLAYBACK"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="com.yagay.MiniWindowGuard.permission.CONTROL_PLAYBACK" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

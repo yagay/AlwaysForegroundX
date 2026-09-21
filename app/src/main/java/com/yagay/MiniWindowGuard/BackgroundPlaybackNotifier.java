@@ -78,7 +78,7 @@ final class BackgroundPlaybackNotifier {
                             .setContentTitle(
                                     label + " 正在后台播放")
                             .setContentText(
-                                    "后台播放保护已启用 · 点击返回应用")
+                                    "后台播放保护已启用 · 可暂停或点击返回应用")
                             .setCategory(
                                     Notification.CATEGORY_SERVICE)
                             .setVisibility(
@@ -92,6 +92,36 @@ final class BackgroundPlaybackNotifier {
                 builder.setLargeIcon(
                         targetIcon);
             }
+
+            Intent pauseIntent =
+                    new Intent(
+                            PlaybackControlContract
+                                    .ACTION_PAUSE)
+                            .setPackage(
+                                    packageName)
+                            .putExtra(
+                                    PlaybackControlContract
+                                            .EXTRA_PACKAGE_NAME,
+                                    packageName);
+
+            PendingIntent pausePending =
+                    PendingIntent.getBroadcast(
+                            context,
+                            packageName.hashCode()
+                                    ^ 0x51A7,
+                            pauseIntent,
+                            PendingIntent.FLAG_UPDATE_CURRENT
+                                    | PendingIntent.FLAG_IMMUTABLE);
+
+            builder.addAction(
+                    new Notification.Action.Builder(
+                            Icon.createWithResource(
+                                    context,
+                                    R.drawable
+                                            .ic_notification_pause),
+                            "暂停",
+                            pausePending)
+                            .build());
 
             Intent launch =
                     pm.getLaunchIntentForPackage(

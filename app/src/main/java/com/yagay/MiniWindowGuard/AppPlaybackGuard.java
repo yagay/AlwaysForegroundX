@@ -1,7 +1,16 @@
 package com.yagay.MiniWindowGuard;
 
+import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.media.AudioManager;
+import android.os.Build;
 import android.util.Log;
+import android.view.KeyEvent;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Set;
@@ -31,6 +40,40 @@ final class AppPlaybackGuard {
     private final ThreadLocal<Integer> lifecycleDepth =
             ThreadLocal.withInitial(
                     () -> 0);
+
+    private volatile Context appContext;
+    private volatile boolean controlReceiverRegistered;
+    private volatile WeakReference<Object> currentPlayer =
+            new WeakReference<>(null);
+
+    private final BroadcastReceiver controlReceiver =
+            new BroadcastReceiver() {
+                @Override
+                public void onReceive(
+                        Context context,
+                        Intent intent
+                ) {
+                    if (intent == null
+                            || !PlaybackControlContract
+                            .ACTION_PAUSE.equals(
+                                    intent.getAction())) {
+                        return;
+                    }
+
+                    String target =
+                            intent.getStringExtra(
+                                    PlaybackControlContract
+                                            .EXTRA_PACKAGE_NAME);
+
+                    if (!packageName.equals(
+                            target)
+                            || !selected()) {
+                        return;
+                    }
+
+                    pauseFromNotification();
+                }
+            };
 
     private AppPlaybackGuard(
             GuardModule module,
@@ -111,6 +154,9 @@ final class AppPlaybackGuard {
                                 return chain.proceed();
                             }
 
+                            ensureControlReceiver(
+                                    chain.getArgs());
+
                             enterLifecycle();
 
                             try {
@@ -132,6 +178,67 @@ final class AppPlaybackGuard {
     }
 
     private void installPlayerHooks() {
+        hookPlayMethod(
+                "android.media.MediaPlayer",
+                "start");
+        hookPlayMethod(
+                "android.widget.VideoView",
+                "start");
+        hookPlayMethod(
+                "androidx.media3.common.BasePlayer",
+                "play");
+        hookBooleanPlayMethod(
+                "androidx.media3.exoplayer.ExoPlayerImpl",
+                "setPlayWhenReady");
+        hookBooleanPlayMethod(
+                "androidx.media3.exoplayer.SimpleExoPlayer",
+                "setPlayWhenReady");
+        hookPlayMethod(
+                "com.google.android.exoplayer2.BasePlayer",
+                "play");
+        hookBooleanPlayMethod(
+                "com.google.android.exoplayer2.ExoPlayerImpl",
+                "setPlayWhenReady");
+        hookBooleanPlayMethod(
+                "com.google.android.exoplayer2.SimpleExoPlayer",
+                "setPlayWhenReady");
+        hookPlayMethod(
+                "tv.danmaku.ijk.media.player.IjkMediaPlayer",
+                "start");
+        hookPlayMethod(
+                "com.ss.ttvideoengine.TTVideoEngine",
+                "play");
+        hookPlayMethod(
+                "com.ss.ttvideoengine.MediaPlayerWrapper",
+                "start");
+        hookPlayMethod(
+                "com.ss.android.videoshop.mediaview.SimpleMediaView",
+                "play");
+        hookPlayMethod(
+                "com.ss.android.videoshop.mediaview.LayerHostMediaLayout",
+                "play");
+        hookPlayMethod(
+                "com.ss.android.videoshop.context.VideoContext",
+                "play");
+        hookPlayMethod(
+                "org.videolan.libvlc.MediaPlayer",
+                "play");
+        hookPlayMethod(
+                "com.tencent.rtmp.TXVodPlayer",
+                "resume");
+        hookPlayMethod(
+                "com.tencent.rtmp.TXLivePlayer",
+                "resume");
+        hookPlayMethod(
+                "com.pili.pldroid.player.PLMediaPlayer",
+                "start");
+        hookPlayMethod(
+                "com.baidu.cloud.media.player.BDCloudMediaPlayer",
+                "start");
+        hookPlayMethod(
+                "com.ksyun.media.player.KSYMediaPlayer",
+                "start");
+
         hookZeroArgVoid(
                 "android.media.MediaPlayer",
                 "pause",
@@ -334,6 +441,9 @@ final class AppPlaybackGuard {
                             }
                         }
 
+                        rememberPlayer(
+                                chain.getThisObject());
+
                         log(
                                 Log.INFO,
                                 "APP_PLAYER_PAUSE_BLOCK",
@@ -362,6 +472,306 @@ final class AppPlaybackGuard {
                             + t.getClass()
                             .getSimpleName());
         }
+    }
+
+    private void hookPlayMethod(
+            String className,
+            String methodName
+    ) {
+        Class<?> type =
+                load(className);
+
+        if (type == null) {
+            return;
+        }
+
+        for (Method method :
+                type.getDeclaredMethods()) {
+            if (!methodName.equals(
+                    method.getName())
+                    || method.getParameterCount() != 0
+                    || Modifier.isAbstract(
+                            method.getModifiers())) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                String key =
+                        "play-track:"
+                                + method.toGenericString();
+
+                if (!installedHooks.add(key)) {
+                    continue;
+                }
+
+                module.hook(method)
+                        .intercept(chain -> {
+                            if (selected()) {
+                                rememberPlayer(
+                                        chain.getThisObject());
+                            }
+
+                            return chain.proceed();
+                        });
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        "play-track:"
+                                + method.toGenericString());
+            }
+        }
+    }
+
+    private void hookBooleanPlayMethod(
+            String className,
+            String methodName
+    ) {
+        Class<?> type =
+                load(className);
+
+        if (type == null) {
+            return;
+        }
+
+        for (Method method :
+                type.getDeclaredMethods()) {
+            if (!methodName.equals(
+                    method.getName())
+                    || method.getParameterCount() != 1
+                    || method.getParameterTypes()[0]
+                    != boolean.class
+                    || Modifier.isAbstract(
+                            method.getModifiers())) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                String key =
+                        "play-track:"
+                                + method.toGenericString();
+
+                if (!installedHooks.add(key)) {
+                    continue;
+                }
+
+                module.hook(method)
+                        .intercept(chain -> {
+                            if (selected()
+                                    && !chain.getArgs().isEmpty()
+                                    && Boolean.TRUE.equals(
+                                    chain.getArgs().get(0))) {
+                                rememberPlayer(
+                                        chain.getThisObject());
+                            }
+
+                            return chain.proceed();
+                        });
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        "play-track:"
+                                + method.toGenericString());
+            }
+        }
+    }
+
+    private void rememberPlayer(
+            Object player
+    ) {
+        if (player != null) {
+            currentPlayer =
+                    new WeakReference<>(
+                            player);
+        }
+    }
+
+    private void ensureControlReceiver(
+            java.util.List<Object> args
+    ) {
+        if (controlReceiverRegistered) {
+            return;
+        }
+
+        Context context = null;
+
+        if (args != null) {
+            for (Object arg : args) {
+                if (arg instanceof Activity activity) {
+                    context =
+                            activity
+                                    .getApplicationContext();
+                    break;
+                }
+
+                if (arg instanceof Context ctx) {
+                    context =
+                            ctx.getApplicationContext();
+                    break;
+                }
+            }
+        }
+
+        if (context == null) {
+            return;
+        }
+
+        synchronized (this) {
+            if (controlReceiverRegistered) {
+                return;
+            }
+
+            try {
+                IntentFilter filter =
+                        new IntentFilter(
+                                PlaybackControlContract
+                                        .ACTION_PAUSE);
+
+                if (Build.VERSION.SDK_INT >= 33) {
+                    context.registerReceiver(
+                            controlReceiver,
+                            filter,
+                            PlaybackControlContract
+                                    .PERMISSION_CONTROL_PLAYBACK,
+                            null,
+                            Context.RECEIVER_EXPORTED);
+                } else {
+                    context.registerReceiver(
+                            controlReceiver,
+                            filter,
+                            PlaybackControlContract
+                                    .PERMISSION_CONTROL_PLAYBACK,
+                            null);
+                }
+
+                appContext = context;
+                controlReceiverRegistered = true;
+
+                log(
+                        Log.INFO,
+                        "APP_PLAYBACK_CONTROL_READY",
+                        "pkg=" + packageName);
+            } catch (Throwable t) {
+                log(
+                        Log.WARN,
+                        "APP_PLAYBACK_CONTROL_FAILED",
+                        "pkg=" + packageName
+                                + " error="
+                                + t.getClass()
+                                .getSimpleName());
+            }
+        }
+    }
+
+    private void pauseFromNotification() {
+        Object player =
+                currentPlayer.get();
+
+        if (player != null
+                && invokePause(player)) {
+            log(
+                    Log.INFO,
+                    "APP_PLAYBACK_CONTROL_PAUSE",
+                    "pkg=" + packageName
+                            + " mode=direct");
+            return;
+        }
+
+        Context context = appContext;
+
+        if (context == null) {
+            return;
+        }
+
+        try {
+            AudioManager audioManager =
+                    context.getSystemService(
+                            AudioManager.class);
+
+            if (audioManager == null) {
+                return;
+            }
+
+            long now =
+                    android.os.SystemClock
+                            .uptimeMillis();
+
+            audioManager.dispatchMediaKeyEvent(
+                    new KeyEvent(
+                            now,
+                            now,
+                            KeyEvent.ACTION_DOWN,
+                            KeyEvent.KEYCODE_MEDIA_PAUSE,
+                            0));
+
+            audioManager.dispatchMediaKeyEvent(
+                    new KeyEvent(
+                            now,
+                            now,
+                            KeyEvent.ACTION_UP,
+                            KeyEvent.KEYCODE_MEDIA_PAUSE,
+                            0));
+
+            log(
+                    Log.INFO,
+                    "APP_PLAYBACK_CONTROL_PAUSE",
+                    "pkg=" + packageName
+                            + " mode=media-key");
+        } catch (Throwable t) {
+            log(
+                    Log.WARN,
+                    "APP_PLAYBACK_CONTROL_FAILED",
+                    "pkg=" + packageName
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName());
+        }
+    }
+
+    private boolean invokePause(
+            Object player
+    ) {
+        Class<?> type =
+                player.getClass();
+
+        for (Class<?> current = type;
+             current != null;
+             current = current.getSuperclass()) {
+            try {
+                Method pause =
+                        current.getDeclaredMethod(
+                                "pause");
+                pause.setAccessible(true);
+                pause.invoke(player);
+                return true;
+            } catch (NoSuchMethodException ignored) {
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        for (Class<?> current = type;
+             current != null;
+             current = current.getSuperclass()) {
+            try {
+                Method setPlayWhenReady =
+                        current.getDeclaredMethod(
+                                "setPlayWhenReady",
+                                boolean.class);
+                setPlayWhenReady.setAccessible(
+                        true);
+                setPlayWhenReady.invoke(
+                        player,
+                        false);
+                return true;
+            } catch (NoSuchMethodException ignored) {
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private boolean selected() {
