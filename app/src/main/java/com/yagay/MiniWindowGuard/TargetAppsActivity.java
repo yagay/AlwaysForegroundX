@@ -208,6 +208,7 @@ public final class TargetAppsActivity extends Activity {
         root.addView(close);
 
         setContentView(root);
+        SystemBarInsets.apply(root);
 
         search.addTextChangedListener(
                 new TextWatcher() {
@@ -590,6 +591,7 @@ public final class TargetAppsActivity extends Activity {
         root.addView(close);
 
         setContentView(root);
+        SystemBarInsets.apply(root);
     }
 
     private int dp(float value) {

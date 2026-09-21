@@ -71,6 +71,7 @@ public final class MainActivity extends Activity {
         addDiagnosticsCard(root);
 
         setContentView(scroll);
+        SystemBarInsets.apply(scroll);
         refreshStatus();
     }
 

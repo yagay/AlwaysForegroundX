@@ -1,5 +1,13 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.4 — 修复状态栏/导航栏遮挡
+
+- 新增统一 `SystemBarInsets` 适配层；
+- 主页面、应用名单页和错误页都会读取 `systemBars + displayCutout` Insets；
+- 在页面原有 padding 基础上叠加状态栏、三键导航、手势导航和刘海/挖孔安全区；
+- 不再依赖固定状态栏高度，也不使用旧的 `fitsSystemWindows`；
+- 适配 Android 15/16 强制 edge-to-edge 行为，顶部内容不再被通知栏覆盖，底部按钮/列表不再被导航键覆盖。
+
 ## 5.4.3 — 手动同步作用域 + 已选应用置顶
 
 - “后台播放应用”页面新增“同步到 LSPosed 作用域”按钮；
