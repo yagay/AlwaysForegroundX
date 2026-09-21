@@ -10,6 +10,9 @@ import android.media.AudioPlaybackConfiguration;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
+import android.os.Process;
 import android.os.SystemClock;
 
 import java.lang.reflect.Field;
@@ -56,6 +59,8 @@ final class OplusFlexibleWindowController {
     private volatile boolean focusKnown;
     private volatile AudioManager audioManager;
     private volatile boolean audioCallbackRegistered;
+    private volatile HandlerThread notificationThread;
+    private volatile Handler notificationHandler;
 
     private final AudioManager.AudioPlaybackCallback
             audioPlaybackCallback =
@@ -86,6 +91,7 @@ final class OplusFlexibleWindowController {
         if (running) return;
         running = true;
 
+        ensureNotificationWorker();
         ensureAudioPlaybackMonitor();
 
         log(
@@ -138,6 +144,26 @@ final class OplusFlexibleWindowController {
         audioCallbackRegistered = false;
         audioManager = null;
         sessions.clear();
+
+        Handler worker = notificationHandler;
+        HandlerThread workerThread = notificationThread;
+
+        if (worker != null
+                && workerThread != null) {
+            worker.post(
+                    () -> {
+                        if (notificationHandler == worker) {
+                            notificationHandler = null;
+                        }
+                        if (notificationThread == workerThread) {
+                            notificationThread = null;
+                        }
+                        workerThread.quitSafely();
+                    });
+        } else {
+            notificationHandler = null;
+            notificationThread = null;
+        }
     }
 
     int activeSessionCount() {
@@ -771,8 +797,14 @@ final class OplusFlexibleWindowController {
                 null,
                 "background-enter");
 
+        boolean suppressFrameworkPause =
+                uiSleeping
+                        && !ordinaryBackground;
+
         log(
-                "BACKGROUND_PAUSE_SUPPRESS",
+                suppressFrameworkPause
+                        ? "BACKGROUND_PAUSE_SUPPRESS"
+                        : "BACKGROUND_PAUSE_ALLOW",
                 "pkg=" + session.packageName
                         + " taskId=" + session.taskId
                         + " resumingPkg=" + resumingPackage
@@ -780,9 +812,11 @@ final class OplusFlexibleWindowController {
                         + " uiSleeping=" + uiSleeping
                         + " recentsBackground="
                         + recentsBackground
+                        + " frameworkPauseSuppressed="
+                        + suppressFrameworkPause
                         + " reason=" + reason);
 
-        return true;
+        return suppressFrameworkPause;
     }
 
     void onFocusedActivity(
@@ -879,6 +913,48 @@ final class OplusFlexibleWindowController {
         return true;
     }
 
+    private synchronized void ensureNotificationWorker() {
+        if (notificationHandler != null
+                && notificationThread != null
+                && notificationThread.isAlive()) {
+            return;
+        }
+
+        HandlerThread thread =
+                new HandlerThread(
+                        "MiniWindowGuard-Notifier",
+                        Process.THREAD_PRIORITY_BACKGROUND);
+        thread.start();
+
+        notificationThread = thread;
+        notificationHandler =
+                new Handler(
+                        thread.getLooper());
+
+        log(
+                "BACKGROUND_NOTIFICATION_WORKER",
+                "enabled=true");
+    }
+
+    private Handler notificationWorker() {
+        Handler worker = notificationHandler;
+
+        if (worker == null) {
+            ensureNotificationWorker();
+            worker = notificationHandler;
+        }
+
+        return worker;
+    }
+
+    private static List<AudioPlaybackConfiguration> copyPlaybackConfigs(
+            List<AudioPlaybackConfiguration> configs
+    ) {
+        return configs == null
+                ? null
+                : List.copyOf(configs);
+    }
+
     private void ensureAudioPlaybackMonitor() {
         if (audioCallbackRegistered
                 || systemContext == null) {
@@ -918,13 +994,37 @@ final class OplusFlexibleWindowController {
     ) {
         if (session == null) return;
 
-        updateBackgroundNotification(
-                session.packageName,
-                configs,
-                reason);
+        String packageName = session.packageName;
+        List<AudioPlaybackConfiguration> snapshot =
+                copyPlaybackConfigs(configs);
+        Handler worker = notificationWorker();
+
+        if (worker == null) return;
+
+        worker.post(
+                () -> updateBackgroundNotification(
+                        packageName,
+                        snapshot,
+                        reason));
     }
 
     private void updateAllBackgroundNotifications(
+            List<AudioPlaybackConfiguration> configs,
+            String reason
+    ) {
+        List<AudioPlaybackConfiguration> snapshot =
+                copyPlaybackConfigs(configs);
+        Handler worker = notificationWorker();
+
+        if (worker == null) return;
+
+        worker.post(
+                () -> updateAllBackgroundNotificationsOnWorker(
+                        snapshot,
+                        reason));
+    }
+
+    private void updateAllBackgroundNotificationsOnWorker(
             List<AudioPlaybackConfiguration> configs,
             String reason
     ) {
@@ -1110,6 +1210,34 @@ final class OplusFlexibleWindowController {
     }
 
     private void setBackgroundNotification(
+            String packageName,
+            boolean active,
+            String reason
+    ) {
+        if (packageName == null
+                || packageName.isBlank()) {
+            return;
+        }
+
+        Handler worker = notificationWorker();
+
+        if (worker == null) return;
+
+        Runnable action =
+                () -> applyBackgroundNotification(
+                        packageName,
+                        active,
+                        reason);
+
+        if (Looper.myLooper()
+                == worker.getLooper()) {
+            action.run();
+        } else {
+            worker.post(action);
+        }
+    }
+
+    private void applyBackgroundNotification(
             String packageName,
             boolean active,
             String reason

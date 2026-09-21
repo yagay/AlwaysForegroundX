@@ -1,5 +1,17 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.1 — 修复返回桌面导致 system_server 卡死
+
+本次诊断的关键时间线：14:28:45 Launcher 恢复前台，约 14:28:47 system_server 已开始阻塞；14:28:51 才按下电源键；14:29:55 Watchdog 报告 ActivityManager、Display、Animation 三条系统线程已连续阻塞 68 秒。因此触发点是“返回桌面/切换前台应用”，不是锁屏。
+
+5.4.1 修复：
+
+- 普通返回桌面、切换其他应用、进入最近任务时，不再从 `TaskFragment.startPausing()` 阻止系统 Pause；仍建立 `BACKGROUND_PROTECTED` 状态，并继续使用防 Stop、防杀、防冻结和进程重要性保护；
+- 仅 `uiSleeping` 的锁屏/熄屏场景继续保留原有 Pause 抑制，避免改变现有锁屏播放行为；
+- `DisplayContent.setFocusedApp()`、OPlus task callback、后台保护回调不再同步执行音频查询、PackageManager 查询或 `ContentResolver.call()`；
+- 后台播放通知全部移到独立 `MiniWindowGuard-Notifier` HandlerThread，避免在 WMS/ATMS 锁事务中跨 Binder 调用造成锁反转；
+- Bootstrap API 不变，5.4.0 已在 Bootstrap 5 的设备可直接热重载 5.4.1 Engine。
+
 ## 5.4.0 — 修复真正的 Engine 热重载
 
 最新诊断确认：APK 已是 5.3.9/code89，但 system_server 在自动 reload 后仍加载出 version 88。根因是 EngineBridge 使用普通 PathClassLoader；Android 默认父优先，HotReloadEngine 会先从 system_server 已驻留的旧模块 ClassLoader 命中，所以之前的“热重载”实际上会重新实例化旧版本类。
