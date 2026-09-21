@@ -17,6 +17,10 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <receiver
+            android:name="com.yagay.MiniWindowGuard.PlaybackControlReceiver"
+            android:exported="false" />
+
         <provider
             android:name="com.yagay.MiniWindowGuard.EngineStatusProvider"
             android:authorities="com.yagay.MiniWindowGuard.engine_status"
