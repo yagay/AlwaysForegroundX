@@ -798,14 +798,43 @@ public final class GuardModule extends XposedModule {
                         List<Object> args =
                                 chain.getArgs();
 
+                        Object previousFocusedApp =
+                                fieldValue(
+                                        chain.getThisObject(),
+                                        "mFocusedApp");
+
+                        Object previousTask =
+                                invokeNoArg(
+                                        previousFocusedApp,
+                                        "getTask");
+
+                        String previousPackage =
+                                activityPackage(
+                                        previousFocusedApp);
+
+                        String requestedPackage =
+                                !args.isEmpty()
+                                        && args.get(0) != null
+                                        ? activityPackage(
+                                        args.get(0))
+                                        : null;
+
+                        EngineBridge current = engine;
+
+                        boolean autoMini =
+                                current != null
+                                        && previousTask != null
+                                        && current
+                                        .shouldAutoMiniOnFocusLoss(
+                                                previousTask,
+                                                requestedPackage);
+
                         if (!args.isEmpty()
                                 && args.get(0) != null) {
                             Object task =
                                     invokeNoArg(
                                             args.get(0),
                                             "getTask");
-
-                            EngineBridge current = engine;
 
                             if (current != null
                                     && current.isEdgeHungTask(
@@ -832,7 +861,27 @@ public final class GuardModule extends XposedModule {
                             }
                         }
 
-                        return chain.proceed();
+                        Object result =
+                                chain.proceed();
+
+                        if (autoMini
+                                && current != null) {
+                            current.requestAutoMiniWindow(
+                                    previousTask,
+                                    "focus-loss");
+
+                            diag(
+                                    "OPLUS_AUTO_MINI_FOCUS_LOSS",
+                                    "pkg="
+                                            + previousPackage
+                                            + " taskId="
+                                            + taskId(
+                                            previousTask)
+                                            + " nextPkg="
+                                            + requestedPackage);
+                        }
+
+                        return result;
                     });
                 } catch (Throwable t) {
                     installedHooks.remove(
