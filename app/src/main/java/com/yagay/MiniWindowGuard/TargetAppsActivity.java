@@ -128,8 +128,8 @@ public final class TargetAppsActivity extends Activity {
                         ? "勾选后仅放行该 App 的 OPlus FlexibleWindow 支持/黑名单判断。"
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
                         : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "勾选后，该 App 从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED。"
-                        + "同 App 页面跳转、Activity finishing、强制停止和真实关闭不拦截。"
+                        ? "勾选后，该 App 离开前台时使用 OxygenOS Launcher 同款 startActivityFromRecents + Zoom 参数直接进入系统小窗，确认成功后自动缩成系统 FloatHandle 小图标。"
+                        + "进入小窗后继续使用现有小窗、小图标和锁屏播放保护；不再使用普通 BACKGROUND_PROTECTED。"
                         : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
                         + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
         help.setTextSize(13.5f);
