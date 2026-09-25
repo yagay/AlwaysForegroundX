@@ -1241,6 +1241,10 @@ public final class GuardModule extends XposedModule {
                     SystemUiFloatBridge.EXTRA_PACKAGE_NAME,
                     packageName);
 
+            request.putExtra(
+                    SystemUiFloatBridge.EXTRA_ALLOW_IMMEDIATE,
+                    "already-flexible".equals(source));
+
             request.addFlags(
                     Intent.FLAG_RECEIVER_FOREGROUND);
 
@@ -1254,7 +1258,7 @@ public final class GuardModule extends XposedModule {
                             + " source=" + source);
         } catch (Throwable t) {
             diag(
-                    "BACKGROUND_SYSTEMUI_FLOAT_FAIL",
+                    "BACKGROUND_LAUNCHER_FLOAT_FAIL",
                     "pkg=" + packageName
                             + " taskId=" + id
                             + " source=" + source
