@@ -1,5 +1,19 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.1 — 主页预加载误切下一条修复
+
+修复红果主页/短视频信息流切到后台时，自动模式可能误把“下一条预加载播放器”当成当前播放器并主动播放的问题：
+
+- 退后台时冻结 **exact player**：只锁定当时真实正在播放的播放器实例作为后台保护目标；
+- 新出现的预加载播放器即使调用 `play()` / `setPlayWhenReady(true)`，只要旧的后台播放器仍在播放，就不会覆盖后台目标；
+- 自动恢复必须有明确的“锁定播放器被生命周期 pause/stop”证据；没有捕获到明确 pause 时，即使检测到 `playing=false`，也只保持 UNKNOWN，不再主动 `invokePlay()`；
+- 新增 `APP_PLAYER_PRELOAD_IGNORED` 和 `APP_PLAYER_BACKGROUND_NON_TARGET` 日志，用于确认主页预加载实例被正确忽略；
+- 剧集自动下一集仍支持播放器实例交接：只有旧播放器已不再播放，并且新实例真实报告正在播放时，后台保护权才转交给新播放器；
+- 新增 `APP_BACKGROUND_PLAYER_HANDOFF` 和 `APP_BACKGROUND_PLAYER_LOCK` 日志，方便分析自动下一集和主页信息流的不同播放器生命周期；
+- 通知栏播放/暂停继续只控制当前实际保护的播放器，不恢复被忽略的预加载实例。
+
+本版只修改 App 进程播放守护，Bootstrap API 仍为 7。安装 5.5.1 后重新打开目标 App 即可加载新 Hook，不需要再次完整重启。
+
 ## 5.5.0 — 剧集后台切换与自动连播修正
 
 根据红果 `com.phoenix.read` 诊断日志修复两个实际运行问题：
