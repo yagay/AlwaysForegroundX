@@ -106,6 +106,15 @@ public final class HotReloadEngine {
                 && current.isForegroundPackage(packageName);
     }
 
+    public boolean isBackgroundPlaybackPackage(
+            String packageName
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isBackgroundPlaybackPackage(
+                packageName);
+    }
+
     public boolean isManagedPackage(String packageName) {
         OplusFlexibleWindowController current = controller;
         return current != null
