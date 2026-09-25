@@ -19,7 +19,7 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 9;
+    static final int BOOTSTRAP_API = 10;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
