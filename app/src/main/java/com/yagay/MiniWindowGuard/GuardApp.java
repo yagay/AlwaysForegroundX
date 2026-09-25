@@ -31,6 +31,7 @@ public final class GuardApp extends Application {
 
     private static final String[] STRING_SET_KEYS = {
             ConfigKeys.FOREGROUND_PACKAGES,
+            ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES,
             ConfigKeys.FORCE_SUPPORT_PACKAGES
     };
 
