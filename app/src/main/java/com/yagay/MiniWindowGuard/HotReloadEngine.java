@@ -188,6 +188,24 @@ public final class HotReloadEngine {
                 finishing);
     }
 
+    public boolean shouldAutoMiniWindow(
+            Object task
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldAutoMiniWindow(
+                        task);
+    }
+
+    public boolean isOplusFlexibleTask(
+            Object task
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isOplusFlexibleTask(
+                        task);
+    }
+
     public void onFocusedActivity(
             Object activityRecord
     ) {
