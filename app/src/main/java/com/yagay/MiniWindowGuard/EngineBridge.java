@@ -352,6 +352,38 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
+    boolean shouldAutoMiniOnFocusLoss(
+            Object task,
+            String nextPackage
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldAutoMiniOnFocusLoss",
+                new Class<?>[]{
+                        Object.class,
+                        String.class
+                },
+                task,
+                nextPackage);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    void requestAutoMiniWindow(
+            Object task,
+            String reason
+    ) {
+        safeInvoke(
+                currentEngine(),
+                "requestAutoMiniWindow",
+                new Class<?>[]{
+                        Object.class,
+                        String.class
+                },
+                task,
+                reason);
+    }
+
     void preArmLockKeepAlive(String reason) {
         safeInvoke(
                 currentEngine(),
