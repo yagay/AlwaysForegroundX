@@ -12,6 +12,8 @@ final class ConfigKeys {
             "foreground_packages";
     static final String BACKGROUND_PLAYBACK_PACKAGES =
             "background_playback_packages";
+    static final String BACKGROUND_PLAYBACK_MODES =
+            "background_playback_modes";
     static final String FORCE_SUPPORT_PACKAGES =
             "force_support_packages";
 
