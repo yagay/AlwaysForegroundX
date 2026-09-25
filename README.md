@@ -1,5 +1,33 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.4 — 退后台自动转真实 OPlus 图标小窗
+
+后台播放策略不再把普通 fullscreen Task 留在后台再伪装前台，也不再使用 5.5.3 的“后台 Activity Resume 后 moveTaskToBack”补偿路径。自动/强制模式改为复用 OxygenOS 自己的 FlexibleWindow：
+
+- 目标 App 真正离开前台并进入 BACKGROUND_PROTECTED 后，异步请求当前 **已有 Task** 进入 OPlus FlexibleWindow，不重新启动新的 App 实例；
+- 使用 ColorOS/OxygenOS 的 FlexibleWindow 启动协议：`android.activity.windowingMode=100` + `android:activity.mZoomLaunchFlags=4`，通过 system_server 的 `startActivityFromRecents(taskId, options)` 转换现有 Task；
+- 等待 OEM TaskInfo 确认真正进入 FlexibleWindow 后，再调用当前 ROM 的 `FlexibleTaskController.onRecentClicked(...)`，让 OxygenOS 自己把窗口收成 mini / FloatHandle 图标；
+- 不直接调用 `Task.setWindowingMode()`，不手工隐藏 Surface，也不使用 `hideZoomWindow(12)`；窗口、动画、焦点、图标和恢复全部仍由 OxygenOS 管理；
+- FlexibleWindow 检测新增读取 OPlus TaskInfo 的 `key_flexible_task_state` 与 `flexible_super_mini_state`，避免只按 bounds 判断导致误判；
+- AppPlaybackGuard 恢复 5.4.5 的**主进程限定**，不再给 `:player/:media/:video` 子进程重复安装生命周期播放器 Hook；
+- AppPlaybackGuard 删除 5.5.3 遗留的后台 Activity Intent 标记、延迟后台判断和页面跳转拦截，只保留生命周期 pause/stop 保护与通知栏显式媒体控制；
+- 自动/强制模式继续使用窄版 `ActivityRecord.stopIfPossible()` 保护；“仅原生”模式不强制转小窗，也不拦 Activity STOP；
+- 用户点击 FloatHandle 图标恢复窗口后，自动小窗状态立即释放，后续由 OxygenOS 正常管理。
+
+新增诊断事件：
+
+- `BACKGROUND_AUTO_MINI_REQUEST`
+- `BACKGROUND_AUTO_MINI_FLEX_REQUEST`
+- `BACKGROUND_AUTO_MINI_FLEX_INVOKE`
+- `BACKGROUND_AUTO_MINI_FLEX_INVOKE_FAIL`
+- `BACKGROUND_AUTO_MINI_FLEX_TIMEOUT`
+- `BACKGROUND_AUTO_MINI_HANDLE_REQUEST`
+- `BACKGROUND_AUTO_MINI_OEM`
+- `BACKGROUND_AUTO_MINI_OEM_FAIL`
+- `BACKGROUND_AUTO_MINI_OEM_MISSING`
+
+本版修改固定驻留于 system_server 的后台切换 Hook，**Bootstrap API 升到 9**。从旧版升级后必须完整重启手机一次；只热重载 Engine 或只重启目标 App 无法加载新的自动小窗路径。
+
 ## 5.5.3 — 后台剧集 Activity 真正启动后再送回后台
 
 17:10 诊断日志确认，5.5.2 的播放器生命周期保护已经生效，但后台进入红果剧集时 `ShortSeriesActivity` 被 `avoidMoveToFront` 创建为 invisible launch，ActivityRecord 停在 INITIALIZING，既没有 onCreate 也没有 RESUMED，因此无法真正进入剧集。
