@@ -45,6 +45,7 @@ final class SystemUiFloatBridge {
     private volatile Object zoomStateManager;
     private volatile Context context;
     private volatile Handler handler;
+    private volatile BroadcastReceiver systemUiReceiver;
     private volatile PendingRequest pending;
     private volatile boolean receiverRegistered;
 
