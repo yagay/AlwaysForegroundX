@@ -845,6 +845,65 @@ final class OplusFlexibleWindowController {
         return suppressFrameworkPause;
     }
 
+    boolean shouldAutoMiniWindowOnFocusLoss(
+            Object task,
+            String nextPackage
+    ) {
+        Session session =
+                sessionForTask(task);
+
+        if (session == null
+                || !session.active
+                || keyguardShowing
+                || !GuardConfig
+                .backgroundPlaybackPackage(
+                        session.packageName)
+                || GuardConfig
+                .PLAYBACK_MODE_NATIVE
+                .equals(
+                        GuardConfig
+                        .backgroundPlaybackMode(
+                                session.packageName))
+                || (nextPackage != null
+                && session.packageName
+                .equals(nextPackage))) {
+            return false;
+        }
+
+        long now =
+                SystemClock.elapsedRealtime();
+
+        if (now - session.lastAutoMiniRequestElapsed
+                < AUTO_MINI_REQUEST_COOLDOWN_MS) {
+            return false;
+        }
+
+        session.backgroundProtected = true;
+        session.backgroundNotificationEligible = true;
+        session.autoMiniPlayback = true;
+        session.lastAutoMiniRequestElapsed = now;
+        session.taskObject = task;
+        session.lastSeenElapsed = now;
+
+        updateBackgroundNotification(
+                session,
+                null,
+                "focus-loss");
+
+        log(
+                "BACKGROUND_AUTO_MINI_FOCUS_LOSS",
+                "pkg=" + session.packageName
+                        + " taskId="
+                        + session.taskId
+                        + " nextPkg="
+                        + nextPackage
+                        + " alreadyFlexible="
+                        + isNativeOplusWindow(
+                                session));
+
+        return true;
+    }
+
     boolean shouldAutoMiniWindow(
             Object task
     ) {
