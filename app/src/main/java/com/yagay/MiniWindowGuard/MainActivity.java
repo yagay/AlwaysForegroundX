@@ -193,7 +193,7 @@ public final class MainActivity extends Activity {
 
         Button foreground =
                 button(
-                        "始终前台应用");
+                        "小窗后台应用");
 
         foreground.setOnClickListener(v -> {
             Intent intent =
@@ -210,12 +210,12 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 detailBlock(
-                        "始终前台",
-                        "勾选的 App 在小窗、FloatHandle 和锁屏时继续沿用 5.2.0 的保护；开启自动切换后，普通全屏失去前台焦点会先进入系统小窗，再缩成系统小图标。"));
+                        "小窗后台",
+                        "勾选的 App 离开前台时自动进入 OxygenOS 原生 FlexibleWindow 并缩成系统 FloatHandle；小窗、小图标和锁屏播放继续沿用 5.2.0 的保护。"));
 
         Button background =
                 button(
-                        "小窗后台应用");
+                        "后台播放应用");
 
         background.setOnClickListener(v -> {
             Intent intent =
@@ -232,8 +232,8 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 detailBlock(
-                        "小窗后台",
-                        "勾选的 App 离开前台时自动进入 OxygenOS 原生 FlexibleWindow，并继续缩成系统 FloatHandle 小图标；不会启用旧的普通 BACKGROUND_PROTECTED 后台模式。"));
+                        "普通后台播放",
+                        "独立于小窗后台。勾选的 App 普通全屏退到后台时走普通后台播放保护，不自动切换成系统小窗。"));
 
         Button support =
                 button(
