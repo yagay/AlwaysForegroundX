@@ -808,14 +808,46 @@ public final class GuardModule extends XposedModule {
                         List<Object> args =
                                 chain.getArgs();
 
+                        Object previousFocused =
+                                fieldValue(
+                                        chain.getThisObject(),
+                                        "mFocusedApp");
+
+                        Object previousTask =
+                                invokeNoArg(
+                                        previousFocused,
+                                        "getTask");
+
+                        String previousPackage =
+                                activityPackage(
+                                        previousFocused);
+
+                        String nextPackage =
+                                !args.isEmpty()
+                                        && args.get(0) != null
+                                        ? activityPackage(
+                                        args.get(0))
+                                        : null;
+
+                        EngineBridge current = engine;
+
+                        boolean requestSystemWindow =
+                                current != null
+                                        && previousTask != null
+                                        && previousPackage != null
+                                        && nextPackage != null
+                                        && !previousPackage.equals(
+                                        nextPackage)
+                                        && current
+                                        .isBackgroundPlaybackPackage(
+                                                previousPackage);
+
                         if (!args.isEmpty()
                                 && args.get(0) != null) {
                             Object task =
                                     invokeNoArg(
                                             args.get(0),
                                             "getTask");
-
-                            EngineBridge current = engine;
 
                             if (current != null
                                     && current.isEdgeHungTask(
@@ -842,7 +874,17 @@ public final class GuardModule extends XposedModule {
                             }
                         }
 
-                        return chain.proceed();
+                        Object result =
+                                chain.proceed();
+
+                        if (requestSystemWindow) {
+                            scheduleDirectSystemWindow(
+                                    previousTask,
+                                    previousPackage,
+                                    nextPackage);
+                        }
+
+                        return result;
                     });
                 } catch (Throwable t) {
                     installedHooks.remove(
