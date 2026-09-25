@@ -21,6 +21,8 @@ public final class GuardApp extends Application {
     private static final String[] BOOLEAN_KEYS = {
             ConfigKeys.MASTER_ENABLED,
             ConfigKeys.ENGINE_AUTO_RELOAD,
+            ConfigKeys.SYSTEM_IMPORTANCE_TOP,
+            ConfigKeys.SYSTEM_HAS_RESUMED,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
             ConfigKeys.DIAGNOSTICS_ACTIVE
     };
@@ -32,7 +34,6 @@ public final class GuardApp extends Application {
     private static final String[] STRING_SET_KEYS = {
             ConfigKeys.FOREGROUND_PACKAGES,
             ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES,
-            ConfigKeys.BACKGROUND_PLAYBACK_MODES,
             ConfigKeys.FORCE_SUPPORT_PACKAGES
     };
 
@@ -353,93 +354,6 @@ public final class GuardApp extends Application {
         if (ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES
                 .equals(key)) {
             reconcileBackgroundPlaybackScopes();
-        }
-    }
-
-    static String getBackgroundPlaybackMode(
-            String packageName
-    ) {
-        if (packageName == null
-                || packageName.isBlank()) {
-            return GuardConfig.PLAYBACK_MODE_AUTO;
-        }
-
-        String prefix = packageName + "|";
-
-        for (String entry : getStringSet(
-                ConfigKeys.BACKGROUND_PLAYBACK_MODES)) {
-            if (entry == null
-                    || !entry.startsWith(prefix)) {
-                continue;
-            }
-
-            String value =
-                    entry.substring(prefix.length());
-
-            if (GuardConfig.PLAYBACK_MODE_FORCE.equals(value)
-                    || GuardConfig.PLAYBACK_MODE_NATIVE.equals(value)
-                    || GuardConfig.PLAYBACK_MODE_AUTO.equals(value)) {
-                return value;
-            }
-        }
-
-        return GuardConfig.PLAYBACK_MODE_AUTO;
-    }
-
-    static void putBackgroundPlaybackMode(
-            String packageName,
-            String mode
-    ) {
-        if (packageName == null
-                || packageName.isBlank()) {
-            return;
-        }
-
-        String normalized =
-                GuardConfig.PLAYBACK_MODE_FORCE.equals(mode)
-                        ? GuardConfig.PLAYBACK_MODE_FORCE
-                        : GuardConfig.PLAYBACK_MODE_NATIVE.equals(mode)
-                        ? GuardConfig.PLAYBACK_MODE_NATIVE
-                        : GuardConfig.PLAYBACK_MODE_AUTO;
-
-        String prefix = packageName + "|";
-        Set<String> values =
-                new HashSet<>(getStringSet(
-                        ConfigKeys.BACKGROUND_PLAYBACK_MODES));
-
-        values.removeIf(entry ->
-                entry != null
-                        && entry.startsWith(prefix));
-
-        values.add(prefix + normalized);
-
-        putStringSet(
-                ConfigKeys.BACKGROUND_PLAYBACK_MODES,
-                values);
-    }
-
-    static void removeBackgroundPlaybackMode(
-            String packageName
-    ) {
-        if (packageName == null
-                || packageName.isBlank()) {
-            return;
-        }
-
-        String prefix = packageName + "|";
-        Set<String> values =
-                new HashSet<>(getStringSet(
-                        ConfigKeys.BACKGROUND_PLAYBACK_MODES));
-
-        boolean changed =
-                values.removeIf(entry ->
-                        entry != null
-                                && entry.startsWith(prefix));
-
-        if (changed) {
-            putStringSet(
-                    ConfigKeys.BACKGROUND_PLAYBACK_MODES,
-                    values);
         }
     }
 
