@@ -6,7 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -46,9 +45,6 @@ final class AppPlaybackGuard {
                     () -> 0);
 
     private static final long BACKGROUND_CONFIRM_DELAY_MS = 220L;
-    private static final String OPTION_AVOID_MOVE_TO_FRONT =
-            "android.activity.avoidMoveToFront";
-
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
 
@@ -273,7 +269,6 @@ final class AppPlaybackGuard {
                     method.getParameterTypes();
 
             int intentIndex = -1;
-            int optionsIndex = -1;
 
             for (int i = 0;
                  i < parameterTypes.length;
@@ -282,22 +277,16 @@ final class AppPlaybackGuard {
                         .isAssignableFrom(
                                 parameterTypes[i])) {
                     intentIndex = i;
-                } else if (Bundle.class
-                        .isAssignableFrom(
-                                parameterTypes[i])) {
-                    optionsIndex = i;
+                    break;
                 }
             }
 
-            if (intentIndex < 0
-                    || optionsIndex < 0) {
+            if (intentIndex < 0) {
                 continue;
             }
 
             final int finalIntentIndex =
                     intentIndex;
-            final int finalOptionsIndex =
-                    optionsIndex;
 
             try {
                 method.setAccessible(true);
@@ -326,28 +315,13 @@ final class AppPlaybackGuard {
                                 return chain.proceed();
                             }
 
-                            Object[] args =
-                                    chain.getArgs()
-                                            .toArray();
-
-                            Bundle original =
-                                    args[finalOptionsIndex]
-                                            instanceof Bundle bundle
-                                            ? bundle
-                                            : null;
-
-                            Bundle guarded =
-                                    original == null
-                                            ? new Bundle()
-                                            : new Bundle(
-                                                    original);
-
-                            guarded.putBoolean(
-                                    OPTION_AVOID_MOVE_TO_FRONT,
+                            intent.putExtra(
+                                    PlaybackControlContract
+                                            .EXTRA_BACKGROUND_SELF_LAUNCH,
                                     true);
 
-                            args[finalOptionsIndex] =
-                                    guarded;
+                            intent.addFlags(
+                                    Intent.FLAG_ACTIVITY_NO_ANIMATION);
 
                             log(
                                     Log.INFO,
@@ -361,10 +335,10 @@ final class AppPlaybackGuard {
                                             + GuardConfig
                                             .backgroundPlaybackMode(
                                                     packageName)
-                                            + " avoidMoveToFront=true");
+                                            + " marker=true"
+                                            + " avoidMoveToFront=false");
 
-                            return chain.proceed(
-                                    args);
+                            return chain.proceed();
                         });
             } catch (Throwable t) {
                 installedHooks.remove(
