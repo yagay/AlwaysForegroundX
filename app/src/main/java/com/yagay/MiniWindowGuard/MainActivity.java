@@ -233,7 +233,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "直接系统小图标后台播放",
-                        "勾选的 App 离开前台时先通知系统桌面。OPlus Zoom session 一建立，直接调用桌面小窗自身的 requestFloatZoomFromOutside 原生最小化链，生成系统 FloatHandle 小图标。"));
+                        "勾选的 App 离开前台时先通知系统桌面。目标 task 的 OPlus Zoom session 建立后，直接调用 Launcher Shell 的 IZoom.requestChangeZoomState(taskId, 5)，由系统完整切到 FloatHandle 小图标。"));
 
         Button support =
                 button(
