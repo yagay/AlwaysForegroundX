@@ -1,5 +1,18 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.6 — 退后台改由 OPlus 焦点切换触发系统小窗
+
+18:38 诊断日志确认 5.5.5 的 OEM API 本身没有执行：红果退到 Launcher 时没有任何 `BACKGROUND_SYSTEM_*` 日志，真正稳定出现的是 `FlexibleTaskController.onTaskFocusChanged(prevTask, currentTask)`。因此本版把自动小窗触发点改为 OxygenOS 自己的 Task 焦点切换回调。
+
+- 受保护 App 从前台切到 Launcher/其他 App 时，直接从 `onTaskFocusChanged` 捕获 previousTask；
+- 先建立 BACKGROUND_PROTECTED / autoMiniPlayback，再调用系统原生小窗流程；
+- 如果 Task 已经是系统 FlexibleWindow，直接调用 `startMiniZoomFromZoom(1)` 缩成系统图标；
+- 如果 Task 仍是全屏，先调用 `OplusActivityTaskManager.toggleFlexibleWindow(...)`，系统确认变成真实小窗后再调用 `startMiniZoomFromZoom(1)`；
+- 不再依赖 `TaskFragment.startPausing()` 是否恰好在 Home 手势时触发；
+- 新增 `BACKGROUND_FOCUS_LOSS_TRIGGER`、`BACKGROUND_AUTO_MINI_FOCUS_LOSS`、`BACKGROUND_SYSTEM_MINI_ALREADY_FLEXIBLE` 诊断事件。
+
+固定 system_server Hook 增加了 `FlexibleTaskController.onTaskFocusChanged`，Bootstrap API 升到 11，安装后需要完整重启一次。
+
 ## 5.5.5 — 直接调用 OxygenOS 原生小窗与系统图标
 
 后台播放自动小窗路径再次简化，不再由 MiniWindowGuard 构造小窗参数或模拟系统样式：
