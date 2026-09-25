@@ -6,10 +6,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Bundle;
-import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.ref.WeakReference;
@@ -22,14 +21,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * Generic app-process playback compatibility layer.
  *
  * system_server is allowed to complete Activity lifecycle transitions normally.
- * Per-app playback policy can be automatic, forced or native-only. Automatic
- * mode freezes the exact player that was really playing when the app leaves the
- * foreground. Preloaded/feed players cannot replace that target. Automatic
- * recovery requires an explicit lifecycle pause on the locked player; lack of
- * a pause signal never triggers play() on another candidate. Background episode
- * handoff uses a short retry window: a new episode player may start while the
- * old feed player is still winding down, but ownership moves only after the old
- * player stops and the new player remains active. Manual pause remains untouched.
+ * Automatic mode follows the proven 5.4.5 policy: suppress a player
+ * pause/stop only when it is synchronously caused by Activity onPause/onStop.
+ * There is no player-state machine and no automatic play()/resume recovery.
+ * Native-only mode passes lifecycle pauses through. Manual pause remains
+ * untouched. Player tracking exists only for explicit notification controls.
  */
 final class AppPlaybackGuard {
     private static final String TAG =
@@ -37,20 +33,6 @@ final class AppPlaybackGuard {
 
     private static final Set<String> PROCESS_INSTALLS =
             ConcurrentHashMap.newKeySet();
-
-    private static final long AUTO_FORCE_DELAY_MS = 450L;
-    private static final long AUTO_NATIVE_DELAY_MS = 700L;
-    private static final long AUTO_PROBE_WINDOW_MS = 1500L;
-    private static final long BACKGROUND_CONFIRM_DELAY_MS = 220L;
-    private static final long BACKGROUND_HANDOFF_RETRY_MS = 250L;
-    private static final int BACKGROUND_HANDOFF_MAX_ATTEMPTS = 6;
-
-    private static final String OPTION_AVOID_MOVE_TO_FRONT =
-            "android.activity.avoidMoveToFront";
-
-    private static final int ADAPTIVE_UNKNOWN = 0;
-    private static final int ADAPTIVE_NATIVE = 1;
-    private static final int ADAPTIVE_FORCED = 2;
 
     private final GuardModule module;
     private final String packageName;
@@ -63,25 +45,18 @@ final class AppPlaybackGuard {
             ThreadLocal.withInitial(
                     () -> 0);
 
+    private static final long BACKGROUND_CONFIRM_DELAY_MS = 220L;
+    private static final String OPTION_AVOID_MOVE_TO_FRONT =
+            "android.activity.avoidMoveToFront";
+
     private final Handler mainHandler =
             new Handler(Looper.getMainLooper());
 
     private volatile boolean controlReceiverRegistered;
-    private volatile int adaptiveState = ADAPTIVE_UNKNOWN;
-    private volatile long backgroundProbeToken;
-    private volatile long backgroundProbeUntilElapsed;
-    private volatile long lifecyclePauseDetectedToken = -1L;
-    private volatile boolean backgroundWasPlaying;
-    private volatile boolean lastPlaySignal;
-    private volatile boolean appForeground;
+    private volatile boolean appForeground = true;
     private volatile long foregroundStateToken;
     private volatile WeakReference<Object> currentPlayer =
             new WeakReference<>(null);
-    private volatile WeakReference<Object> backgroundPlayer =
-            new WeakReference<>(null);
-    private volatile WeakReference<Object> lastPlaySignalPlayer =
-            new WeakReference<>(null);
-    private volatile long backgroundHandoffToken;
 
     private final BroadcastReceiver controlReceiver =
             new BroadcastReceiver() {
@@ -201,6 +176,7 @@ final class AppPlaybackGuard {
             boolean resume =
                     "callActivityOnResume"
                             .equals(name);
+
             boolean background =
                     "callActivityOnPause"
                             .equals(name)
@@ -231,27 +207,15 @@ final class AppPlaybackGuard {
                             ensureControlReceiver(
                                     chain.getArgs());
 
-                            Activity activity =
-                                    activityFromArgs(
-                                            chain.getArgs());
-
                             if (resume) {
-                                onActivityResumed(
-                                        activity);
-                                return chain.proceed();
-                            }
+                                appForeground = true;
+                                foregroundStateToken++;
 
-                            if (activity != null
-                                    && (activity.isFinishing()
-                                    || activity
-                                    .isChangingConfigurations())) {
                                 return chain.proceed();
                             }
 
                             long token =
-                                    beginBackgroundProbe(
-                                            activity,
-                                            name);
+                                    ++foregroundStateToken;
 
                             enterLifecycle();
 
@@ -260,9 +224,22 @@ final class AppPlaybackGuard {
                             } finally {
                                 exitLifecycle();
 
-                                scheduleNativeClassification(
-                                        token,
-                                        currentPlayer.get());
+                                mainHandler.postDelayed(
+                                        () -> {
+                                            if (token
+                                                    != foregroundStateToken) {
+                                                return;
+                                            }
+
+                                            appForeground = false;
+
+                                            log(
+                                                    Log.INFO,
+                                                    "APP_BACKGROUND_CONFIRMED",
+                                                    "pkg="
+                                                            + packageName);
+                                        },
+                                        BACKGROUND_CONFIRM_DELAY_MS);
                             }
                         });
             } catch (Throwable t) {
@@ -327,8 +304,7 @@ final class AppPlaybackGuard {
 
                 String key =
                         "background-launch:"
-                                + method
-                                .toGenericString();
+                                + method.toGenericString();
 
                 if (!installedHooks.add(key)) {
                     continue;
@@ -344,8 +320,7 @@ final class AppPlaybackGuard {
                                     chain.getArg(
                                             finalIntentIndex);
 
-                            if (!(value
-                                    instanceof Intent intent)
+                            if (!(value instanceof Intent intent)
                                     || !isSamePackageIntent(
                                             intent)) {
                                 return chain.proceed();
@@ -657,7 +632,8 @@ final class AppPlaybackGuard {
 
             module.hook(method)
                     .intercept(chain -> {
-                        if (!selected()) {
+                        if (!selected()
+                                || !lifecyclePauseActive()) {
                             return chain.proceed();
                         }
 
@@ -672,59 +648,14 @@ final class AppPlaybackGuard {
                             }
                         }
 
-                        Object player =
-                                chain.getThisObject();
-                        Object tracked =
-                                currentPlayer.get();
-                        Object locked =
-                                backgroundPlayer.get();
-
-                        boolean lifecycleRelated =
-                                lifecyclePauseActive()
-                                        || backgroundProbeActive();
-
-                        if (!lifecycleRelated) {
-                            if (tracked == player) {
-                                lastPlaySignal = false;
-                                lastPlaySignalPlayer =
-                                        new WeakReference<>(
-                                                null);
-                            }
-                            return chain.proceed();
-                        }
-
-                        if (locked != null
-                                && locked != player) {
-                            log(
-                                    Log.INFO,
-                                    "APP_PLAYER_BACKGROUND_NON_TARGET",
-                                    "pkg=" + packageName
-                                            + " player="
-                                            + className
-                                            + " method="
-                                            + method.getName());
-                            return chain.proceed();
-                        }
-
-                        if (locked == null) {
-                            return chain.proceed();
-                        }
-
-                        if (tracked != player) {
-                            currentPlayer =
-                                    new WeakReference<>(
-                                            player);
-                        }
-
                         String configuredMode =
                                 GuardConfig
                                         .backgroundPlaybackMode(
                                                 packageName);
 
-                        if (GuardConfig.PLAYBACK_MODE_NATIVE
+                        if (GuardConfig
+                                .PLAYBACK_MODE_NATIVE
                                 .equals(configuredMode)) {
-                            lastPlaySignal = false;
-
                             log(
                                     Log.INFO,
                                     "APP_PLAYER_PAUSE_NATIVE",
@@ -737,100 +668,21 @@ final class AppPlaybackGuard {
                             return chain.proceed();
                         }
 
-                        Boolean reportedPlaying =
-                                playerReportedPlaying(
-                                        player);
+                        rememberPlayer(
+                                chain.getThisObject());
 
-                        boolean signaledPlaying =
-                                lastPlaySignal
-                                        && lastPlaySignalPlayer.get()
-                                        == player;
+                        log(
+                                Log.INFO,
+                                "APP_PLAYER_PAUSE_BLOCK",
+                                "pkg=" + packageName
+                                        + " mode="
+                                        + configuredMode
+                                        + " player="
+                                        + className
+                                        + " method="
+                                        + method.getName());
 
-                        boolean wasPlaying =
-                                backgroundWasPlaying
-                                        && backgroundPlayer.get()
-                                        == player
-                                        && (Boolean.TRUE.equals(
-                                        reportedPlaying)
-                                        || reportedPlaying == null
-                                        && signaledPlaying);
-
-                        if (!wasPlaying) {
-                            lastPlaySignal = false;
-                            return chain.proceed();
-                        }
-
-                        if (GuardConfig.PLAYBACK_MODE_FORCE
-                                .equals(configuredMode)) {
-                            lastPlaySignal = true;
-
-                            log(
-                                    Log.INFO,
-                                    "APP_PLAYER_PAUSE_BLOCK",
-                                    "pkg=" + packageName
-                                            + " mode=force"
-                                            + " player="
-                                            + className
-                                            + " method="
-                                            + method.getName());
-
-                            return null;
-                        }
-
-                        long token =
-                                backgroundProbeToken;
-
-                        boolean alreadyDetected =
-                                lifecyclePauseDetectedToken
-                                        == token;
-
-                        lifecyclePauseDetectedToken =
-                                token;
-                        backgroundPlayer =
-                                new WeakReference<>(
-                                        player);
-                        lastPlaySignalPlayer =
-                                new WeakReference<>(
-                                        player);
-
-                        if (adaptiveState
-                                == ADAPTIVE_FORCED
-                                || (alreadyDetected
-                                && method.getName()
-                                .contains("stop"))) {
-                            lastPlaySignal = true;
-
-                            log(
-                                    Log.INFO,
-                                    "APP_PLAYER_PAUSE_BLOCK",
-                                    "pkg=" + packageName
-                                            + " mode="
-                                            + (adaptiveState
-                                            == ADAPTIVE_FORCED
-                                            ? "auto-forced"
-                                            : "auto-protect-stop")
-                                            + " player="
-                                            + className
-                                            + " method="
-                                            + method.getName());
-
-                            return null;
-                        }
-
-                        Object result =
-                                chain.proceed();
-
-                        lastPlaySignal = false;
-
-                        if (!alreadyDetected) {
-                            scheduleAutoForce(
-                                    token,
-                                    player,
-                                    className,
-                                    method.getName());
-                        }
-
-                        return result;
+                        return null;
                     });
         } catch (Throwable t) {
             installedHooks.remove(
@@ -963,260 +815,12 @@ final class AppPlaybackGuard {
     private void rememberPlayer(
             Object player
     ) {
-        if (player == null) {
-            return;
-        }
-
-        Boolean reported =
-                playerReportedPlaying(
-                        player);
-
-        Object locked =
-                backgroundPlayer.get();
-
-        if (!appForeground
-                && locked != null
-                && locked != player) {
-            Boolean lockedPlaying =
-                    playerReportedPlaying(
-                            locked);
-
-            if (Boolean.TRUE.equals(reported)
-                    && !Boolean.TRUE.equals(
-                            lockedPlaying)) {
-                completeBackgroundPlayerHandoff(
-                        locked,
-                        player,
-                        "immediate");
-                return;
-            }
-
-            if (Boolean.TRUE.equals(reported)
-                    && Boolean.TRUE.equals(
-                            lockedPlaying)) {
-                long token =
-                        ++backgroundHandoffToken;
-
-                log(
-                        Log.INFO,
-                        "APP_BACKGROUND_HANDOFF_PENDING",
-                        "pkg=" + packageName
-                                + " from="
-                                + locked.getClass()
-                                .getName()
-                                + " to="
-                                + player.getClass()
-                                .getName()
-                                + " token="
-                                + token);
-
-                scheduleBackgroundPlayerHandoff(
-                        locked,
-                        player,
-                        token,
-                        1);
-                return;
-            }
-
-            log(
-                    Log.INFO,
-                    "APP_PLAYER_PRELOAD_IGNORED",
-                    "pkg=" + packageName
-                            + " candidate="
-                            + player.getClass()
-                            .getName()
-                            + " candidatePlaying="
-                            + reported
-                            + " lockedPlaying="
-                            + lockedPlaying);
-            return;
-        }
-
-        Object previous =
-                currentPlayer.get();
-
-        boolean accept =
-                Boolean.TRUE.equals(reported)
-                        || previous == null
-                        || previous == player
-                        || Boolean.FALSE.equals(
-                                playerReportedPlaying(
-                                        previous));
-
-        if (!accept) {
-            log(
-                    Log.INFO,
-                    "APP_PLAYER_PRELOAD_IGNORED",
-                    "pkg=" + packageName
-                            + " candidate="
-                            + player.getClass()
-                            .getName()
-                            + " candidatePlaying="
-                            + reported
-                            + " current="
-                            + previous.getClass()
-                            .getName());
-            return;
-        }
-
-        if (previous != player) {
+        if (player != null) {
             currentPlayer =
                     new WeakReference<>(
                             player);
-            adaptiveState = ADAPTIVE_UNKNOWN;
-            lifecyclePauseDetectedToken = -1L;
-
-            if (!backgroundProbeActive()) {
-                backgroundProbeToken++;
-                backgroundProbeUntilElapsed = 0L;
-                backgroundWasPlaying = false;
-            }
-
-            log(
-                    Log.INFO,
-                    "APP_PLAYER_CHANGED",
-                    "pkg=" + packageName
-                            + " player="
-                            + player.getClass()
-                            .getName()
-                            + " playing="
-                            + reported
-                            + " adaptive=unknown");
+            ensureControlReceiver(null);
         }
-
-        lastPlaySignalPlayer =
-                new WeakReference<>(
-                        player);
-        lastPlaySignal = true;
-        ensureControlReceiver(null);
-    }
-
-    private void scheduleBackgroundPlayerHandoff(
-            Object oldPlayer,
-            Object newPlayer,
-            long token,
-            int attempt
-    ) {
-        if (oldPlayer == null
-                || newPlayer == null) {
-            return;
-        }
-
-        mainHandler.postDelayed(
-                () -> {
-                    if (!selected()
-                            || appForeground
-                            || token
-                            != backgroundHandoffToken
-                            || backgroundPlayer.get()
-                            != oldPlayer) {
-                        return;
-                    }
-
-                    Boolean newPlaying =
-                            playerReportedPlaying(
-                                    newPlayer);
-
-                    Boolean oldPlaying =
-                            playerReportedPlaying(
-                                    oldPlayer);
-
-                    if (Boolean.TRUE.equals(
-                            newPlaying)
-                            && !Boolean.TRUE.equals(
-                                    oldPlaying)) {
-                        completeBackgroundPlayerHandoff(
-                                oldPlayer,
-                                newPlayer,
-                                "delayed-"
-                                        + attempt);
-                        return;
-                    }
-
-                    if (!Boolean.TRUE.equals(
-                            newPlaying)) {
-                        log(
-                                Log.INFO,
-                                "APP_BACKGROUND_HANDOFF_CANCEL",
-                                "pkg=" + packageName
-                                        + " reason=new-not-playing"
-                                        + " attempt="
-                                        + attempt
-                                        + " token="
-                                        + token);
-                        return;
-                    }
-
-                    if (attempt
-                            >= BACKGROUND_HANDOFF_MAX_ATTEMPTS) {
-                        log(
-                                Log.INFO,
-                                "APP_BACKGROUND_HANDOFF_CANCEL",
-                                "pkg=" + packageName
-                                        + " reason=old-still-playing"
-                                        + " attempt="
-                                        + attempt
-                                        + " token="
-                                        + token);
-                        return;
-                    }
-
-                    scheduleBackgroundPlayerHandoff(
-                            oldPlayer,
-                            newPlayer,
-                            token,
-                            attempt + 1);
-                },
-                BACKGROUND_HANDOFF_RETRY_MS);
-    }
-
-    private void completeBackgroundPlayerHandoff(
-            Object oldPlayer,
-            Object newPlayer,
-            String reason
-    ) {
-        if (oldPlayer == null
-                || newPlayer == null
-                || appForeground
-                || backgroundPlayer.get()
-                != oldPlayer
-                || !Boolean.TRUE.equals(
-                playerReportedPlaying(
-                        newPlayer))) {
-            return;
-        }
-
-        backgroundHandoffToken++;
-
-        backgroundPlayer =
-                new WeakReference<>(
-                        newPlayer);
-        currentPlayer =
-                new WeakReference<>(
-                        newPlayer);
-        lastPlaySignalPlayer =
-                new WeakReference<>(
-                        newPlayer);
-        lastPlaySignal = true;
-        backgroundWasPlaying = true;
-        lifecyclePauseDetectedToken = -1L;
-
-        log(
-                Log.INFO,
-                "APP_BACKGROUND_PLAYER_HANDOFF",
-                "pkg=" + packageName
-                        + " from="
-                        + oldPlayer.getClass()
-                        .getName()
-                        + " to="
-                        + newPlayer.getClass()
-                        .getName()
-                        + " reason="
-                        + reason
-                        + " adaptive="
-                        + adaptiveState);
-
-        ensureControlReceiver(null);
     }
 
     private void ensureControlReceiver(
@@ -1320,20 +924,6 @@ final class AppPlaybackGuard {
                         && (play
                         ? invokePlay(player)
                         : invokePause(player));
-
-        if (direct) {
-            lastPlaySignal = play;
-            lastPlaySignalPlayer =
-                    new WeakReference<>(
-                            play ? player : null);
-
-            if (play && !appForeground) {
-                backgroundPlayer =
-                        new WeakReference<>(
-                                player);
-                backgroundWasPlaying = true;
-            }
-        }
 
         log(
                 direct ? Log.INFO : Log.WARN,
@@ -1505,366 +1095,18 @@ final class AppPlaybackGuard {
         return false;
     }
 
-    private Activity activityFromArgs(
-            java.util.List<Object> args
-    ) {
-        if (args == null) {
-            return null;
-        }
-
-        for (Object arg : args) {
-            if (arg instanceof Activity activity) {
-                return activity;
-            }
-        }
-
-        return null;
-    }
-
-    private long beginBackgroundProbe(
-            Activity activity,
-            String lifecycleName
-    ) {
-        long now =
-                SystemClock.elapsedRealtime();
-
-        if (backgroundProbeUntilElapsed <= now) {
-            backgroundProbeToken++;
-            backgroundHandoffToken++;
-            lifecyclePauseDetectedToken = -1L;
-
-            Object player =
-                    currentPlayer.get();
-
-            Boolean reported =
-                    playerReportedPlaying(
-                            player);
-
-            boolean signaled =
-                    player != null
-                            && lastPlaySignal
-                            && lastPlaySignalPlayer.get()
-                            == player;
-
-            backgroundWasPlaying =
-                    Boolean.TRUE.equals(
-                            reported)
-                            || (reported == null
-                            && signaled);
-
-            backgroundPlayer =
-                    backgroundWasPlaying
-                            ? new WeakReference<>(
-                                    player)
-                            : new WeakReference<>(
-                                    null);
-
-            log(
-                    Log.INFO,
-                    "APP_BACKGROUND_PLAYER_LOCK",
-                    "pkg=" + packageName
-                            + " player="
-                            + (player == null
-                            ? ""
-                            : player.getClass()
-                            .getName())
-                            + " reported="
-                            + reported
-                            + " signaled="
-                            + signaled
-                            + " locked="
-                            + backgroundWasPlaying);
-        }
-
-        backgroundProbeUntilElapsed =
-                now + AUTO_PROBE_WINDOW_MS;
-
-        long token =
-                backgroundProbeToken;
-
-        long stateToken =
-                ++foregroundStateToken;
-
-        mainHandler.postDelayed(
-                () -> {
-                    if (stateToken
-                            != foregroundStateToken) {
-                        return;
-                    }
-
-                    appForeground = false;
-
-                    log(
-                            Log.INFO,
-                            "APP_BACKGROUND_CONFIRMED",
-                            "pkg=" + packageName
-                                    + " token="
-                                    + token);
-                },
-                BACKGROUND_CONFIRM_DELAY_MS);
-
-        log(
-                Log.INFO,
-                "APP_BACKGROUND_PROBE",
-                "pkg=" + packageName
-                        + " lifecycle="
-                        + lifecycleName
-                        + " activity="
-                        + (activity == null
-                        ? ""
-                        : activity.getClass()
-                        .getName())
-                        + " token=" + token
-                        + " wasPlaying="
-                        + backgroundWasPlaying
-                        + " configured="
-                        + GuardConfig
-                        .backgroundPlaybackMode(
-                                packageName));
-
-        return token;
-    }
-
-    private void onActivityResumed(
-            Activity activity
-    ) {
-        appForeground = true;
-        foregroundStateToken++;
-        backgroundProbeToken++;
-        backgroundHandoffToken++;
-        backgroundProbeUntilElapsed = 0L;
-        lifecyclePauseDetectedToken = -1L;
-        backgroundWasPlaying = false;
-        backgroundPlayer =
-                new WeakReference<>(
-                        null);
-
-        log(
-                Log.INFO,
-                "APP_FOREGROUND_RESUME",
-                "pkg=" + packageName
-                        + " activity="
-                        + (activity == null
-                        ? ""
-                        : activity.getClass()
-                        .getName()));
-    }
-
-    private boolean backgroundProbeActive() {
-        return backgroundProbeUntilElapsed
-                > SystemClock.elapsedRealtime();
-    }
-
-    private void scheduleAutoForce(
-            long token,
-            Object player,
-            String className,
-            String methodName
-    ) {
-        if (player == null) {
-            return;
-        }
-
-        mainHandler.postDelayed(
-                () -> {
-                    if (!selected()
-                            || token
-                            != backgroundProbeToken
-                            || appForeground
-                            || backgroundPlayer.get()
-                            != player
-                            || !GuardConfig
-                            .PLAYBACK_MODE_AUTO
-                            .equals(
-                                    GuardConfig
-                                    .backgroundPlaybackMode(
-                                            packageName))
-                            || !backgroundWasPlaying) {
-                        return;
-                    }
-
-                    adaptiveState =
-                            ADAPTIVE_FORCED;
-
-                    boolean recovered =
-                            invokePlay(
-                                    player);
-
-                    if (recovered) {
-                        lastPlaySignal = true;
-                    }
-
-                    log(
-                            recovered
-                                    ? Log.INFO
-                                    : Log.WARN,
-                            "APP_AUTO_FORCE_DETECTED",
-                            "pkg=" + packageName
-                                    + " player="
-                                    + className
-                                    + " method="
-                                    + methodName
-                                    + " recovered="
-                                    + recovered
-                                    + " token="
-                                    + token);
-                },
-                AUTO_FORCE_DELAY_MS);
-    }
-
-    private void scheduleNativeClassification(
-            long token,
-            Object player
-    ) {
-        if (player == null) {
-            return;
-        }
-
-        mainHandler.postDelayed(
-                () -> {
-                    if (!selected()
-                            || token
-                            != backgroundProbeToken
-                            || appForeground
-                            || backgroundPlayer.get()
-                            != player
-                            || !GuardConfig
-                            .PLAYBACK_MODE_AUTO
-                            .equals(
-                                    GuardConfig
-                                    .backgroundPlaybackMode(
-                                            packageName))
-                            || lifecyclePauseDetectedToken
-                            == token
-                            || !backgroundWasPlaying) {
-                        return;
-                    }
-
-                    Boolean playing =
-                            playerReportedPlaying(
-                                    player);
-
-                    if (Boolean.TRUE.equals(
-                            playing)) {
-                        adaptiveState =
-                                ADAPTIVE_NATIVE;
-
-                        log(
-                                Log.INFO,
-                                "APP_AUTO_NATIVE_DETECTED",
-                                "pkg=" + packageName
-                                        + " player="
-                                        + player.getClass()
-                                        .getName()
-                                        + " playing=true"
-                                        + " token="
-                                        + token);
-                        return;
-                    }
-
-                    adaptiveState =
-                            ADAPTIVE_UNKNOWN;
-
-                    log(
-                            Log.INFO,
-                            "APP_AUTO_UNKNOWN_NO_PAUSE",
-                            "pkg=" + packageName
-                                    + " player="
-                                    + player.getClass()
-                                    .getName()
-                                    + " playing="
-                                    + playing
-                                    + " recovered=false"
-                                    + " reason=no-explicit-lifecycle-pause"
-                                    + " token="
-                                    + token);
-                },
-                AUTO_NATIVE_DELAY_MS);
-    }
-
-    private boolean playerIsPlaying(
-            Object player
-    ) {
-        return Boolean.TRUE.equals(
-                playerReportedPlaying(
-                        player));
-    }
-
-    private Boolean playerReportedPlaying(
-            Object player
-    ) {
-        if (player == null) {
-            return Boolean.FALSE;
-        }
-
-        Boolean playing =
-                readBooleanNoArg(
-                        player,
-                        "isPlaying");
-
-        if (playing != null) {
-            return playing;
-        }
-
-        return readBooleanNoArg(
-                player,
-                "getPlayWhenReady");
-    }
-
-    private Boolean readBooleanNoArg(
-            Object target,
-            String methodName
-    ) {
-        if (target == null) {
-            return null;
-        }
-
-        for (Class<?> current =
-             target.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            try {
-                Method method =
-                        current.getDeclaredMethod(
-                                methodName);
-
-                if (method.getParameterCount()
-                        != 0) {
-                    continue;
-                }
-
-                method.setAccessible(true);
-
-                Object value =
-                        method.invoke(target);
-
-                return value instanceof Boolean
-                        ? (Boolean) value
-                        : null;
-            } catch (NoSuchMethodException ignored) {
-            } catch (Throwable ignored) {
-                return null;
-            }
-        }
-
-        return null;
-    }
-
     private boolean shouldKeepSelfLaunchInBackground() {
         if (!selected()
-                || appForeground
-                || currentPlayer.get() == null) {
+                || appForeground) {
             return false;
         }
 
-        String mode =
-                GuardConfig
-                        .backgroundPlaybackMode(
-                                packageName);
-
         return !GuardConfig
                 .PLAYBACK_MODE_NATIVE
-                .equals(mode);
+                .equals(
+                        GuardConfig
+                        .backgroundPlaybackMode(
+                                packageName));
     }
 
     private boolean isSamePackageIntent(
