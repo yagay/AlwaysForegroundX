@@ -440,8 +440,28 @@ final class OplusFlexibleWindowController {
                         && !bounds.equals(
                         maxBounds);
 
+        Bundle oplusExtras =
+                taskInfoOplusExtras(
+                        taskInfo);
+
+        int flexibleState =
+                oplusExtras == null
+                        ? 0
+                        : oplusExtras.getInt(
+                        "key_flexible_task_state",
+                        0);
+
+        boolean superMini =
+                oplusExtras != null
+                        && oplusExtras.getBoolean(
+                        "flexible_super_mini_state",
+                        false);
+
         session.oemReportedFlexible =
-                embedded || bounded;
+                embedded
+                        || bounded
+                        || flexibleState != 0
+                        || superMini;
         session.lastOplusStateElapsed =
                 SystemClock.elapsedRealtime();
         session.active = true;
@@ -465,6 +485,10 @@ final class OplusFlexibleWindowController {
                         + " taskId=" + taskId
                         + " embedded=" + embedded
                         + " bounded=" + bounded
+                        + " flexibleState="
+                        + flexibleState
+                        + " superMini="
+                        + superMini
                         + " floating="
                         + isInFloatingList(taskId)
                         + " lockKeepAlive="
@@ -2206,6 +2230,70 @@ final class OplusFlexibleWindowController {
 
             current =
                     current.getSuperclass();
+        }
+
+        return null;
+    }
+
+    private static Bundle taskInfoOplusExtras(
+            Object taskInfo
+    ) {
+        if (taskInfo == null) {
+            return null;
+        }
+
+        Object direct =
+                fieldValue(
+                        taskInfo,
+                        "mOplusExtraBundle");
+
+        if (direct instanceof Bundle bundle) {
+            return bundle;
+        }
+
+        direct =
+                fieldValue(
+                        taskInfo,
+                        "oplusExtraBundle");
+
+        if (direct instanceof Bundle bundle) {
+            return bundle;
+        }
+
+        for (Class<?> current =
+             taskInfo.getClass();
+             current != null;
+             current = current.getSuperclass()) {
+            for (Field field :
+                    current.getDeclaredFields()) {
+                if (!Bundle.class
+                        .isAssignableFrom(
+                                field.getType())) {
+                    continue;
+                }
+
+                try {
+                    field.setAccessible(true);
+
+                    Object value =
+                            field.get(
+                                    taskInfo);
+
+                    if (!(value instanceof Bundle bundle)) {
+                        continue;
+                    }
+
+                    if (bundle.containsKey(
+                            "key_flexible_task_state")
+                            || bundle.containsKey(
+                            "flexible_super_mini_state")
+                            || bundle.containsKey(
+                            "androidx.flexible.taskFrame")) {
+                        return bundle;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
         }
 
         return null;
