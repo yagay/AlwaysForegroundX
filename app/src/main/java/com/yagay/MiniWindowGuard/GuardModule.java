@@ -35,7 +35,7 @@ public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final int PROCESS_STATE_TOP = 2;
     private static final int OPLUS_ZOOM_LAUNCH_FLAG = 2;
-    private static final int OPLUS_MINI_START_WAY = 1;
+    private static final int OPLUS_ZOOM_STATE_FLOAT = 5;
     private static final long SYSTEM_WINDOW_RETRY_MS = 80L;
     private static final int SYSTEM_WINDOW_MAX_RETRIES = 24;
     private static final long SYSTEM_WINDOW_COOLDOWN_MS = 1800L;
@@ -1189,20 +1189,27 @@ public final class GuardModule extends XposedModule {
 
                     if (current.isOplusFlexibleTask(
                             task)) {
-                        boolean minimized =
-                                requestSystemMiniIcon(
-                                        packageName,
-                                        taskId(task));
+                        boolean requested =
+                                requestSystemFloatHandle(
+                                        task,
+                                        packageName);
 
                         diag(
-                                minimized
-                                        ? "BACKGROUND_SYSTEM_MINI_REQUEST"
-                                        : "BACKGROUND_SYSTEM_MINI_FAIL",
+                                requested
+                                        ? "BACKGROUND_SYSTEM_FLOAT_HANDLE_REQUEST"
+                                        : "BACKGROUND_SYSTEM_FLOAT_HANDLE_FAIL",
                                 "pkg=" + packageName
                                         + " taskId="
                                         + taskId(task)
                                         + " attempt="
                                         + attempt);
+
+                        if (requested) {
+                            waitForSystemFloatHandle(
+                                    task,
+                                    packageName,
+                                    0);
+                        }
                         return;
                     }
 
@@ -1226,114 +1233,275 @@ public final class GuardModule extends XposedModule {
     }
 
     /**
-     * Direct OEM mini/FloatHandle request. Prefer the ActivityTaskManager
-     * extension used by current OxygenOS; keep ZoomWindowManager as fallback.
+     * Request the real OPlus FLOAT state used by the system FloatHandle.
+     *
+     * OPlus Launcher/Shell routes this through the hidden framework class
+     * OplusZoomTaskManagerInternal. Flag 5 maps to ZoomFloatState, whose
+     * onEnter() starts the native Zoom FloatHandle. This is intentionally not
+     * startMiniZoomFromZoom(): that API only produces windowType=2 Mini Window.
      */
-    private boolean requestSystemMiniIcon(
-            String packageName,
-            int taskId
+    private boolean requestSystemFloatHandle(
+            Object task,
+            String packageName
     ) {
-        String[] classNames = {
-                "android.app.OplusActivityTaskManager",
-                "com.oplus.zoomwindow.OplusZoomWindowManager"
-        };
-
-        for (String className :
-                classNames) {
-            try {
-                Class<?> type =
-                        load(
-                                systemClassLoader,
-                                className);
-
-                if (type == null) {
-                    continue;
-                }
-
-                Method getInstance =
-                        type.getMethod(
-                                "getInstance");
-
-                Object manager =
-                        getInstance.invoke(
-                                null);
-
-                if (manager == null) {
-                    continue;
-                }
-
-                Method mini =
-                        null;
-
-                for (Method method :
-                        type.getMethods()) {
-                    if ("startMiniZoomFromZoom"
-                            .equals(method.getName())
-                            && method.getParameterCount()
-                            == 1
-                            && method
-                            .getParameterTypes()[0]
-                            == int.class) {
-                        mini = method;
-                        break;
-                    }
-                }
-
-                if (mini == null) {
-                    continue;
-                }
-
-                mini.setAccessible(true);
-
-                long identity =
-                        Binder.clearCallingIdentity();
-
-                try {
-                    Object result =
-                            mini.invoke(
-                                    manager,
-                                    OPLUS_MINI_START_WAY);
-
-                    if (mini.getReturnType()
-                            == boolean.class
-                            && Boolean.FALSE.equals(
-                            result)) {
-                        continue;
-                    }
-
-                    diag(
-                            "BACKGROUND_SYSTEM_MINI_ICON",
-                            "pkg=" + packageName
-                                    + " taskId="
-                                    + taskId
-                                    + " startWay="
-                                    + OPLUS_MINI_START_WAY
-                                    + " class="
-                                    + className
-                                    + " result="
-                                    + String.valueOf(
-                                    result));
-
-                    return true;
-                } finally {
-                    Binder.restoreCallingIdentity(
-                            identity);
-                }
-            } catch (Throwable t) {
-                diag(
-                        "BACKGROUND_SYSTEM_MINI_API_FAIL",
-                        "pkg=" + packageName
-                                + " taskId="
-                                + taskId
-                                + " class="
-                                + className
-                                + " error="
-                                + t.getClass()
-                                .getSimpleName());
-            }
+        if (task == null) {
+            return false;
         }
 
-        return false;
+        int id = taskId(task);
+        Object token =
+                windowContainerTokenForTask(
+                        task);
+
+        if (id < 0 || token == null) {
+            diag(
+                    "BACKGROUND_SYSTEM_FLOAT_HANDLE_FAIL",
+                    "pkg=" + packageName
+                            + " taskId=" + id
+                            + " reason="
+                            + (token == null
+                            ? "no-window-container-token"
+                            : "invalid-task-id"));
+            return false;
+        }
+
+        try {
+            Class<?> type =
+                    load(
+                            systemClassLoader,
+                            "com.oplus.zoomwindow.OplusZoomTaskManagerInternal");
+
+            if (type == null) {
+                diag(
+                        "BACKGROUND_SYSTEM_FLOAT_HANDLE_FAIL",
+                        "pkg=" + packageName
+                                + " taskId=" + id
+                                + " reason=manager-class-missing");
+                return false;
+            }
+
+            Method getInstance =
+                    type.getDeclaredMethod(
+                            "getInstance");
+            getInstance.setAccessible(true);
+
+            Object manager =
+                    getInstance.invoke(null);
+
+            if (manager == null) {
+                return false;
+            }
+
+            Method request = null;
+
+            for (Method method :
+                    type.getDeclaredMethods()) {
+                if (!"requestChangeZoomTask"
+                        .equals(method.getName())
+                        || method.getParameterCount()
+                        != 3) {
+                    continue;
+                }
+
+                Class<?>[] params =
+                        method.getParameterTypes();
+
+                if (params[1] == int.class
+                        && params[2] == boolean.class
+                        && params[0].isInstance(token)) {
+                    request = method;
+                    break;
+                }
+            }
+
+            if (request == null) {
+                diag(
+                        "BACKGROUND_SYSTEM_FLOAT_HANDLE_FAIL",
+                        "pkg=" + packageName
+                                + " taskId=" + id
+                                + " reason=requestChangeZoomTask-missing"
+                                + " tokenClass="
+                                + token.getClass().getName());
+                return false;
+            }
+
+            request.setAccessible(true);
+
+            long identity =
+                    Binder.clearCallingIdentity();
+
+            try {
+                Object result =
+                        request.invoke(
+                                manager,
+                                token,
+                                OPLUS_ZOOM_STATE_FLOAT,
+                                true);
+
+                diag(
+                        "BACKGROUND_SYSTEM_FLOAT_HANDLE_INVOKE",
+                        "pkg=" + packageName
+                                + " taskId=" + id
+                                + " state="
+                                + OPLUS_ZOOM_STATE_FLOAT
+                                + " animate=true"
+                                + " method="
+                                + request.toGenericString()
+                                + " result="
+                                + String.valueOf(result));
+
+                return true;
+            } finally {
+                Binder.restoreCallingIdentity(
+                        identity);
+            }
+        } catch (Throwable t) {
+            diag(
+                    "BACKGROUND_SYSTEM_FLOAT_HANDLE_FAIL",
+                    "pkg=" + packageName
+                            + " taskId=" + id
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName()
+                            + ":"
+                            + String.valueOf(
+                            t.getMessage()));
+            return false;
+        }
+    }
+
+    private Object windowContainerTokenForTask(
+            Object task
+    ) {
+        Object taskInfo =
+                invokeNoArg(
+                        task,
+                        "getTaskInfo");
+
+        Object token =
+                fieldValue(
+                        taskInfo,
+                        "token");
+
+        if (token != null) {
+            return token;
+        }
+
+        Object remoteToken =
+                invokeNoArg(
+                        task,
+                        "getRemoteToken");
+
+        if (remoteToken == null) {
+            remoteToken =
+                    fieldValue(
+                            task,
+                            "mRemoteToken");
+        }
+
+        token =
+                invokeNoArg(
+                        remoteToken,
+                        "toWindowContainerToken");
+
+        if (token != null) {
+            return token;
+        }
+
+        return fieldValue(
+                remoteToken,
+                "mWindowContainerToken");
+    }
+
+    private void waitForSystemFloatHandle(
+            Object task,
+            String packageName,
+            int attempt
+    ) {
+        Handler handler = systemHandler;
+
+        if (handler == null
+                || task == null) {
+            return;
+        }
+
+        handler.postDelayed(
+                () -> {
+                    int id = taskId(task);
+
+                    if (isSystemFloatHandleTask(id)) {
+                        diag(
+                                "BACKGROUND_SYSTEM_FLOAT_HANDLE_READY",
+                                "pkg=" + packageName
+                                        + " taskId=" + id
+                                        + " attempt="
+                                        + attempt);
+                        return;
+                    }
+
+                    if (attempt
+                            >= SYSTEM_WINDOW_MAX_RETRIES) {
+                        diag(
+                                "BACKGROUND_SYSTEM_FLOAT_HANDLE_TIMEOUT",
+                                "pkg=" + packageName
+                                        + " taskId=" + id);
+                        return;
+                    }
+
+                    waitForSystemFloatHandle(
+                            task,
+                            packageName,
+                            attempt + 1);
+                },
+                SYSTEM_WINDOW_RETRY_MS);
+    }
+
+    private boolean isSystemFloatHandleTask(
+            int taskId
+    ) {
+        if (taskId < 0) {
+            return false;
+        }
+
+        try {
+            Class<?> type =
+                    load(
+                            systemClassLoader,
+                            "com.android.server.wm.FloatHandleController");
+
+            if (type == null) {
+                return false;
+            }
+
+            Method getInstance =
+                    type.getDeclaredMethod(
+                            "getInstance");
+            getInstance.setAccessible(true);
+
+            Object controller =
+                    getInstance.invoke(null);
+
+            if (controller == null) {
+                return false;
+            }
+
+            Method check =
+                    controller.getClass()
+                            .getDeclaredMethod(
+                                    "isInFloatingList",
+                                    int.class);
+            check.setAccessible(true);
+
+            Object result =
+                    check.invoke(
+                            controller,
+                            taskId);
+
+            return Boolean.TRUE.equals(
+                    result);
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     /**
