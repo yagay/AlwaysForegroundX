@@ -32,10 +32,9 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
-    private static final int OPLUS_FLEXIBLE_WINDOWING_MODE = 100;
-    private static final int OPLUS_ZOOM_LAUNCH_FLAG = 4;
-    private static final long AUTO_MINI_RETRY_DELAY_MS = 120L;
-    private static final int AUTO_MINI_MAX_RETRIES = 8;
+    private static final long SYSTEM_MINI_RETRY_DELAY_MS = 80L;
+    private static final int SYSTEM_MINI_MAX_RETRIES = 8;
+    private static final int OPLUS_MINI_START_FROM_FULLSCREEN = 1;
     private static final long MODULE_VERSION_CODE =
             BuildConfig.VERSION_CODE;
 
@@ -1640,24 +1639,16 @@ public final class GuardModule extends XposedModule {
                             return;
                         }
 
-                        boolean alreadyFlexible =
-                                current
-                                .isOplusFlexibleTask(
-                                        task);
-
                         boolean requested =
-                                alreadyFlexible
-                                        || requestExistingTaskFlexibleWindow(
-                                                task,
-                                                packageName);
+                                requestSystemFlexibleWindow(
+                                        id,
+                                        packageName);
 
                         diag(
-                                "BACKGROUND_AUTO_MINI_FLEX_REQUEST",
+                                "BACKGROUND_SYSTEM_MINI_TOGGLE",
                                 "pkg=" + packageName
                                         + " taskId="
                                         + id
-                                        + " alreadyFlexible="
-                                        + alreadyFlexible
                                         + " requested="
                                         + requested);
 
@@ -1665,7 +1656,7 @@ public final class GuardModule extends XposedModule {
                             return;
                         }
 
-                        waitForFlexibleThenMinimize(
+                        waitForSystemFlexibleThenMini(
                                 task,
                                 packageName,
                                 0);
@@ -1673,14 +1664,107 @@ public final class GuardModule extends XposedModule {
                         log(
                                 Log.WARN,
                                 TAG,
-                                "BACKGROUND_AUTO_MINI request fail-open pkg="
+                                "BACKGROUND_SYSTEM_MINI fail-open pkg="
                                         + packageName,
                                 t);
                     }
                 });
     }
 
-    private void waitForFlexibleThenMinimize(
+    /**
+     * Enter the exact OxygenOS flexible-window path for an already existing
+     * task. This uses the OEM ActivityTaskManager API instead of constructing
+     * ActivityOptions/windowingMode bundles ourselves, so bounds, caption,
+     * corner radius, input, animations and restore behavior stay system-owned.
+     */
+    private boolean requestSystemFlexibleWindow(
+            int taskId,
+            String packageName
+    ) {
+        try {
+            Class<?> type =
+                    load(
+                            systemClassLoader,
+                            "android.app.OplusActivityTaskManager");
+
+            if (type == null) {
+                diag(
+                        "BACKGROUND_SYSTEM_MINI_TOGGLE_FAIL",
+                        "pkg=" + packageName
+                                + " taskId="
+                                + taskId
+                                + " reason=class-missing");
+                return false;
+            }
+
+            Method getInstance =
+                    type.getMethod(
+                            "getInstance");
+
+            Object instance =
+                    getInstance.invoke(
+                            null);
+
+            if (instance == null) {
+                return false;
+            }
+
+            Method toggle =
+                    type.getMethod(
+                            "toggleFlexibleWindow",
+                            android.os.IBinder.class,
+                            int.class,
+                            boolean.class,
+                            boolean.class);
+
+            Object result =
+                    toggle.invoke(
+                            instance,
+                            null,
+                            taskId,
+                            true,
+                            true);
+
+            boolean accepted =
+                    toggle.getReturnType()
+                            != boolean.class
+                            || !Boolean.FALSE.equals(
+                            result);
+
+            diag(
+                    accepted
+                            ? "BACKGROUND_SYSTEM_FLEXIBLE_REQUEST"
+                            : "BACKGROUND_SYSTEM_FLEXIBLE_REJECTED",
+                    "pkg=" + packageName
+                            + " taskId="
+                            + taskId
+                            + " method="
+                            + toggle.toGenericString()
+                            + " result="
+                            + result);
+
+            return accepted;
+        } catch (Throwable t) {
+            diag(
+                    "BACKGROUND_SYSTEM_MINI_TOGGLE_FAIL",
+                    "pkg=" + packageName
+                            + " taskId="
+                            + taskId
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName());
+
+            return false;
+        }
+    }
+
+    /**
+     * The OEM mini API expects a real Zoom/FlexibleWindow to exist first.
+     * Poll only the OEM-reported state; do not synthesize bounds or window
+     * configuration. As soon as OxygenOS reports the task flexible, hand the
+     * second step back to its own mini/float-handle implementation.
+     */
+    private void waitForSystemFlexibleThenMini(
             Object task,
             String packageName,
             int attempt
@@ -1706,42 +1790,27 @@ public final class GuardModule extends XposedModule {
                             return;
                         }
 
-                        boolean flexible =
-                                current
+                        if (current
                                 .isOplusFlexibleTask(
-                                        task);
-
-                        if (flexible) {
-                            boolean minimized =
-                                    requestOplusFloatHandleMini(
-                                            task,
-                                            packageName);
-
-                            diag(
-                                    "BACKGROUND_AUTO_MINI_HANDLE_REQUEST",
-                                    "pkg="
-                                            + packageName
-                                            + " taskId="
-                                            + taskId(task)
-                                            + " attempt="
-                                            + attempt
-                                            + " minimized="
-                                            + minimized);
+                                        task)) {
+                            requestSystemMiniIcon(
+                                    packageName,
+                                    taskId(task));
                             return;
                         }
 
                         if (attempt
-                                >= AUTO_MINI_MAX_RETRIES) {
+                                >= SYSTEM_MINI_MAX_RETRIES) {
                             diag(
-                                    "BACKGROUND_AUTO_MINI_FLEX_TIMEOUT",
-                                    "pkg="
-                                            + packageName
+                                    "BACKGROUND_SYSTEM_MINI_TIMEOUT",
+                                    "pkg=" + packageName
                                             + " taskId="
-                                            + taskId(task));
+                                            + taskId(task)
+                                            + " phase=wait-flexible");
                             return;
                         }
 
-                        waitForFlexibleThenMinimize(
+                        waitForSystemFlexibleThenMini(
                                 task,
                                 packageName,
                                 attempt + 1);
@@ -1749,610 +1818,77 @@ public final class GuardModule extends XposedModule {
                         log(
                                 Log.WARN,
                                 TAG,
-                                "BACKGROUND_AUTO_MINI wait fail-open pkg="
+                                "BACKGROUND_SYSTEM_MINI wait fail-open pkg="
                                         + packageName,
                                 t);
                     }
                 },
-                AUTO_MINI_RETRY_DELAY_MS);
+                SYSTEM_MINI_RETRY_DELAY_MS);
     }
 
-    private boolean requestExistingTaskFlexibleWindow(
-            Object task,
-            String packageName
+    /**
+     * Ask OxygenOS to convert its real small window into the stock mini/float
+     * icon. startWay=1 is the OEM "from fullscreen" path used for the
+     * fullscreen -> zoom -> mini transition.
+     */
+    private boolean requestSystemMiniIcon(
+            String packageName,
+            int taskId
     ) {
-        int id =
-                taskId(task);
+        try {
+            Class<?> type =
+                    load(
+                            systemClassLoader,
+                            "android.app.OplusActivityTaskManager");
 
-        if (id < 0) {
-            return false;
-        }
-
-        Object atms =
-                fieldValue(
-                        task,
-                        "mAtmService");
-
-        if (atms == null) {
-            Object controller =
-                    getFlexibleTaskController();
-
-            atms =
-                    fieldValueByTypeSuffix(
-                            controller,
-                            "ActivityTaskManagerService");
-        }
-
-        if (atms == null) {
-            return false;
-        }
-
-        Bundle options =
-                new Bundle();
-
-        options.putInt(
-                "android.activity.windowingMode",
-                OPLUS_FLEXIBLE_WINDOWING_MODE);
-        options.putInt(
-                "android:activity.mZoomLaunchFlags",
-                OPLUS_ZOOM_LAUNCH_FLAG);
-        options.putInt(
-                "zoom_task_id",
-                id);
-        options.putInt(
-                "android.activity.splashScreenStyle",
-                1);
-
-        for (Class<?> current =
-             atms.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            for (Method method :
-                    current.getDeclaredMethods()) {
-                if (!"startActivityFromRecents"
-                        .equals(method.getName())
-                        || method.getParameterCount()
-                        != 2) {
-                    continue;
-                }
-
-                Class<?>[] types =
-                        method.getParameterTypes();
-
-                if (types[0] != int.class
-                        || !Bundle.class
-                        .isAssignableFrom(
-                                types[1])) {
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    Object result =
-                            method.invoke(
-                                    atms,
-                                    id,
-                                    options);
-
-                    diag(
-                            "BACKGROUND_AUTO_MINI_FLEX_INVOKE",
-                            "pkg=" + packageName
-                                    + " taskId="
-                                    + id
-                                    + " result="
-                                    + result
-                                    + " method="
-                                    + method.toGenericString());
-
-                    return true;
-                } catch (Throwable t) {
-                    diag(
-                            "BACKGROUND_AUTO_MINI_FLEX_INVOKE_FAIL",
-                            "pkg=" + packageName
-                                    + " taskId="
-                                    + id
-                                    + " error="
-                                    + t.getClass()
-                                    .getSimpleName());
-                    return false;
-                }
+            if (type == null) {
+                return false;
             }
-        }
 
-        return false;
-    }
+            Method getInstance =
+                    type.getMethod(
+                            "getInstance");
 
-    private boolean requestOplusFloatHandleMini(
-            Object task,
-            String packageName
-    ) {
-        Object controller =
-                getFlexibleTaskController();
+            Object instance =
+                    getInstance.invoke(
+                            null);
 
-        if (controller == null) {
+            if (instance == null) {
+                return false;
+            }
+
+            Method mini =
+                    type.getMethod(
+                            "startMiniZoomFromZoom",
+                            int.class);
+
+            mini.invoke(
+                    instance,
+                    OPLUS_MINI_START_FROM_FULLSCREEN);
+
             diag(
-                    "BACKGROUND_AUTO_MINI_OEM_MISSING",
+                    "BACKGROUND_SYSTEM_MINI_ICON",
                     "pkg=" + packageName
                             + " taskId="
-                            + taskId(task)
-                            + " reason=no-controller");
+                            + taskId
+                            + " startWay="
+                            + OPLUS_MINI_START_FROM_FULLSCREEN
+                            + " method="
+                            + mini.toGenericString());
+
+            return true;
+        } catch (Throwable t) {
+            diag(
+                    "BACKGROUND_SYSTEM_MINI_ICON_FAIL",
+                    "pkg=" + packageName
+                            + " taskId="
+                            + taskId
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName());
+
             return false;
         }
-
-        int id =
-                taskId(task);
-
-        if (id < 0) {
-            return false;
-        }
-
-        if (invokeDirectMiniMethod(
-                controller,
-                task,
-                id,
-                packageName)) {
-            return true;
-        }
-
-        if (invokeRecentClickedMini(
-                controller,
-                task,
-                id,
-                packageName)) {
-            return true;
-        }
-
-        if (invokeFlexibleEventMini(
-                controller,
-                task,
-                id,
-                packageName)) {
-            return true;
-        }
-
-        diag(
-                "BACKGROUND_AUTO_MINI_OEM_MISSING",
-                "pkg=" + packageName
-                        + " taskId="
-                        + id
-                        + " reason=no-supported-mini-entry");
-
-        return false;
-    }
-
-    private boolean invokeDirectMiniMethod(
-            Object controller,
-            Object task,
-            int taskId,
-            String packageName
-    ) {
-        String[] preferredNames = {
-                "minimizeFlexibleTask",
-                "minimizeFlexibleWindow",
-                "moveTaskToFloatHandle",
-                "moveToFloatHandle",
-                "enterFloatHandle",
-                "enterSuperMini",
-                "setTaskToSuperMini",
-                "requestMinimizeFlexibleTask"
-        };
-
-        for (String preferredName :
-                preferredNames) {
-            for (Class<?> current =
-                 controller.getClass();
-                 current != null;
-                 current = current.getSuperclass()) {
-                for (Method method :
-                        current.getDeclaredMethods()) {
-                    if (!preferredName.equals(
-                            method.getName())) {
-                        continue;
-                    }
-
-                    Object[] args =
-                            buildOplusMiniArgs(
-                                    method,
-                                    task,
-                                    taskId,
-                                    true);
-
-                    if (args == null) {
-                        continue;
-                    }
-
-                    try {
-                        method.setAccessible(true);
-
-                        Object result =
-                                method.invoke(
-                                        controller,
-                                        args);
-
-                        if (method.getReturnType()
-                                == boolean.class
-                                && Boolean.FALSE.equals(
-                                result)) {
-                            continue;
-                        }
-
-                        diag(
-                                "BACKGROUND_AUTO_MINI_DIRECT",
-                                "pkg="
-                                        + packageName
-                                        + " taskId="
-                                        + taskId
-                                        + " method="
-                                        + method.toGenericString()
-                                        + " result="
-                                        + result);
-
-                        return true;
-                    } catch (Throwable t) {
-                        diag(
-                                "BACKGROUND_AUTO_MINI_DIRECT_FAIL",
-                                "pkg="
-                                        + packageName
-                                        + " taskId="
-                                        + taskId
-                                        + " method="
-                                        + method.getName()
-                                        + " error="
-                                        + t.getClass()
-                                        .getSimpleName());
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private boolean invokeRecentClickedMini(
-            Object controller,
-            Object task,
-            int taskId,
-            String packageName
-    ) {
-        for (Class<?> current =
-             controller.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            for (Method method :
-                    current.getDeclaredMethods()) {
-                if (!"onRecentClicked"
-                        .equals(method.getName())) {
-                    continue;
-                }
-
-                Object[] args =
-                        buildOplusMiniArgs(
-                                method,
-                                task,
-                                taskId,
-                                true);
-
-                if (args == null) {
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    Object result =
-                            method.invoke(
-                                    controller,
-                                    args);
-
-                    if (method.getReturnType()
-                            == boolean.class
-                            && Boolean.FALSE.equals(
-                            result)) {
-                        continue;
-                    }
-
-                    diag(
-                            "BACKGROUND_AUTO_MINI_OEM",
-                            "pkg=" + packageName
-                                    + " taskId="
-                                    + taskId
-                                    + " method="
-                                    + method.toGenericString()
-                                    + " result="
-                                    + result);
-
-                    return true;
-                } catch (Throwable t) {
-                    diag(
-                            "BACKGROUND_AUTO_MINI_OEM_FAIL",
-                            "pkg=" + packageName
-                                    + " taskId="
-                                    + taskId
-                                    + " method="
-                                    + method.toGenericString()
-                                    + " error="
-                                    + t.getClass()
-                                    .getSimpleName());
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private boolean invokeFlexibleEventMini(
-            Object controller,
-            Object task,
-            int taskId,
-            String packageName
-    ) {
-        for (Class<?> current =
-             controller.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            for (Method method :
-                    current.getDeclaredMethods()) {
-                if (!"notifyFlexibleTaskEvent"
-                        .equals(method.getName())) {
-                    continue;
-                }
-
-                Object[] args =
-                        buildFlexibleEventArgs(
-                                method,
-                                task,
-                                taskId,
-                                2002);
-
-                if (args == null) {
-                    continue;
-                }
-
-                try {
-                    method.setAccessible(true);
-
-                    Object result =
-                            method.invoke(
-                                    controller,
-                                    args);
-
-                    if (method.getReturnType()
-                            == boolean.class
-                            && Boolean.FALSE.equals(
-                            result)) {
-                        continue;
-                    }
-
-                    diag(
-                            "BACKGROUND_AUTO_MINI_EVENT",
-                            "pkg="
-                                    + packageName
-                                    + " taskId="
-                                    + taskId
-                                    + " event=2002"
-                                    + " method="
-                                    + method.toGenericString()
-                                    + " result="
-                                    + result);
-
-                    return true;
-                } catch (Throwable t) {
-                    diag(
-                            "BACKGROUND_AUTO_MINI_EVENT_FAIL",
-                            "pkg="
-                                    + packageName
-                                    + " taskId="
-                                    + taskId
-                                    + " method="
-                                    + method.toGenericString()
-                                    + " error="
-                                    + t.getClass()
-                                    .getSimpleName());
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static Object[] buildOplusMiniArgs(
-            Method method,
-            Object task,
-            int taskId,
-            boolean minimize
-    ) {
-        if (method == null) {
-            return null;
-        }
-
-        Class<?>[] types =
-                method.getParameterTypes();
-
-        Object[] args =
-                new Object[types.length];
-
-        int intIndex = 0;
-
-        for (int i = 0;
-             i < types.length;
-             i++) {
-            Class<?> type =
-                    types[i];
-
-            if (type == int.class
-                    || type == Integer.class) {
-                // First integer is almost always the target taskId. Extra
-                // integer slots on OPlus controller callbacks are commonly
-                // event/reason/user fields; zero is the safest fail-open value.
-                args[i] =
-                        intIndex++ == 0
-                                ? taskId
-                                : 0;
-                continue;
-            }
-
-            if (type == boolean.class
-                    || type == Boolean.class) {
-                args[i] = minimize;
-                continue;
-            }
-
-            if (type == String.class) {
-                args[i] =
-                        "MiniWindowGuard";
-                continue;
-            }
-
-            if (type == Bundle.class) {
-                Bundle bundle =
-                        new Bundle();
-
-                bundle.putInt(
-                        "taskId",
-                        taskId);
-                bundle.putInt(
-                        "zoom_task_id",
-                        taskId);
-                bundle.putBoolean(
-                        "minimize",
-                        minimize);
-                bundle.putBoolean(
-                        "toFloatHandle",
-                        minimize);
-
-                args[i] = bundle;
-                continue;
-            }
-
-            if (task != null
-                    && type.isInstance(
-                    task)) {
-                args[i] = task;
-                continue;
-            }
-
-            if (type.isPrimitive()) {
-                if (type == long.class) {
-                    args[i] = 0L;
-                } else if (type == float.class) {
-                    args[i] = 0f;
-                } else if (type == double.class) {
-                    args[i] = 0d;
-                } else if (type == short.class) {
-                    args[i] = (short) 0;
-                } else if (type == byte.class) {
-                    args[i] = (byte) 0;
-                } else if (type == char.class) {
-                    args[i] = (char) 0;
-                } else {
-                    return null;
-                }
-                continue;
-            }
-
-            args[i] = null;
-        }
-
-        return args;
-    }
-
-    private static Object[] buildFlexibleEventArgs(
-            Method method,
-            Object task,
-            int taskId,
-            int event
-    ) {
-        if (method == null) {
-            return null;
-        }
-
-        Class<?>[] types =
-                method.getParameterTypes();
-
-        Object[] args =
-                new Object[types.length];
-
-        boolean eventPlaced = false;
-        boolean taskIdPlaced = false;
-
-        for (int i = 0;
-             i < types.length;
-             i++) {
-            Class<?> type =
-                    types[i];
-
-            if (type == int.class
-                    || type == Integer.class) {
-                if (!eventPlaced) {
-                    args[i] = event;
-                    eventPlaced = true;
-                } else if (!taskIdPlaced) {
-                    args[i] = taskId;
-                    taskIdPlaced = true;
-                } else {
-                    args[i] = 0;
-                }
-                continue;
-            }
-
-            if (task != null
-                    && type.isInstance(task)) {
-                args[i] = task;
-                taskIdPlaced = true;
-                continue;
-            }
-
-            if (type == boolean.class
-                    || type == Boolean.class) {
-                args[i] = true;
-                continue;
-            }
-
-            if (type == String.class) {
-                args[i] =
-                        "MiniWindowGuard";
-                continue;
-            }
-
-            if (type == Bundle.class) {
-                Bundle bundle =
-                        new Bundle();
-                bundle.putInt(
-                        "taskId",
-                        taskId);
-                bundle.putInt(
-                        "event",
-                        event);
-                args[i] = bundle;
-                continue;
-            }
-
-            if (type.isPrimitive()) {
-                if (type == long.class) {
-                    args[i] = 0L;
-                } else if (type == float.class) {
-                    args[i] = 0f;
-                } else if (type == double.class) {
-                    args[i] = 0d;
-                } else if (type == short.class) {
-                    args[i] = (short) 0;
-                } else if (type == byte.class) {
-                    args[i] = (byte) 0;
-                } else if (type == char.class) {
-                    args[i] = (char) 0;
-                } else {
-                    return null;
-                }
-                continue;
-            }
-
-            args[i] = null;
-        }
-
-        return eventPlaced
-                ? args
-                : null;
     }
 
     private static Object fieldValueByTypeSuffix(
