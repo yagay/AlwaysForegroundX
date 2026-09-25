@@ -1,5 +1,79 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.3.3 — 修复普通后台进入 STOPPED 后暂停
+
+5.3.2 已确认普通后台名单同步成功，且 `BACKGROUND_PAUSE_BLOCK` 能命中。
+新诊断进一步确认：OxygenOS 的 Recents/Home 过渡在 pause 被拦截后，仍会在过渡结束时调用
+`ActivityRecord.stopIfPossible()`。Android 随后发送 `StopActivityItem`；客户端为了执行 Stop 会先补一次
+`performPause()`，因此播放器仍然停止。
+
+5.3.3 新增普通后台 STOP 阶段保护：
+
+- 只对已经进入 `BACKGROUND_PROTECTED` 的后台播放名单 Activity 生效；
+- 继续允许窗口变为不可见，因此桌面/其他 App 正常显示和获得焦点；
+- 拦截 `ActivityRecord.stopIfPossible()`，不向目标 App 发送 `StopActivityItem`；
+- 新增 `BACKGROUND_STOP_SUPPRESS / BACKGROUND_STOP_BLOCK` 日志；
+- Activity finishing、强制停止、更新和真实关闭不使用此保护；
+- 返回目标 App 时仍由现有焦点状态自动退出 `BACKGROUND_PROTECTED`；
+- 不修改已经稳定的小窗/FloatHandle 路径。
+
+> 本版新增固定 system_server Hook，Bootstrap API 升级为 4，安装后需要完整重启一次。
+
+## 5.3.2 — 修复普通后台/普通锁屏名单未同步
+
+5.3.0 加入了 `background_playback_packages`，但 App 侧 `GuardApp.syncAll()` 的
+`STRING_SET_KEYS` 漏掉了这个新 key。结果是界面可以勾选“后台播放应用”，但 LSPosed/system_server
+永远收不到该名单，因此：
+
+- 普通全屏切后台不会出现 `BACKGROUND_PAUSE_SUPPRESS / BACKGROUND_PAUSE_BLOCK`；
+- 普通全屏锁屏仍会执行 `wm_pause_activity ... reason=sleep`；
+- 只有原来的 OPlus 小窗名单继续有效。
+
+5.3.2 修复：
+
+- 将 `BACKGROUND_PLAYBACK_PACKAGES` 加入 Remote Preferences 同步；
+- 已经勾选的后台播放应用会在新版本启动后自动同步，无需重新勾选；
+- 诊断摘要新增 `background_playback_packages=[...]`；
+- 诊断目标列表也包含后台播放应用；
+- 不修改 5.3.1 已稳定的小窗/FloatHandle 状态机；
+- Bootstrap API 仍为 3，本版本没有新增固定 system_server Hook。
+
+> 如果当前已经运行 5.3.1 / Bootstrap API 3，安装 5.3.2 后不需要完整重启；让 App 启动并连接 LSPosed 后即可同步配置，Engine 可自动热重载。
+
+## 5.3.1 — 修复 FloatHandle 重复开关后停止播放
+
+诊断确认：第一次缩成 FloatHandle 后，从图标重新打开小窗时，OPlus 会执行
+`FloatHandleController.startActivityByFloatInfo()` 并移除原 FloatHandle。旧逻辑没有在这个明确的“恢复为小窗”事件上清理
+`edgeHung / edgeMinimizeRequested`，导致第二次缩小时可能走 `pending_exit_to=6 / exitTo:6`，
+随后出现 `pauseInRecentsAnim → moveTaskToBack → STOPPED`。
+
+5.3.1 新增原生 FloatHandle 恢复 Hook：
+
+- 点击侧边图标打开小窗时立即触发 `OPLUS_EDGE_RESTORE`；
+- 清理上一次缩小遗留的 `edgeHung` 和 `edgeMinimizeRequested`；
+- 下一次缩小时重新按新的 OPlus FloatHandle 事件建立保护状态；
+- 不使用延迟，不根据动画时间猜测；
+- 不修改 5.2.0 已验证成功的第一次缩小/锁屏保活逻辑；
+- 5.3.0 的普通后台播放状态保持不变。
+
+> Bootstrap API 升级为 3，安装后需要完整重启一次。
+
+## 5.3.0 — 普通后台播放状态
+
+5.3.0 在已经稳定的 5.2.0 OPlus 小窗状态机旁边增加独立的 `BACKGROUND_PROTECTED`，不改变原有小窗逻辑。
+
+- 新增“后台播放应用”名单；
+- 普通全屏 App 切到不同包、Home/用户离开，或屏幕 sleep 时才进入 `BACKGROUND_PROTECTED`；
+- `TaskFragment.startPausing()` 直接依据当前 Activity、resuming Activity、`userLeaving` 和 `uiSleeping` 判断，不使用延迟；
+- 同 App 内页面切换正常 pause/resume，不拦；
+- Activity finishing、强制停止和应用更新正常放行；
+- 返回受保护 App、重新获得焦点时自动退出 `BACKGROUND_PROTECTED`；
+- 后台状态复用现有 TOP / hasResumedActivity / Hans / freezer / stopUid 保护；
+- 用户从最近任务划掉普通后台 App 时允许正常关闭，不套用小窗的 task-removal kill guard；
+- 小窗/FloatHandle/锁屏小窗继续完全使用 5.2.0 的原逻辑。
+
+> 5.3.0 的 Bootstrap API 升级为 2。旧 Bootstrap 不会错误热加载本版本；安装后需要完整重启一次。
+
 ## 5.2.0 — 状态驱动生命周期守护
 
 5.2.0 不再依赖“锁屏前提前几毫秒”或“动画结束后再补救”的时序方案。

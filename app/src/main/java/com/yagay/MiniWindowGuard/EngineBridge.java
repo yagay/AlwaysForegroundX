@@ -19,7 +19,7 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 5;
+    static final int BOOTSTRAP_API = 4;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
@@ -300,16 +300,6 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
-    boolean isOplusFlexibleTask(Object task) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "isOplusFlexibleTask",
-                new Class<?>[]{Object.class},
-                task);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
     boolean wantsPackage(String packageName) {
         Object value = safeInvoke(
                 currentEngine(),
@@ -345,6 +335,16 @@ final class EngineBridge {
                 "onOplusTaskVanished",
                 new Class<?>[]{Object.class},
                 taskInfo);
+    }
+
+    void onFloatHandleOpened(
+            int taskId
+    ) {
+        safeInvoke(
+                currentEngine(),
+                "onFloatHandleOpened",
+                new Class<?>[]{int.class},
+                taskId);
     }
 
     void onOplusFlexibleEvent(
@@ -399,6 +399,23 @@ final class EngineBridge {
                 "onFocusedActivity",
                 new Class<?>[]{Object.class},
                 activityRecord);
+    }
+
+    boolean shouldBlockBackgroundStop(
+            Object task,
+            boolean finishing
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldBlockBackgroundStop",
+                new Class<?>[]{
+                        Object.class,
+                        boolean.class
+                },
+                task,
+                finishing);
+        return value instanceof Boolean
+                && (Boolean) value;
     }
 
     boolean shouldSuppressRecentsPause(

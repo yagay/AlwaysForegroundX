@@ -14,7 +14,7 @@ import android.util.Log;
  */
 public final class HotReloadEngine {
     private static final String TAG = "MiniWindowGuardEngine";
-    private static final int BOOTSTRAP_API_REQUIRED = 5;
+    private static final int BOOTSTRAP_API_REQUIRED = 4;
 
     private OplusFlexibleWindowController controller;
     private volatile boolean started;
@@ -115,12 +115,6 @@ public final class HotReloadEngine {
                 packageName);
     }
 
-    public boolean isOplusFlexibleTask(Object task) {
-        OplusFlexibleWindowController current = controller;
-        return current != null
-                && current.isOplusFlexibleTask(task);
-    }
-
     public boolean isManagedPackage(String packageName) {
         OplusFlexibleWindowController current = controller;
         return current != null
@@ -153,6 +147,16 @@ public final class HotReloadEngine {
         }
     }
 
+    public void onFloatHandleOpened(
+            int taskId
+    ) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onFloatHandleOpened(
+                    taskId);
+        }
+    }
+
     public void onOplusFlexibleEvent(
             int taskId,
             int event
@@ -163,6 +167,46 @@ public final class HotReloadEngine {
                     taskId,
                     event);
         }
+    }
+
+    public boolean shouldSuppressBackgroundPause(
+            Object task,
+            String resumingPackage,
+            boolean userLeaving,
+            boolean uiSleeping,
+            String reason,
+            boolean finishing
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldSuppressBackgroundPause(
+                task,
+                resumingPackage,
+                userLeaving,
+                uiSleeping,
+                reason,
+                finishing);
+    }
+
+    public void onFocusedActivity(
+            Object activityRecord
+    ) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.onFocusedActivity(
+                    activityRecord);
+        }
+    }
+
+    public boolean shouldBlockBackgroundStop(
+            Object task,
+            boolean finishing
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldBlockBackgroundStop(
+                task,
+                finishing);
     }
 
     public boolean shouldSuppressRecentsPause(
@@ -204,6 +248,15 @@ public final class HotReloadEngine {
         OplusFlexibleWindowController current = controller;
         return current != null
                 && current.shouldKeepTaskAwake(task);
+    }
+
+    public boolean shouldBlockTaskRemoval(
+            String packageName
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldBlockTaskRemoval(
+                packageName);
     }
 
     public String managedPackageForProcess(String processName) {

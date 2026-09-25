@@ -59,7 +59,10 @@ final class DiagnosticsManager {
                 + " epochMs=" + started
                 + " foregroundPackages="
                 + GuardApp.getStringSet(
-                        ConfigKeys.FOREGROUND_PACKAGES));
+                        ConfigKeys.FOREGROUND_PACKAGES)
+                + " backgroundPlaybackPackages="
+                + GuardApp.getStringSet(
+                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES));
     }
 
     static void stopSession() {
@@ -67,7 +70,10 @@ final class DiagnosticsManager {
                 + " epochMs=" + System.currentTimeMillis()
                 + " foregroundPackages="
                 + GuardApp.getStringSet(
-                        ConfigKeys.FOREGROUND_PACKAGES));
+                        ConfigKeys.FOREGROUND_PACKAGES)
+                + " backgroundPlaybackPackages="
+                + GuardApp.getStringSet(
+                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES));
         GuardApp.putBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE, false);
     }
 
@@ -268,7 +274,8 @@ final class DiagnosticsManager {
         out.append(ConfigKeys.FOREGROUND_PACKAGES).append('=')
                 .append(GuardApp.getStringSet(ConfigKeys.FOREGROUND_PACKAGES)).append('\n');
         out.append(ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES).append('=')
-                .append(GuardApp.getStringSet(ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)).append('\n');
+                .append(GuardApp.getStringSet(
+                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)).append('\n');
         out.append(ConfigKeys.FORCE_SUPPORT_PACKAGES).append('=')
                 .append(GuardApp.getStringSet(ConfigKeys.FORCE_SUPPORT_PACKAGES)).append('\n');
 

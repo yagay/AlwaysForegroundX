@@ -10,8 +10,8 @@ android {
         applicationId = "com.yagay.MiniWindowGuard"
         minSdk = 31
         targetSdk = 37
-        versionCode = 86
-        versionName = "5.2.7"
+        versionCode = 84
+        versionName = "5.3.4"
     }
 
     buildFeatures {

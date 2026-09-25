@@ -127,7 +127,7 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 statusLine(
-                        "LSPosed 固定作用域：system + com.android.launcher"));
+                        "LSPosed 固定作用域：system / system_server"));
 
         addSwitch(
                 card,
@@ -232,8 +232,8 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 detailBlock(
-                        "直接系统小图标后台播放",
-                        "勾选的 App 离开前台时先通知系统桌面。目标 task 的 OPlus Zoom session 建立后，直接调用 Launcher Shell 的 IZoom.requestChangeZoomState(taskId, 5)，由系统完整切到 FloatHandle 小图标。"));
+                        "普通后台播放",
+                        "从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED；返回原 App 自动解除。"));
 
         Button support =
                 button(
@@ -265,24 +265,24 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "运行保护",
-                        "始终前台应用和后台播放应用都只在真实 OPlus 小窗、FloatHandle 或小窗锁屏状态下进入保活。后台播放不再使用普通 BACKGROUND_PROTECTED。");
+                        "小窗继续使用 OPlus 状态驱动；后台播放名单只在离开普通全屏后进入 BACKGROUND_PROTECTED。");
 
         addSwitch(
                 card,
                 "受保护进程状态保持 TOP",
-                "仅对真实一加小窗、FloatHandle 和小窗锁屏状态返回 TOP。",
+                "对真实一加小窗/贴边/锁屏，以及 BACKGROUND_PROTECTED 普通后台进程返回 TOP。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(
                 card,
                 "受保护任务视为存在 Resumed Activity",
-                "仅对真实一加小窗、FloatHandle 和小窗锁屏任务返回 true；普通全屏不修改。",
+                "对真实一加小窗和 BACKGROUND_PROTECTED 任务返回 true；普通前台不修改。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
                 "阻止系统清理受保护进程",
-                "保护真实一加小窗、FloatHandle 和小窗锁屏进程；强制停止、更新和普通全屏状态放行。",
+                "保护一加小窗和 BACKGROUND_PROTECTED 进程；强制停止/更新放行，普通后台任务被划掉时仍允许正常关闭。",
                 ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
 
