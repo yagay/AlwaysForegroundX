@@ -115,6 +115,12 @@ public final class HotReloadEngine {
                 packageName);
     }
 
+    public boolean isOplusFlexibleTask(Object task) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.isOplusFlexibleTask(task);
+    }
+
     public boolean isManagedPackage(String packageName) {
         OplusFlexibleWindowController current = controller;
         return current != null
