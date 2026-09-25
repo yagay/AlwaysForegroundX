@@ -1,5 +1,23 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.3 — 后台剧集 Activity 真正启动后再送回后台
+
+17:10 诊断日志确认，5.5.2 的播放器生命周期保护已经生效，但后台进入红果剧集时 `ShortSeriesActivity` 被 `avoidMoveToFront` 创建为 invisible launch，ActivityRecord 停在 INITIALIZING，既没有 onCreate 也没有 RESUMED，因此无法真正进入剧集。
+
+本版重构后台同包 Activity 切换：
+
+- 删除 App 进程对 `ActivityOptions.avoidMoveToFront` 的注入；
+- 后台 App 自己启动同包 Activity 时，只在 Intent 中加入 MiniWindowGuard 内部标记，并追加 `FLAG_ACTIVITY_NO_ANIMATION`；
+- Android 正常完成新 Activity 的 create/start/resume，红果自己的剧集初始化、播放列表和 TTVideoEngine 绑定可以完整运行；
+- system_server 的 `ActivityRecord.setState(RESUMED)` 观察器只对带内部标记的后台自启动 Activity 生效；
+- 新 Activity 真正 RESUMED 后，使用系统 Task 的 `moveTaskToBack` 路径立即把该 Task 送回后台；普通用户点击返回 App 不带标记，因此不会被误送回后台；
+- 恢复 5.4.5 的窄版 `ActivityRecord.stopIfPossible()` 保护：仅后台播放名单、已建立 BACKGROUND_PROTECTED、非 finishing、且模式不是“仅原生”时阻止 STOP_ACTIVITY_ITEM；
+- 自动/强制模式继续使用 5.4.5 生命周期播放器保护；仅原生模式既不拦播放器 pause/stop，也不拦 Activity STOP；
+- 新增 `BACKGROUND_STOP_BLOCK`、`BACKGROUND_SELF_LAUNCH_RETURN`、`BACKGROUND_SELF_LAUNCH_RETURN_SKIP` 诊断事件；
+- 新增 system_server interceptor 全局 fail-open：反射或状态判断异常时直接执行系统原始逻辑，不让异常逃出 Hook。
+
+本版修改固定 system_server Bootstrap Hook 集合，**Bootstrap API 升到 8**。从 Bootstrap 7 升级后必须完整重启手机一次；仅重新打开目标 App 或热重载 Engine 不足以加载新的 stopIfPossible 和 RESUMED-return Hook。
+
 ## 5.5.2 — 回归 5.4.5 生命周期后台播放模型
 
 根据红果主页、剧集页和自动下一集的实际表现，移除 5.4.9～5.5.1 逐步加入的播放器自适应状态机，后台播放重新采用 5.4.5 已验证的核心逻辑：
