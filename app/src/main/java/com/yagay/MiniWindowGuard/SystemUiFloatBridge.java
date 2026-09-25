@@ -69,6 +69,9 @@ final class SystemUiFloatBridge {
             return;
         }
 
+        boolean contextHooked =
+                hookLauncherContext();
+
         boolean controllerHooked =
                 hookZoomController(loader);
 
@@ -79,10 +82,59 @@ final class SystemUiFloatBridge {
 
         uiDiag(
                 "FLOAT_BRIDGE_INSTALLED",
-                "controllerHooked="
+                "contextHooked="
+                        + contextHooked
+                        + " controllerHooked="
                         + controllerHooked
                         + " zoomEnterHooked="
                         + zoomEnterHooked);
+    }
+
+    private boolean hookLauncherContext() {
+        try {
+            Method attach =
+                    android.app.Application.class
+                            .getDeclaredMethod(
+                                    "attach",
+                                    Context.class);
+
+            attach.setAccessible(true);
+
+            module.hook(attach)
+                    .intercept(chain -> {
+                        Object result =
+                                chain.proceed();
+
+                        List<Object> args =
+                                chain.getArgs();
+
+                        if (!args.isEmpty()
+                                && args.get(0)
+                                instanceof Context) {
+                            setContext(
+                                    (Context) args.get(0),
+                                    "Application.attach");
+                        }
+
+                        return result;
+                    });
+
+            uiDiag(
+                    "FLOAT_CONTEXT_HOOKED",
+                    "method=Application.attach");
+
+            return true;
+        } catch (Throwable t) {
+            uiDiag(
+                    "FLOAT_CONTEXT_HOOK_FAIL",
+                    "error="
+                            + t.getClass()
+                            .getSimpleName()
+                            + ":"
+                            + String.valueOf(
+                            t.getMessage()));
+            return false;
+        }
     }
 
     private boolean hookZoomController(
@@ -481,12 +533,12 @@ final class SystemUiFloatBridge {
                                             + " taskId="
                                             + taskId);
 
-                            if (request.allowImmediate) {
-                                scheduleAttempt(
-                                        request,
-                                        "broadcast-immediate",
-                                        0L);
-                            }
+                            scheduleAttempt(
+                                    request,
+                                    request.allowImmediate
+                                            ? "broadcast-immediate"
+                                            : "broadcast-wait",
+                                    0L);
                         }
                     };
 
