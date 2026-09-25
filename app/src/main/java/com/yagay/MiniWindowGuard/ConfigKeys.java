@@ -15,10 +15,6 @@ final class ConfigKeys {
     static final String FORCE_SUPPORT_PACKAGES =
             "force_support_packages";
 
-    static final String SYSTEM_IMPORTANCE_TOP =
-            "system_importance_top";
-    static final String SYSTEM_HAS_RESUMED =
-            "system_has_resumed";
     static final String SYSTEM_BLOCK_REMOVE_KILL =
             "system_block_remove_kill";
 
@@ -33,8 +29,6 @@ final class ConfigKeys {
         return switch (key) {
             case MASTER_ENABLED,
                     ENGINE_AUTO_RELOAD,
-                    SYSTEM_IMPORTANCE_TOP,
-                    SYSTEM_HAS_RESUMED,
                     SYSTEM_BLOCK_REMOVE_KILL -> true;
             default -> false;
         };
