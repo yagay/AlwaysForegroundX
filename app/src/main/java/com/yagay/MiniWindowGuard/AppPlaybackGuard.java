@@ -1,14 +1,7 @@
 package com.yagay.MiniWindowGuard;
 
-import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.os.Build;
 import android.util.Log;
 
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Set;
@@ -18,11 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Generic app-process playback compatibility layer.
  *
  * system_server is allowed to complete Activity lifecycle transitions normally.
- * Automatic mode follows the proven 5.4.5 policy: suppress a player
- * pause/stop only when it is synchronously caused by Activity onPause/onStop.
- * There is no player-state machine and no automatic play()/resume recovery.
- * Native-only mode passes lifecycle pauses through. Manual pause remains
- * untouched. Player tracking exists only for explicit notification controls.
+ * This class only suppresses common player pause/stop calls when they are made
+ * synchronously from Activity onPause/onStop. Manual pause remains untouched.
  */
 final class AppPlaybackGuard {
     private static final String TAG =
@@ -41,68 +31,6 @@ final class AppPlaybackGuard {
     private final ThreadLocal<Integer> lifecycleDepth =
             ThreadLocal.withInitial(
                     () -> 0);
-
-    private volatile boolean controlReceiverRegistered;
-    private volatile WeakReference<Object> currentPlayer =
-            new WeakReference<>(null);
-
-    private final BroadcastReceiver controlReceiver =
-            new BroadcastReceiver() {
-                @Override
-                public void onReceive(
-                        Context context,
-                        Intent intent
-                ) {
-                    if (intent == null) {
-                        return;
-                    }
-
-                    String target =
-                            intent.getStringExtra(
-                                    PlaybackControlContract
-                                            .EXTRA_PACKAGE_NAME);
-
-                    if (!packageName.equals(
-                            target)
-                            || !selected()) {
-                        return;
-                    }
-
-                    String action =
-                            intent.getAction();
-
-                    if (PlaybackControlContract
-                            .ACTION_PAUSE
-                            .equals(action)) {
-                        controlFromNotification(
-                                false);
-                        return;
-                    }
-
-                    if (PlaybackControlContract
-                            .ACTION_PLAY
-                            .equals(action)) {
-                        controlFromNotification(
-                                true);
-                        return;
-                    }
-
-                    if (PlaybackControlContract
-                            .ACTION_PREVIOUS
-                            .equals(action)) {
-                        skipFromNotification(
-                                false);
-                        return;
-                    }
-
-                    if (PlaybackControlContract
-                            .ACTION_NEXT
-                            .equals(action)) {
-                        skipFromNotification(
-                                true);
-                    }
-                }
-            };
 
     private AppPlaybackGuard(
             GuardModule module,
@@ -134,7 +62,6 @@ final class AppPlaybackGuard {
                         packageName,
                         classLoader);
 
-        guard.ensureControlReceiver(null);
         guard.installLifecycleHooks();
         guard.installPlayerHooks();
 
@@ -184,9 +111,6 @@ final class AppPlaybackGuard {
                                 return chain.proceed();
                             }
 
-                            ensureControlReceiver(
-                                    chain.getArgs());
-
                             enterLifecycle();
 
                             try {
@@ -208,67 +132,6 @@ final class AppPlaybackGuard {
     }
 
     private void installPlayerHooks() {
-        hookPlayMethod(
-                "android.media.MediaPlayer",
-                "start");
-        hookPlayMethod(
-                "android.widget.VideoView",
-                "start");
-        hookPlayMethod(
-                "androidx.media3.common.BasePlayer",
-                "play");
-        hookBooleanPlayMethod(
-                "androidx.media3.exoplayer.ExoPlayerImpl",
-                "setPlayWhenReady");
-        hookBooleanPlayMethod(
-                "androidx.media3.exoplayer.SimpleExoPlayer",
-                "setPlayWhenReady");
-        hookPlayMethod(
-                "com.google.android.exoplayer2.BasePlayer",
-                "play");
-        hookBooleanPlayMethod(
-                "com.google.android.exoplayer2.ExoPlayerImpl",
-                "setPlayWhenReady");
-        hookBooleanPlayMethod(
-                "com.google.android.exoplayer2.SimpleExoPlayer",
-                "setPlayWhenReady");
-        hookPlayMethod(
-                "tv.danmaku.ijk.media.player.IjkMediaPlayer",
-                "start");
-        hookPlayMethod(
-                "com.ss.ttvideoengine.TTVideoEngine",
-                "play");
-        hookPlayMethod(
-                "com.ss.ttvideoengine.MediaPlayerWrapper",
-                "start");
-        hookPlayMethod(
-                "com.ss.android.videoshop.mediaview.SimpleMediaView",
-                "play");
-        hookPlayMethod(
-                "com.ss.android.videoshop.mediaview.LayerHostMediaLayout",
-                "play");
-        hookPlayMethod(
-                "com.ss.android.videoshop.context.VideoContext",
-                "play");
-        hookPlayMethod(
-                "org.videolan.libvlc.MediaPlayer",
-                "play");
-        hookPlayMethod(
-                "com.tencent.rtmp.TXVodPlayer",
-                "resume");
-        hookPlayMethod(
-                "com.tencent.rtmp.TXLivePlayer",
-                "resume");
-        hookPlayMethod(
-                "com.pili.pldroid.player.PLMediaPlayer",
-                "start");
-        hookPlayMethod(
-                "com.baidu.cloud.media.player.BDCloudMediaPlayer",
-                "start");
-        hookPlayMethod(
-                "com.ksyun.media.player.KSYMediaPlayer",
-                "start");
-
         hookZeroArgVoid(
                 "android.media.MediaPlayer",
                 "pause",
@@ -471,35 +334,10 @@ final class AppPlaybackGuard {
                             }
                         }
 
-                        String configuredMode =
-                                GuardConfig
-                                        .backgroundPlaybackMode(
-                                                packageName);
-
-                        if (GuardConfig
-                                .PLAYBACK_MODE_NATIVE
-                                .equals(configuredMode)) {
-                            log(
-                                    Log.INFO,
-                                    "APP_PLAYER_PAUSE_NATIVE",
-                                    "pkg=" + packageName
-                                            + " player="
-                                            + className
-                                            + " method="
-                                            + method.getName());
-
-                            return chain.proceed();
-                        }
-
-                        rememberPlayer(
-                                chain.getThisObject());
-
                         log(
                                 Log.INFO,
                                 "APP_PLAYER_PAUSE_BLOCK",
                                 "pkg=" + packageName
-                                        + " mode="
-                                        + configuredMode
                                         + " player="
                                         + className
                                         + " method="
@@ -524,398 +362,6 @@ final class AppPlaybackGuard {
                             + t.getClass()
                             .getSimpleName());
         }
-    }
-
-    private void hookPlayMethod(
-            String className,
-            String methodName
-    ) {
-        Class<?> type =
-                load(className);
-
-        if (type == null) {
-            return;
-        }
-
-        for (Method method :
-                type.getDeclaredMethods()) {
-            if (!methodName.equals(
-                    method.getName())
-                    || method.getParameterCount() != 0
-                    || Modifier.isAbstract(
-                            method.getModifiers())) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                String key =
-                        "play-track:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(key)) {
-                    continue;
-                }
-
-                module.hook(method)
-                        .intercept(chain -> {
-                            Object result =
-                                    chain.proceed();
-
-                            if (selected()) {
-                                rememberPlayer(
-                                        chain.getThisObject());
-                            }
-
-                            return result;
-                        });
-            } catch (Throwable t) {
-                installedHooks.remove(
-                        "play-track:"
-                                + method.toGenericString());
-            }
-        }
-    }
-
-    private void hookBooleanPlayMethod(
-            String className,
-            String methodName
-    ) {
-        Class<?> type =
-                load(className);
-
-        if (type == null) {
-            return;
-        }
-
-        for (Method method :
-                type.getDeclaredMethods()) {
-            if (!methodName.equals(
-                    method.getName())
-                    || method.getParameterCount() != 1
-                    || method.getParameterTypes()[0]
-                    != boolean.class
-                    || Modifier.isAbstract(
-                            method.getModifiers())) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                String key =
-                        "play-track:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(key)) {
-                    continue;
-                }
-
-                module.hook(method)
-                        .intercept(chain -> {
-                            Object result =
-                                    chain.proceed();
-
-                            if (selected()
-                                    && !chain.getArgs().isEmpty()
-                                    && Boolean.TRUE.equals(
-                                    chain.getArgs().get(0))) {
-                                rememberPlayer(
-                                        chain.getThisObject());
-                            }
-
-                            return result;
-                        });
-            } catch (Throwable t) {
-                installedHooks.remove(
-                        "play-track:"
-                                + method.toGenericString());
-            }
-        }
-    }
-
-    private void rememberPlayer(
-            Object player
-    ) {
-        if (player != null) {
-            currentPlayer =
-                    new WeakReference<>(
-                            player);
-            ensureControlReceiver(null);
-        }
-    }
-
-    private void ensureControlReceiver(
-            java.util.List<Object> args
-    ) {
-        if (controlReceiverRegistered) {
-            return;
-        }
-
-        Context context = null;
-
-        if (args != null) {
-            for (Object arg : args) {
-                if (arg instanceof Activity activity) {
-                    context =
-                            activity
-                                    .getApplicationContext();
-                    break;
-                }
-
-                if (arg instanceof Context ctx) {
-                    context =
-                            ctx.getApplicationContext();
-                    break;
-                }
-            }
-        }
-
-        if (context == null) {
-            context = resolveApplicationContext();
-        }
-
-        if (context == null) {
-            return;
-        }
-
-        synchronized (this) {
-            if (controlReceiverRegistered) {
-                return;
-            }
-
-            try {
-                IntentFilter filter =
-                        new IntentFilter();
-                filter.addAction(
-                        PlaybackControlContract
-                                .ACTION_PAUSE);
-                filter.addAction(
-                        PlaybackControlContract
-                                .ACTION_PLAY);
-                filter.addAction(
-                        PlaybackControlContract
-                                .ACTION_PREVIOUS);
-                filter.addAction(
-                        PlaybackControlContract
-                                .ACTION_NEXT);
-
-                if (Build.VERSION.SDK_INT >= 33) {
-                    context.registerReceiver(
-                            controlReceiver,
-                            filter,
-                            PlaybackControlContract
-                                    .PERMISSION_CONTROL_PLAYBACK,
-                            null,
-                            Context.RECEIVER_EXPORTED);
-                } else {
-                    context.registerReceiver(
-                            controlReceiver,
-                            filter,
-                            PlaybackControlContract
-                                    .PERMISSION_CONTROL_PLAYBACK,
-                            null);
-                }
-
-                controlReceiverRegistered = true;
-
-                log(
-                        Log.INFO,
-                        "APP_PLAYBACK_CONTROL_READY",
-                        "pkg=" + packageName);
-            } catch (Throwable t) {
-                log(
-                        Log.WARN,
-                        "APP_PLAYBACK_CONTROL_FAILED",
-                        "pkg=" + packageName
-                                + " error="
-                                + t.getClass()
-                                .getSimpleName());
-            }
-        }
-    }
-
-    private void controlFromNotification(
-            boolean play
-    ) {
-        Object player =
-                currentPlayer.get();
-
-        boolean direct =
-                player != null
-                        && (play
-                        ? invokePlay(player)
-                        : invokePause(player));
-
-        log(
-                direct ? Log.INFO : Log.WARN,
-                play
-                        ? "APP_PLAYBACK_CONTROL_PLAY"
-                        : "APP_PLAYBACK_CONTROL_PAUSE",
-                "pkg=" + packageName
-                        + " mode="
-                        + (direct
-                        ? "direct"
-                        : "no-target-player"));
-    }
-
-    private void skipFromNotification(
-            boolean next
-    ) {
-        Object player =
-                currentPlayer.get();
-
-        boolean direct =
-                player != null
-                        && invokeSkip(
-                        player,
-                        next);
-
-        log(
-                direct ? Log.INFO : Log.WARN,
-                next
-                        ? "APP_PLAYBACK_CONTROL_NEXT"
-                        : "APP_PLAYBACK_CONTROL_PREVIOUS",
-                "pkg=" + packageName
-                        + " mode="
-                        + (direct
-                        ? "direct"
-                        : "no-target-player"));
-    }
-
-    private boolean invokePause(
-            Object player
-    ) {
-        if (invokeNoArg(
-                player,
-                "pause")) {
-            return true;
-        }
-
-        return invokeBoolean(
-                player,
-                "setPlayWhenReady",
-                false);
-    }
-
-    private boolean invokePlay(
-            Object player
-    ) {
-        if (invokeNoArg(
-                player,
-                "play")) {
-            return true;
-        }
-
-        if (invokeNoArg(
-                player,
-                "start")) {
-            return true;
-        }
-
-        if (invokeNoArg(
-                player,
-                "resume")) {
-            return true;
-        }
-
-        return invokeBoolean(
-                player,
-                "setPlayWhenReady",
-                true);
-    }
-
-    private boolean invokeSkip(
-            Object player,
-            boolean next
-    ) {
-        String[] names =
-                next
-                        ? new String[]{
-                        "seekToNextMediaItem",
-                        "seekToNext",
-                        "next",
-                        "playNext",
-                        "skipToNext"
-                }
-                        : new String[]{
-                        "seekToPreviousMediaItem",
-                        "seekToPrevious",
-                        "previous",
-                        "playPrevious",
-                        "skipToPrevious"
-                };
-
-        for (String name : names) {
-            if (invokeNoArg(
-                    player,
-                    name)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private boolean invokeNoArg(
-            Object target,
-            String methodName
-    ) {
-        if (target == null) {
-            return false;
-        }
-
-        for (Class<?> current =
-             target.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            try {
-                Method method =
-                        current.getDeclaredMethod(
-                                methodName);
-                method.setAccessible(true);
-                method.invoke(target);
-                return true;
-            } catch (NoSuchMethodException ignored) {
-            } catch (Throwable t) {
-                return false;
-            }
-        }
-
-        return false;
-    }
-
-    private boolean invokeBoolean(
-            Object target,
-            String methodName,
-            boolean value
-    ) {
-        if (target == null) {
-            return false;
-        }
-
-        for (Class<?> current =
-             target.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            try {
-                Method method =
-                        current.getDeclaredMethod(
-                                methodName,
-                                boolean.class);
-                method.setAccessible(true);
-                method.invoke(
-                        target,
-                        value);
-                return true;
-            } catch (NoSuchMethodException ignored) {
-            } catch (Throwable t) {
-                return false;
-            }
-        }
-
-        return false;
     }
 
     private boolean selected() {
@@ -985,45 +431,6 @@ final class AppPlaybackGuard {
         }
 
         return false;
-    }
-
-    private Context resolveApplicationContext() {
-        try {
-            Class<?> activityThread =
-                    load("android.app.ActivityThread");
-            if (activityThread == null) {
-                return null;
-            }
-
-            Method currentApplication =
-                    activityThread.getDeclaredMethod(
-                            "currentApplication");
-            currentApplication.setAccessible(true);
-
-            Object value =
-                    currentApplication.invoke(null);
-
-            if (value instanceof Context context) {
-                Context app =
-                        context.getApplicationContext();
-                return app == null
-                        ? context
-                        : app;
-            }
-        } catch (Throwable t) {
-            log(
-                    Log.WARN,
-                    "APP_PLAYBACK_CONTEXT_UNAVAILABLE",
-                    "pkg=" + packageName
-                            + " process="
-                            + android.app.Application
-                            .getProcessName()
-                            + " error="
-                            + t.getClass()
-                            .getSimpleName());
-        }
-
-        return null;
     }
 
     private Class<?> load(
