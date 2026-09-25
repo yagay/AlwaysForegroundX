@@ -894,6 +894,448 @@ public final class GuardModule extends XposedModule {
         }
     }
 
+    private void scheduleDirectSystemWindow(
+            Object task,
+            String packageName,
+            String nextPackage
+    ) {
+        if (task == null
+                || packageName == null) {
+            return;
+        }
+
+        int id = taskId(task);
+        if (id < 0) {
+            return;
+        }
+
+        Handler handler = systemHandler;
+        EngineBridge current = engine;
+
+        if (handler == null
+                || current == null
+                || !current.isBackgroundPlaybackPackage(
+                packageName)) {
+            return;
+        }
+
+        long now =
+                android.os.SystemClock.elapsedRealtime();
+
+        Long previous =
+                systemWindowRequestedAt.get(id);
+
+        if (previous != null
+                && now - previous
+                < SYSTEM_WINDOW_COOLDOWN_MS) {
+            return;
+        }
+
+        systemWindowRequestedAt.put(
+                id,
+                now);
+
+        diag(
+                "BACKGROUND_SYSTEM_WINDOW_ARM",
+                "pkg=" + packageName
+                        + " taskId=" + id
+                        + " nextPkg=" + nextPackage);
+
+        waitForTaskIdleThenOpenSystemWindow(
+                task,
+                packageName,
+                0);
+    }
+
+    private void waitForTaskIdleThenOpenSystemWindow(
+            Object task,
+            String packageName,
+            int attempt
+    ) {
+        Handler handler = systemHandler;
+        if (handler == null
+                || task == null
+                || packageName == null) {
+            return;
+        }
+
+        handler.postDelayed(
+                () -> {
+                    EngineBridge current = engine;
+
+                    if (current == null
+                            || !current
+                            .isBackgroundPlaybackPackage(
+                                    packageName)) {
+                        return;
+                    }
+
+                    if (current.isOplusFlexibleTask(
+                            task)) {
+                        waitForFlexibleThenMini(
+                                task,
+                                packageName,
+                                0);
+                        return;
+                    }
+
+                    if (isTaskAnimating(task)
+                            && attempt
+                            < SYSTEM_WINDOW_MAX_RETRIES) {
+                        if (attempt == 0
+                                || attempt % 5 == 0) {
+                            diag(
+                                    "BACKGROUND_SYSTEM_WINDOW_WAIT",
+                                    "pkg=" + packageName
+                                            + " taskId="
+                                            + taskId(task)
+                                            + " phase=task-animating"
+                                            + " attempt="
+                                            + attempt);
+                        }
+
+                        waitForTaskIdleThenOpenSystemWindow(
+                                task,
+                                packageName,
+                                attempt + 1);
+                        return;
+                    }
+
+                    boolean requested =
+                            requestLauncherStyleSystemWindow(
+                                    task,
+                                    packageName);
+
+                    if (!requested) {
+                        diag(
+                                "BACKGROUND_SYSTEM_WINDOW_FAIL",
+                                "pkg=" + packageName
+                                        + " taskId="
+                                        + taskId(task)
+                                        + " phase=start-from-recents");
+                        return;
+                    }
+
+                    waitForFlexibleThenMini(
+                            task,
+                            packageName,
+                            0);
+                },
+                attempt == 0
+                        ? 180L
+                        : SYSTEM_WINDOW_RETRY_MS);
+    }
+
+    private boolean isTaskAnimating(Object task) {
+        Object value =
+                invokeNoArg(
+                        task,
+                        "isAnimating");
+
+        if (value instanceof Boolean
+                && (Boolean) value) {
+            return true;
+        }
+
+        value =
+                invokeNoArg(
+                        task,
+                        "inTransition");
+
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    /**
+     * Same system entry used by OPlus Launcher floating-window shortcut:
+     * re-launch the existing recent task with zoom_task_id and
+     * android:activity.mZoomLaunchFlags=2. Window creation remains OEM-owned.
+     */
+    private boolean requestLauncherStyleSystemWindow(
+            Object task,
+            String packageName
+    ) {
+        int id = taskId(task);
+        if (id < 0) {
+            return false;
+        }
+
+        Object atms =
+                fieldValue(
+                        task,
+                        "mAtmService");
+
+        if (atms == null) {
+            atms =
+                    fieldValue(
+                            task,
+                            "mService");
+        }
+
+        if (atms == null) {
+            diag(
+                    "BACKGROUND_SYSTEM_WINDOW_FAIL",
+                    "pkg=" + packageName
+                            + " taskId=" + id
+                            + " reason=no-atms");
+            return false;
+        }
+
+        Bundle options =
+                new Bundle();
+
+        options.putInt(
+                "zoom_task_id",
+                id);
+
+        options.putInt(
+                "android:activity.mZoomLaunchFlags",
+                OPLUS_ZOOM_LAUNCH_FLAG);
+
+        long identity =
+                Binder.clearCallingIdentity();
+
+        try {
+            for (Class<?> current =
+                 atms.getClass();
+                 current != null;
+                 current = current.getSuperclass()) {
+                for (Method method :
+                        current.getDeclaredMethods()) {
+                    if (!"startActivityFromRecents"
+                            .equals(method.getName())
+                            || method.getParameterCount()
+                            != 2) {
+                        continue;
+                    }
+
+                    Class<?>[] types =
+                            method.getParameterTypes();
+
+                    if (types[0] != int.class
+                            || !Bundle.class
+                            .isAssignableFrom(
+                                    types[1])) {
+                        continue;
+                    }
+
+                    method.setAccessible(true);
+
+                    Object result =
+                            method.invoke(
+                                    atms,
+                                    id,
+                                    options);
+
+                    diag(
+                            "BACKGROUND_SYSTEM_WINDOW_REQUEST",
+                            "pkg=" + packageName
+                                    + " taskId=" + id
+                                    + " zoomFlag="
+                                    + OPLUS_ZOOM_LAUNCH_FLAG
+                                    + " result="
+                                    + String.valueOf(result)
+                                    + " method="
+                                    + method.toGenericString());
+
+                    return true;
+                }
+            }
+
+            diag(
+                    "BACKGROUND_SYSTEM_WINDOW_FAIL",
+                    "pkg=" + packageName
+                            + " taskId=" + id
+                            + " reason=startActivityFromRecents-missing");
+            return false;
+        } catch (Throwable t) {
+            diag(
+                    "BACKGROUND_SYSTEM_WINDOW_FAIL",
+                    "pkg=" + packageName
+                            + " taskId=" + id
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName()
+                            + ":"
+                            + String.valueOf(
+                            t.getMessage()));
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(
+                    identity);
+        }
+    }
+
+    private void waitForFlexibleThenMini(
+            Object task,
+            String packageName,
+            int attempt
+    ) {
+        Handler handler = systemHandler;
+        if (handler == null) {
+            return;
+        }
+
+        handler.postDelayed(
+                () -> {
+                    EngineBridge current = engine;
+
+                    if (current == null
+                            || !current
+                            .isBackgroundPlaybackPackage(
+                                    packageName)) {
+                        return;
+                    }
+
+                    if (current.isOplusFlexibleTask(
+                            task)) {
+                        boolean minimized =
+                                requestSystemMiniIcon(
+                                        packageName,
+                                        taskId(task));
+
+                        diag(
+                                minimized
+                                        ? "BACKGROUND_SYSTEM_MINI_REQUEST"
+                                        : "BACKGROUND_SYSTEM_MINI_FAIL",
+                                "pkg=" + packageName
+                                        + " taskId="
+                                        + taskId(task)
+                                        + " attempt="
+                                        + attempt);
+                        return;
+                    }
+
+                    if (attempt
+                            >= SYSTEM_WINDOW_MAX_RETRIES) {
+                        diag(
+                                "BACKGROUND_SYSTEM_WINDOW_TIMEOUT",
+                                "pkg=" + packageName
+                                        + " taskId="
+                                        + taskId(task)
+                                        + " phase=wait-flexible");
+                        return;
+                    }
+
+                    waitForFlexibleThenMini(
+                            task,
+                            packageName,
+                            attempt + 1);
+                },
+                SYSTEM_WINDOW_RETRY_MS);
+    }
+
+    /**
+     * Direct OEM mini/FloatHandle request. Prefer the ActivityTaskManager
+     * extension used by current OxygenOS; keep ZoomWindowManager as fallback.
+     */
+    private boolean requestSystemMiniIcon(
+            String packageName,
+            int taskId
+    ) {
+        String[] classNames = {
+                "android.app.OplusActivityTaskManager",
+                "com.oplus.zoomwindow.OplusZoomWindowManager"
+        };
+
+        for (String className :
+                classNames) {
+            try {
+                Class<?> type =
+                        load(
+                                systemClassLoader,
+                                className);
+
+                if (type == null) {
+                    continue;
+                }
+
+                Method getInstance =
+                        type.getMethod(
+                                "getInstance");
+
+                Object manager =
+                        getInstance.invoke(
+                                null);
+
+                if (manager == null) {
+                    continue;
+                }
+
+                Method mini =
+                        null;
+
+                for (Method method :
+                        type.getMethods()) {
+                    if ("startMiniZoomFromZoom"
+                            .equals(method.getName())
+                            && method.getParameterCount()
+                            == 1
+                            && method
+                            .getParameterTypes()[0]
+                            == int.class) {
+                        mini = method;
+                        break;
+                    }
+                }
+
+                if (mini == null) {
+                    continue;
+                }
+
+                mini.setAccessible(true);
+
+                long identity =
+                        Binder.clearCallingIdentity();
+
+                try {
+                    Object result =
+                            mini.invoke(
+                                    manager,
+                                    OPLUS_MINI_START_WAY);
+
+                    if (mini.getReturnType()
+                            == boolean.class
+                            && Boolean.FALSE.equals(
+                            result)) {
+                        continue;
+                    }
+
+                    diag(
+                            "BACKGROUND_SYSTEM_MINI_ICON",
+                            "pkg=" + packageName
+                                    + " taskId="
+                                    + taskId
+                                    + " startWay="
+                                    + OPLUS_MINI_START_WAY
+                                    + " class="
+                                    + className
+                                    + " result="
+                                    + String.valueOf(
+                                    result));
+
+                    return true;
+                } finally {
+                    Binder.restoreCallingIdentity(
+                            identity);
+                }
+            } catch (Throwable t) {
+                diag(
+                        "BACKGROUND_SYSTEM_MINI_API_FAIL",
+                        "pkg=" + packageName
+                                + " taskId="
+                                + taskId
+                                + " class="
+                                + className
+                                + " error="
+                                + t.getClass()
+                                .getSimpleName());
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Lock-screen keepalive. These hooks are intentionally narrow: they only
      * fire for an "always foreground" app whose task was a real OPlus
