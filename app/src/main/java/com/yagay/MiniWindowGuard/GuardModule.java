@@ -91,8 +91,7 @@ public final class GuardModule extends XposedModule {
 
         if (packageName == null
                 || packageName.isBlank()
-                || "system".equals(processName)
-                || !packageName.equals(processName)) {
+                || "system".equals(processName)) {
             return;
         }
 
@@ -153,8 +152,6 @@ public final class GuardModule extends XposedModule {
         installOplusFlexibleWindowHooks(
                 systemClassLoader);
         installOplusEdgeKeepaliveHooks(
-                systemClassLoader);
-        installBackgroundStopKeepaliveHook(
                 systemClassLoader);
         installOplusLockKeepaliveHooks(
                 systemClassLoader);
@@ -1063,110 +1060,6 @@ public final class GuardModule extends XposedModule {
         }
     }
 
-    private void installBackgroundStopKeepaliveHook(
-            ClassLoader loader
-    ) {
-        Class<?> record =
-                load(
-                        loader,
-                        "com.android.server.wm.ActivityRecord");
-
-        if (record == null) return;
-
-        for (Method method :
-                record.getDeclaredMethods()) {
-            if (!"stopIfPossible"
-                    .equals(method.getName())
-                    || method.getReturnType()
-                    != void.class) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                String hookKey =
-                        "background-stop:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(hookKey)) {
-                    continue;
-                }
-
-                hook(method).intercept(chain -> {
-                    Object activityRecord =
-                            chain.getThisObject();
-
-                    String pkg =
-                            activityPackage(
-                                    activityRecord);
-
-                    EngineBridge current = engine;
-
-                    if (current == null
-                            || !current
-                            .isBackgroundPlaybackPackage(
-                                    pkg)) {
-                        return chain.proceed();
-                    }
-
-                    Object task =
-                            invokeNoArg(
-                                    activityRecord,
-                                    "getTask");
-
-                    boolean finishing =
-                            Boolean.TRUE.equals(
-                                    fieldValue(
-                                            activityRecord,
-                                            "finishing"));
-
-                    if (task == null
-                            || !current
-                            .shouldBlockBackgroundStop(
-                                    task,
-                                    finishing)) {
-                        return chain.proceed();
-                    }
-
-                    // stopIfPossible() normally calls this before scheduling
-                    // StopActivityItem. Do the harmless bookkeeping but do not
-                    // send STOP to the protected app process.
-                    invokeNoArg(
-                            activityRecord,
-                            "resumeKeyDispatchingLocked");
-
-                    diag(
-                            "BACKGROUND_STOP_BLOCK",
-                            "taskId="
-                                    + taskId(task)
-                                    + " pkg=" + pkg
-                                    + " activity="
-                                    + fieldValue(
-                                            activityRecord,
-                                            "mActivityComponent"));
-
-                    return null;
-                });
-
-                log(
-                        Log.INFO,
-                        TAG,
-                        "SYSTEM_SCOPE installed background stop guard "
-                                + method.toGenericString());
-            } catch (Throwable t) {
-                installedHooks.remove(
-                        "background-stop:"
-                                + method.toGenericString());
-            }
-        }
-    }
-
-    /**
-     * Lock-screen keepalive. These hooks are intentionally narrow: they only
-     * fire for an "always foreground" app whose task was a real OPlus
-     * FlexibleWindow/floating task at the moment keyguard started.
-     */
     private void installOplusLockKeepaliveHooks(
             ClassLoader loader
     ) {
