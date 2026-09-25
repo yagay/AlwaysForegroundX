@@ -128,8 +128,8 @@ public final class TargetAppsActivity extends Activity {
                         ? "勾选后仅放行该 App 的 OPlus FlexibleWindow 支持/黑名单判断。"
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
                         : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "勾选后，该 App 离开前台时先建立 OPlus Zoom session，并由 System Launcher 中真实的 ZoomStateManager 直接执行 requestFloatZoomFromOutside。"
-                        + "系统小窗自身负责 createFloatHandleInfo/addFloatHandle/状态切换；小图标和锁屏继续复用现有保护。"
+                        ? "勾选后，该 App 离开前台时先建立 OPlus Zoom session；目标 task 的 onZoomEnter 到来后，由 System Launcher 的 IZoom 直接执行 requestChangeZoomState(taskId, 5)。"
+                        + "系统负责 FloatHandleInfo、UI 和 task 状态切换；小图标和锁屏继续复用现有保护。"
                         : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
                         + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
         help.setTextSize(13.5f);
