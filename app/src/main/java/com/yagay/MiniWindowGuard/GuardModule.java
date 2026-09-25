@@ -32,6 +32,10 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
+    private static final int OPLUS_FLEXIBLE_WINDOWING_MODE = 100;
+    private static final int OPLUS_ZOOM_LAUNCH_FLAG = 4;
+    private static final long AUTO_MINI_RETRY_DELAY_MS = 120L;
+    private static final int AUTO_MINI_MAX_RETRIES = 8;
     private static final long MODULE_VERSION_CODE =
             BuildConfig.VERSION_CODE;
 
@@ -91,7 +95,8 @@ public final class GuardModule extends XposedModule {
 
         if (packageName == null
                 || packageName.isBlank()
-                || "system".equals(processName)) {
+                || "system".equals(processName)
+                || !packageName.equals(processName)) {
             return;
         }
 
@@ -818,14 +823,27 @@ public final class GuardModule extends XposedModule {
                                     packageFromObject(
                                             resumingActivity);
 
-                            if (current
+                            boolean suppressBackgroundPause =
+                                    current
                                     .shouldSuppressBackgroundPause(
                                             task,
                                             resumingPackage,
                                             userLeaving,
                                             uiSleeping,
                                             reason,
-                                            finishing)) {
+                                            finishing);
+
+                            if (!uiSleeping
+                                    && current
+                                    .shouldAutoMiniWindow(
+                                            task)) {
+                                scheduleAutoMiniWindow(
+                                        task,
+                                        packageFromObject(
+                                                task));
+                            }
+
+                            if (suppressBackgroundPause) {
                                 diag(
                                         "BACKGROUND_PAUSE_BLOCK",
                                         "taskId=" + taskId(task)
@@ -1430,14 +1448,6 @@ public final class GuardModule extends XposedModule {
                         EngineBridge current =
                                 engine;
 
-                        boolean returnToBackground =
-                                current != null
-                                        && current
-                                        .isBackgroundPlaybackPackage(
-                                                pkg)
-                                        && consumeBackgroundSelfLaunchMarker(
-                                                activityRecord);
-
                         if (current != null
                                 && current.wantsPackage(pkg)) {
                             diag(
@@ -1446,33 +1456,11 @@ public final class GuardModule extends XposedModule {
                                             + " activity="
                                             + fieldValue(
                                             activityRecord,
-                                            "mActivityComponent")
-                                            + " backgroundSelfLaunch="
-                                            + returnToBackground);
+                                            "mActivityComponent"));
 
                             current.capture(
                                     activityRecord,
                                     pkg);
-                        }
-
-                        if (returnToBackground) {
-                            Object task =
-                                    invokeNoArg(
-                                            activityRecord,
-                                            "getTask");
-
-                            Handler handler =
-                                    systemHandler;
-
-                            if (task != null
-                                    && handler != null) {
-                                handler.post(
-                                        () ->
-                                                returnTaskToBackgroundAfterResume(
-                                                        task,
-                                                        activityRecord,
-                                                        pkg));
-                            }
                         }
                     } catch (Throwable t) {
                         log(
@@ -1618,119 +1606,400 @@ public final class GuardModule extends XposedModule {
                 : method.toGenericString());
     }
 
-    private boolean consumeBackgroundSelfLaunchMarker(
-            Object activityRecord
+    private void scheduleAutoMiniWindow(
+            Object task,
+            String packageName
     ) {
-        try {
-            Object value =
-                    fieldValue(
-                            activityRecord,
-                            "intent");
+        Handler handler =
+                systemHandler;
 
-            if (!(value instanceof Intent)) {
-                value =
-                        fieldValue(
-                                activityRecord,
-                                "mIntent");
-            }
-
-            if (!(value instanceof Intent intent)
-                    || !intent.getBooleanExtra(
-                    PlaybackControlContract
-                            .EXTRA_BACKGROUND_SELF_LAUNCH,
-                    false)) {
-                return false;
-            }
-
-            intent.removeExtra(
-                    PlaybackControlContract
-                            .EXTRA_BACKGROUND_SELF_LAUNCH);
-
-            return true;
-        } catch (Throwable ignored) {
-            return false;
+        if (handler == null
+                || task == null
+                || packageName == null
+                || packageName.isBlank()) {
+            return;
         }
+
+        int id =
+                taskId(task);
+
+        if (id < 0) {
+            return;
+        }
+
+        handler.post(
+                () -> {
+                    try {
+                        EngineBridge current =
+                                engine;
+
+                        if (current == null
+                                || !current
+                                .isBackgroundPlaybackPackage(
+                                        packageName)) {
+                            return;
+                        }
+
+                        boolean alreadyFlexible =
+                                current
+                                .isOplusFlexibleTask(
+                                        task);
+
+                        boolean requested =
+                                alreadyFlexible
+                                        || requestExistingTaskFlexibleWindow(
+                                                task,
+                                                packageName);
+
+                        diag(
+                                "BACKGROUND_AUTO_MINI_FLEX_REQUEST",
+                                "pkg=" + packageName
+                                        + " taskId="
+                                        + id
+                                        + " alreadyFlexible="
+                                        + alreadyFlexible
+                                        + " requested="
+                                        + requested);
+
+                        if (!requested) {
+                            return;
+                        }
+
+                        waitForFlexibleThenMinimize(
+                                task,
+                                packageName,
+                                0);
+                    } catch (Throwable t) {
+                        log(
+                                Log.WARN,
+                                TAG,
+                                "BACKGROUND_AUTO_MINI request fail-open pkg="
+                                        + packageName,
+                                t);
+                    }
+                });
     }
 
-    private void returnTaskToBackgroundAfterResume(
+    private void waitForFlexibleThenMinimize(
             Object task,
-            Object activityRecord,
-            String pkg
+            String packageName,
+            int attempt
     ) {
-        try {
-            if (task == null
-                    || activityRecord == null
-                    || pkg == null
-                    || pkg.isBlank()) {
-                return;
-            }
+        Handler handler =
+                systemHandler;
 
-            Object state =
-                    fieldValue(
-                            activityRecord,
-                            "mState");
-
-            if (state != null
-                    && !"RESUMED".equals(
-                    String.valueOf(state))) {
-                diag(
-                        "BACKGROUND_SELF_LAUNCH_RETURN_SKIP",
-                        "pkg=" + pkg
-                                + " taskId="
-                                + taskId(task)
-                                + " state="
-                                + state);
-                return;
-            }
-
-            Object rootTask =
-                    invokeNoArg(
-                            task,
-                            "getRootTask");
-
-            if (rootTask == null) {
-                rootTask = task;
-            }
-
-            Object moved =
-                    invokeMethod(
-                            rootTask,
-                            "moveTaskToBack",
-                            task);
-
-            boolean success =
-                    Boolean.TRUE.equals(
-                            moved);
-
-            if (!success) {
-                invokeMethod(
-                        rootTask,
-                        "moveToBack",
-                        "MiniWindowGuard-background-self-launch",
-                        task);
-
-                focusTaskBehind(task);
-            }
-
-            diag(
-                    "BACKGROUND_SELF_LAUNCH_RETURN",
-                    "pkg=" + pkg
-                            + " taskId="
-                            + taskId(task)
-                            + " activity="
-                            + fieldValue(
-                            activityRecord,
-                            "mActivityComponent")
-                            + " moveTaskToBack="
-                            + moved);
-        } catch (Throwable t) {
-            log(
-                    Log.WARN,
-                    TAG,
-                    "BACKGROUND_SELF_LAUNCH_RETURN fail-open pkg="
-                            + pkg,
-                    t);
+        if (handler == null
+                || task == null) {
+            return;
         }
+
+        handler.postDelayed(
+                () -> {
+                    try {
+                        EngineBridge current =
+                                engine;
+
+                        if (current == null
+                                || !current
+                                .isBackgroundPlaybackPackage(
+                                        packageName)) {
+                            return;
+                        }
+
+                        boolean flexible =
+                                current
+                                .isOplusFlexibleTask(
+                                        task);
+
+                        if (flexible) {
+                            boolean minimized =
+                                    requestOplusFloatHandleMini(
+                                            task,
+                                            packageName);
+
+                            diag(
+                                    "BACKGROUND_AUTO_MINI_HANDLE_REQUEST",
+                                    "pkg="
+                                            + packageName
+                                            + " taskId="
+                                            + taskId(task)
+                                            + " attempt="
+                                            + attempt
+                                            + " minimized="
+                                            + minimized);
+                            return;
+                        }
+
+                        if (attempt
+                                >= AUTO_MINI_MAX_RETRIES) {
+                            diag(
+                                    "BACKGROUND_AUTO_MINI_FLEX_TIMEOUT",
+                                    "pkg="
+                                            + packageName
+                                            + " taskId="
+                                            + taskId(task));
+                            return;
+                        }
+
+                        waitForFlexibleThenMinimize(
+                                task,
+                                packageName,
+                                attempt + 1);
+                    } catch (Throwable t) {
+                        log(
+                                Log.WARN,
+                                TAG,
+                                "BACKGROUND_AUTO_MINI wait fail-open pkg="
+                                        + packageName,
+                                t);
+                    }
+                },
+                AUTO_MINI_RETRY_DELAY_MS);
+    }
+
+    private boolean requestExistingTaskFlexibleWindow(
+            Object task,
+            String packageName
+    ) {
+        int id =
+                taskId(task);
+
+        if (id < 0) {
+            return false;
+        }
+
+        Object atms =
+                fieldValue(
+                        task,
+                        "mAtmService");
+
+        if (atms == null) {
+            Object controller =
+                    getFlexibleTaskController();
+
+            atms =
+                    fieldValueByTypeSuffix(
+                            controller,
+                            "ActivityTaskManagerService");
+        }
+
+        if (atms == null) {
+            return false;
+        }
+
+        Bundle options =
+                new Bundle();
+
+        options.putInt(
+                "android.activity.windowingMode",
+                OPLUS_FLEXIBLE_WINDOWING_MODE);
+        options.putInt(
+                "android:activity.mZoomLaunchFlags",
+                OPLUS_ZOOM_LAUNCH_FLAG);
+        options.putInt(
+                "zoom_task_id",
+                id);
+        options.putInt(
+                "android.activity.splashScreenStyle",
+                1);
+
+        for (Class<?> current =
+             atms.getClass();
+             current != null;
+             current = current.getSuperclass()) {
+            for (Method method :
+                    current.getDeclaredMethods()) {
+                if (!"startActivityFromRecents"
+                        .equals(method.getName())
+                        || method.getParameterCount()
+                        != 2) {
+                    continue;
+                }
+
+                Class<?>[] types =
+                        method.getParameterTypes();
+
+                if (types[0] != int.class
+                        || !Bundle.class
+                        .isAssignableFrom(
+                                types[1])) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    Object result =
+                            method.invoke(
+                                    atms,
+                                    id,
+                                    options);
+
+                    diag(
+                            "BACKGROUND_AUTO_MINI_FLEX_INVOKE",
+                            "pkg=" + packageName
+                                    + " taskId="
+                                    + id
+                                    + " result="
+                                    + result
+                                    + " method="
+                                    + method.toGenericString());
+
+                    return true;
+                } catch (Throwable t) {
+                    diag(
+                            "BACKGROUND_AUTO_MINI_FLEX_INVOKE_FAIL",
+                            "pkg=" + packageName
+                                    + " taskId="
+                                    + id
+                                    + " error="
+                                    + t.getClass()
+                                    .getSimpleName());
+                    return false;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean requestOplusFloatHandleMini(
+            Object task,
+            String packageName
+    ) {
+        Object controller =
+                getFlexibleTaskController();
+
+        if (controller == null) {
+            return false;
+        }
+
+        int id =
+                taskId(task);
+
+        for (Class<?> current =
+             controller.getClass();
+             current != null;
+             current = current.getSuperclass()) {
+            for (Method method :
+                    current.getDeclaredMethods()) {
+                if (!"onRecentClicked"
+                        .equals(method.getName())) {
+                    continue;
+                }
+
+                Object[] args =
+                        recentClickedArgs(
+                                method,
+                                task,
+                                id);
+
+                if (args == null) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+                    method.invoke(
+                            controller,
+                            args);
+
+                    diag(
+                            "BACKGROUND_AUTO_MINI_OEM",
+                            "pkg=" + packageName
+                                    + " taskId="
+                                    + id
+                                    + " method="
+                                    + method.toGenericString());
+
+                    return true;
+                } catch (Throwable t) {
+                    diag(
+                            "BACKGROUND_AUTO_MINI_OEM_FAIL",
+                            "pkg=" + packageName
+                                    + " taskId="
+                                    + id
+                                    + " method="
+                                    + method.getName()
+                                    + " error="
+                                    + t.getClass()
+                                    .getSimpleName());
+                }
+            }
+        }
+
+        diag(
+                "BACKGROUND_AUTO_MINI_OEM_MISSING",
+                "pkg=" + packageName
+                        + " taskId="
+                        + id);
+
+        return false;
+    }
+
+    private static Object[] recentClickedArgs(
+            Method method,
+            Object task,
+            int taskId
+    ) {
+        Class<?>[] types =
+                method.getParameterTypes();
+
+        if (types.length == 0) {
+            return new Object[0];
+        }
+
+        if (types.length == 1) {
+            if (types[0] == int.class) {
+                return new Object[]{
+                        taskId
+                };
+            }
+
+            if (task != null
+                    && types[0]
+                    .isInstance(task)) {
+                return new Object[]{
+                        task
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private static Object fieldValueByTypeSuffix(
+            Object receiver,
+            String typeSuffix
+    ) {
+        if (receiver == null
+                || typeSuffix == null) {
+            return null;
+        }
+
+        for (Class<?> current =
+             receiver.getClass();
+             current != null;
+             current = current.getSuperclass()) {
+            for (Field field :
+                    current.getDeclaredFields()) {
+                if (!field.getType()
+                        .getName()
+                        .endsWith(typeSuffix)) {
+                    continue;
+                }
+
+                try {
+                    field.setAccessible(true);
+                    return field.get(
+                            receiver);
+                } catch (Throwable ignored) {
+                    return null;
+                }
+            }
+        }
+
+        return null;
     }
 
     private void installRemovedTaskServiceGuard(
