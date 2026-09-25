@@ -213,6 +213,28 @@ public final class MainActivity extends Activity {
                         "始终前台",
                         "勾选的 App 在小窗、FloatHandle 和锁屏时继续沿用 5.2.0 的保护；开启自动切换后，普通全屏失去前台焦点会先进入系统小窗，再缩成系统小图标。"));
 
+        Button background =
+                button(
+                        "小窗后台应用");
+
+        background.setOnClickListener(v -> {
+            Intent intent =
+                    new Intent(
+                            this,
+                            TargetAppsActivity.class);
+            intent.putExtra(
+                    TargetAppsActivity.EXTRA_MODE,
+                    TargetAppsActivity.MODE_BACKGROUND_PLAYBACK);
+            startActivity(intent);
+        });
+
+        card.addView(background);
+
+        card.addView(
+                detailBlock(
+                        "小窗后台",
+                        "勾选的 App 离开前台时自动进入 OxygenOS 原生 FlexibleWindow，并继续缩成系统 FloatHandle 小图标；不会启用旧的普通 BACKGROUND_PROTECTED 后台模式。"));
+
         Button support =
                 button(
                         "强制允许一加小窗应用");
