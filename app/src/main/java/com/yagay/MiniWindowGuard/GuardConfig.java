@@ -92,6 +92,14 @@ final class GuardConfig {
                 .contains(packageName);
     }
 
+    static boolean windowKeepalivePackage(
+            String packageName
+    ) {
+        return foregroundPackage(packageName)
+                || backgroundPlaybackPackage(
+                packageName);
+    }
+
     static boolean forceSupportPackage(String packageName) {
         return packageName != null
                 && stringSet(
