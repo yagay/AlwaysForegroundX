@@ -32,9 +32,7 @@ import io.github.libxposed.api.XposedModuleInterface;
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
-    private static final long SYSTEM_MINI_RETRY_DELAY_MS = 80L;
-    private static final int SYSTEM_MINI_MAX_RETRIES = 8;
-    private static final int OPLUS_MINI_START_FROM_FULLSCREEN = 1;
+    private static final int PROCESS_STATE_TOP = 2;
     private static final long MODULE_VERSION_CODE =
             BuildConfig.VERSION_CODE;
 
@@ -48,7 +46,6 @@ public final class GuardModule extends XposedModule {
     private volatile ClassLoader systemClassLoader;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
-    private volatile Handler systemHandler;
     private volatile String processName = "";
 
     @Override
@@ -140,8 +137,6 @@ public final class GuardModule extends XposedModule {
                 new Handler(
                         Looper.getMainLooper());
 
-        systemHandler = handler;
-
         Context context =
                 resolveSystemUiContext(
                         systemClassLoader);
@@ -164,6 +159,10 @@ public final class GuardModule extends XposedModule {
         installOplusLockKeepaliveHooks(
                 systemClassLoader);
         installActivityRecordCaptureHook(
+                systemClassLoader);
+        installActivityManagerHooks(
+                systemClassLoader);
+        installActivityTaskManagerHooks(
                 systemClassLoader);
         installRemovedTaskServiceGuard(
                 systemClassLoader);
@@ -278,7 +277,6 @@ public final class GuardModule extends XposedModule {
 
         installLegacyZoomSupportHook(loader);
         installOplusFlexibleEventHook(loader);
-        installOplusTaskFocusLossHook(loader);
         installFloatHandleRestoreHook(loader);
 
         Class<?> service =
@@ -367,141 +365,6 @@ public final class GuardModule extends XposedModule {
                         "SYSTEM_SCOPE skipped OPlus callback "
                                 + name
                                 + " error=" + t);
-            }
-        }
-    }
-
-    private void installOplusTaskFocusLossHook(
-            ClassLoader loader
-    ) {
-        Class<?> controller =
-                load(
-                        loader,
-                        "com.android.server.wm.FlexibleTaskController");
-
-        if (controller == null) {
-            return;
-        }
-
-        for (Method method :
-                controller.getDeclaredMethods()) {
-            if (!"onTaskFocusChanged"
-                    .equals(method.getName())) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                String hookKey =
-                        "oplus-focus-loss:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(
-                        hookKey)) {
-                    continue;
-                }
-
-                hook(method).intercept(chain -> {
-                    Object result =
-                            chain.proceed();
-
-                    try {
-                        List<Object> args =
-                                chain.getArgs();
-
-                        Object previousTask = null;
-                        Object currentTask = null;
-
-                        for (Object arg : args) {
-                            if (arg == null
-                                    || !arg.getClass()
-                                    .getName()
-                                    .endsWith(".Task")) {
-                                continue;
-                            }
-
-                            if (previousTask == null) {
-                                previousTask = arg;
-                            } else {
-                                currentTask = arg;
-                                break;
-                            }
-                        }
-
-                        if (previousTask == null) {
-                            return result;
-                        }
-
-                        String previousPackage =
-                                packageFromObject(
-                                        previousTask);
-
-                        String currentPackage =
-                                packageFromObject(
-                                        currentTask);
-
-                        if (previousPackage == null
-                                || previousPackage.isBlank()
-                                || previousPackage.equals(
-                                        currentPackage)) {
-                            return result;
-                        }
-
-                        EngineBridge current =
-                                engine;
-
-                        if (current == null
-                                || !current
-                                .isBackgroundPlaybackPackage(
-                                        previousPackage)
-                                || !current
-                                .shouldAutoMiniWindowOnFocusLoss(
-                                        previousTask,
-                                        currentPackage)) {
-                            return result;
-                        }
-
-                        diag(
-                                "BACKGROUND_FOCUS_LOSS_TRIGGER",
-                                "pkg="
-                                        + previousPackage
-                                        + " taskId="
-                                        + taskId(
-                                        previousTask)
-                                        + " nextPkg="
-                                        + currentPackage
-                                        + " method="
-                                        + method
-                                        .toGenericString());
-
-                        scheduleAutoMiniWindow(
-                                previousTask,
-                                previousPackage);
-                    } catch (Throwable t) {
-                        log(
-                                Log.WARN,
-                                TAG,
-                                "BACKGROUND_FOCUS_LOSS fail-open",
-                                t);
-                    }
-
-                    return result;
-                });
-
-                log(
-                        Log.INFO,
-                        TAG,
-                        "SYSTEM_SCOPE installed OPlus focus-loss hook "
-                                + method.toGenericString());
-            } catch (Throwable t) {
-                log(
-                        Log.WARN,
-                        TAG,
-                        "SYSTEM_SCOPE skipped OPlus focus-loss hook "
-                                + method.getName()
-                                + " error="
-                                + t);
             }
         }
     }
@@ -958,27 +821,14 @@ public final class GuardModule extends XposedModule {
                                     packageFromObject(
                                             resumingActivity);
 
-                            boolean suppressBackgroundPause =
-                                    current
+                            if (current
                                     .shouldSuppressBackgroundPause(
                                             task,
                                             resumingPackage,
                                             userLeaving,
                                             uiSleeping,
                                             reason,
-                                            finishing);
-
-                            if (!uiSleeping
-                                    && current
-                                    .shouldAutoMiniWindow(
-                                            task)) {
-                                scheduleAutoMiniWindow(
-                                        task,
-                                        packageFromObject(
-                                                task));
-                            }
-
-                            if (suppressBackgroundPause) {
+                                            finishing)) {
                                 diag(
                                         "BACKGROUND_PAUSE_BLOCK",
                                         "taskId=" + taskId(task)
@@ -1213,6 +1063,110 @@ public final class GuardModule extends XposedModule {
         }
     }
 
+    private void installBackgroundStopKeepaliveHook(
+            ClassLoader loader
+    ) {
+        Class<?> record =
+                load(
+                        loader,
+                        "com.android.server.wm.ActivityRecord");
+
+        if (record == null) return;
+
+        for (Method method :
+                record.getDeclaredMethods()) {
+            if (!"stopIfPossible"
+                    .equals(method.getName())
+                    || method.getReturnType()
+                    != void.class) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                String hookKey =
+                        "background-stop:"
+                                + method.toGenericString();
+
+                if (!installedHooks.add(hookKey)) {
+                    continue;
+                }
+
+                hook(method).intercept(chain -> {
+                    Object activityRecord =
+                            chain.getThisObject();
+
+                    String pkg =
+                            activityPackage(
+                                    activityRecord);
+
+                    EngineBridge current = engine;
+
+                    if (current == null
+                            || !current
+                            .isBackgroundPlaybackPackage(
+                                    pkg)) {
+                        return chain.proceed();
+                    }
+
+                    Object task =
+                            invokeNoArg(
+                                    activityRecord,
+                                    "getTask");
+
+                    boolean finishing =
+                            Boolean.TRUE.equals(
+                                    fieldValue(
+                                            activityRecord,
+                                            "finishing"));
+
+                    if (task == null
+                            || !current
+                            .shouldBlockBackgroundStop(
+                                    task,
+                                    finishing)) {
+                        return chain.proceed();
+                    }
+
+                    // stopIfPossible() normally calls this before scheduling
+                    // StopActivityItem. Do the harmless bookkeeping but do not
+                    // send STOP to the protected app process.
+                    invokeNoArg(
+                            activityRecord,
+                            "resumeKeyDispatchingLocked");
+
+                    diag(
+                            "BACKGROUND_STOP_BLOCK",
+                            "taskId="
+                                    + taskId(task)
+                                    + " pkg=" + pkg
+                                    + " activity="
+                                    + fieldValue(
+                                            activityRecord,
+                                            "mActivityComponent"));
+
+                    return null;
+                });
+
+                log(
+                        Log.INFO,
+                        TAG,
+                        "SYSTEM_SCOPE installed background stop guard "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        "background-stop:"
+                                + method.toGenericString());
+            }
+        }
+    }
+
+    /**
+     * Lock-screen keepalive. These hooks are intentionally narrow: they only
+     * fire for an "always foreground" app whose task was a real OPlus
+     * FlexibleWindow/floating task at the moment keyguard started.
+     */
     private void installOplusLockKeepaliveHooks(
             ClassLoader loader
     ) {
@@ -1558,51 +1512,42 @@ public final class GuardModule extends XposedModule {
                     Object result =
                             chain.proceed();
 
-                    try {
-                        if (!enabled()) {
-                            return result;
-                        }
+                    if (!enabled()) {
+                        return result;
+                    }
 
-                        List<Object> args =
-                                chain.getArgs();
+                    List<Object> args =
+                            chain.getArgs();
 
-                        if (args.isEmpty()
-                                || !"RESUMED".equals(
-                                String.valueOf(
-                                        args.get(0)))) {
-                            return result;
-                        }
+                    if (args.isEmpty()
+                            || !"RESUMED".equals(
+                            String.valueOf(
+                                    args.get(0)))) {
+                        return result;
+                    }
 
-                        Object activityRecord =
-                                chain.getThisObject();
+                    Object activityRecord =
+                            chain.getThisObject();
 
-                        String pkg =
-                                activityPackage(
-                                        activityRecord);
+                    String pkg =
+                            activityPackage(
+                                    activityRecord);
 
-                        EngineBridge current =
-                                engine;
+                    EngineBridge current = engine;
 
-                        if (current != null
-                                && current.wantsPackage(pkg)) {
-                            diag(
-                                    "OPLUS_ACTIVITY_RESUMED",
-                                    "pkg=" + pkg
-                                            + " activity="
-                                            + fieldValue(
-                                            activityRecord,
-                                            "mActivityComponent"));
+                    if (current != null
+                            && current.wantsPackage(pkg)) {
+                        diag(
+                                "OPLUS_ACTIVITY_RESUMED",
+                                "pkg=" + pkg
+                                        + " activity="
+                                        + fieldValue(
+                                        activityRecord,
+                                        "mActivityComponent"));
 
-                            current.capture(
-                                    activityRecord,
-                                    pkg);
-                        }
-                    } catch (Throwable t) {
-                        log(
-                                Log.WARN,
-                                TAG,
-                                "SYSTEM_SCOPE ActivityRecord.setState observer fail-open",
-                                t);
+                        current.capture(
+                                activityRecord,
+                                pkg);
                     }
 
                     return result;
@@ -1625,462 +1570,215 @@ public final class GuardModule extends XposedModule {
         }
     }
 
-    private void installBackgroundStopKeepaliveHook(
+    private void installActivityManagerHooks(
             ClassLoader loader
     ) {
-        Class<?> record =
+        Class<?> ams =
                 load(
                         loader,
-                        "com.android.server.wm.ActivityRecord");
+                        "com.android.server.am.ActivityManagerService");
 
-        if (record == null) return;
+        if (ams == null) return;
 
         for (Method method :
-                record.getDeclaredMethods()) {
-            if (!"stopIfPossible"
+                ams.getDeclaredMethods()) {
+            String name = method.getName();
+
+            if ("getPackageProcessState"
+                    .equals(name)
+                    && method.getReturnType()
+                    == int.class) {
+                installPackageProcessStateHook(method);
+                continue;
+            }
+
+            if ("getUidProcessState"
+                    .equals(name)
+                    && method.getReturnType()
+                    == int.class) {
+                installUidProcessStateHook(method);
+                continue;
+            }
+
+            if ("isAppForeground"
+                    .equals(name)
+                    && method.getReturnType()
+                    == boolean.class) {
+                installIsAppForegroundHook(method);
+            }
+        }
+    }
+
+    private void installPackageProcessStateHook(
+            Method method
+    ) {
+        try {
+            method.setAccessible(true);
+
+            if (!installedHooks.add(
+                    method.toGenericString())) {
+                return;
+            }
+
+            hook(method).intercept(chain -> {
+                List<Object> args =
+                        chain.getArgs();
+
+                if (engineBool(
+                        ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                        && !args.isEmpty()
+                        && args.get(0)
+                        instanceof String pkg
+                        && isTargetPackage(pkg)) {
+                    diag(
+                            "AMS_PACKAGE_STATE",
+                            "pkg=" + pkg
+                                    + " forced="
+                                    + PROCESS_STATE_TOP);
+
+                    return PROCESS_STATE_TOP;
+                }
+
+                return chain.proceed();
+            });
+        } catch (Throwable t) {
+            installedHooks.remove(
+                    method.toGenericString());
+        }
+    }
+
+    private void installUidProcessStateHook(
+            Method method
+    ) {
+        try {
+            method.setAccessible(true);
+
+            if (!installedHooks.add(
+                    method.toGenericString())) {
+                return;
+            }
+
+            hook(method).intercept(chain -> {
+                List<Object> args =
+                        chain.getArgs();
+
+                if (engineBool(
+                        ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                        && !args.isEmpty()
+                        && args.get(0)
+                        instanceof Integer uid
+                        && isTargetUid(uid)) {
+                    diag(
+                            "AMS_UID_STATE",
+                            "uid=" + uid
+                                    + " packages="
+                                    + Arrays.toString(
+                                    resolvePackagesForUid(uid))
+                                    + " forced="
+                                    + PROCESS_STATE_TOP);
+
+                    return PROCESS_STATE_TOP;
+                }
+
+                return chain.proceed();
+            });
+        } catch (Throwable t) {
+            installedHooks.remove(
+                    method.toGenericString());
+        }
+    }
+
+    private void installIsAppForegroundHook(
+            Method method
+    ) {
+        try {
+            method.setAccessible(true);
+
+            if (!installedHooks.add(
+                    method.toGenericString())) {
+                return;
+            }
+
+            hook(method).intercept(chain -> {
+                List<Object> args =
+                        chain.getArgs();
+
+                if (engineBool(
+                        ConfigKeys.SYSTEM_IMPORTANCE_TOP)
+                        && !args.isEmpty()
+                        && args.get(0)
+                        instanceof Integer uid
+                        && isTargetUid(uid)) {
+                    diag(
+                            "AMS_FOREGROUND",
+                            "uid=" + uid
+                                    + " forced=true");
+                    return true;
+                }
+
+                return chain.proceed();
+            });
+        } catch (Throwable t) {
+            installedHooks.remove(
+                    method.toGenericString());
+        }
+    }
+
+    private void installActivityTaskManagerHooks(
+            ClassLoader loader
+    ) {
+        Class<?> atms =
+                load(
+                        loader,
+                        "com.android.server.wm.ActivityTaskManagerService");
+
+        if (atms == null) return;
+
+        for (Method method :
+                atms.getDeclaredMethods()) {
+            if (!"hasResumedActivity"
                     .equals(method.getName())
                     || method.getReturnType()
-                    != void.class) {
+                    != boolean.class) {
                 continue;
             }
 
             try {
                 method.setAccessible(true);
 
-                String hookKey =
-                        "background-stop:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(hookKey)) {
+                if (!installedHooks.add(
+                        method.toGenericString())) {
                     continue;
                 }
 
                 hook(method).intercept(chain -> {
-                    try {
-                        Object activityRecord =
-                                chain.getThisObject();
+                    List<Object> args =
+                            chain.getArgs();
 
-                        String pkg =
-                                activityPackage(
-                                        activityRecord);
-
-                        EngineBridge current =
-                                engine;
-
-                        if (current == null
-                                || !current
-                                .isBackgroundPlaybackPackage(
-                                        pkg)) {
-                            return chain.proceed();
-                        }
-
-                        Object task =
-                                invokeNoArg(
-                                        activityRecord,
-                                        "getTask");
-
-                        boolean finishing =
-                                Boolean.TRUE.equals(
-                                        fieldValue(
-                                                activityRecord,
-                                                "finishing"));
-
-                        if (task == null
-                                || !current
-                                .shouldBlockBackgroundStop(
-                                        task,
-                                        finishing)) {
-                            return chain.proceed();
-                        }
-
-                        invokeNoArg(
-                                activityRecord,
-                                "resumeKeyDispatchingLocked");
-
+                    if (engineBool(
+                            ConfigKeys.SYSTEM_HAS_RESUMED)
+                            && !args.isEmpty()
+                            && args.get(0)
+                            instanceof Integer uid
+                            && isTargetUid(uid)) {
                         diag(
-                                "BACKGROUND_STOP_BLOCK",
-                                "taskId="
-                                        + taskId(task)
-                                        + " pkg="
-                                        + pkg
-                                        + " activity="
-                                        + fieldValue(
-                                        activityRecord,
-                                        "mActivityComponent"));
+                                "ATMS_HAS_RESUMED",
+                                "uid=" + uid
+                                        + " packages="
+                                        + Arrays.toString(
+                                        resolvePackagesForUid(uid))
+                                        + " forced=true");
 
-                        return null;
-                    } catch (Throwable t) {
-                        log(
-                                Log.WARN,
-                                TAG,
-                                "BACKGROUND_STOP_GUARD fail-open",
-                                t);
-
-                        return chain.proceed();
+                        return true;
                     }
-                });
 
-                log(
-                        Log.INFO,
-                        TAG,
-                        "SYSTEM_SCOPE installed background stop guard "
-                                + method.toGenericString());
+                    return chain.proceed();
+                });
             } catch (Throwable t) {
                 installedHooks.remove(
-                        hookKey(method));
+                        method.toGenericString());
             }
         }
-    }
-
-    private static String hookKey(
-            Method method
-    ) {
-        return "background-stop:"
-                + (method == null
-                ? ""
-                : method.toGenericString());
-    }
-
-    private void scheduleAutoMiniWindow(
-            Object task,
-            String packageName
-    ) {
-        Handler handler =
-                systemHandler;
-
-        if (handler == null
-                || task == null
-                || packageName == null
-                || packageName.isBlank()) {
-            return;
-        }
-
-        int id =
-                taskId(task);
-
-        if (id < 0) {
-            return;
-        }
-
-        handler.post(
-                () -> {
-                    try {
-                        EngineBridge current =
-                                engine;
-
-                        if (current == null
-                                || !current
-                                .isBackgroundPlaybackPackage(
-                                        packageName)) {
-                            return;
-                        }
-
-                        boolean alreadyFlexible =
-                                current
-                                .isOplusFlexibleTask(
-                                        task);
-
-                        if (alreadyFlexible) {
-                            boolean minimized =
-                                    requestSystemMiniIcon(
-                                            packageName,
-                                            id);
-
-                            diag(
-                                    "BACKGROUND_SYSTEM_MINI_ALREADY_FLEXIBLE",
-                                    "pkg="
-                                            + packageName
-                                            + " taskId="
-                                            + id
-                                            + " minimized="
-                                            + minimized);
-                            return;
-                        }
-
-                        boolean requested =
-                                requestSystemFlexibleWindow(
-                                        id,
-                                        packageName);
-
-                        diag(
-                                "BACKGROUND_SYSTEM_MINI_TOGGLE",
-                                "pkg=" + packageName
-                                        + " taskId="
-                                        + id
-                                        + " requested="
-                                        + requested);
-
-                        if (!requested) {
-                            return;
-                        }
-
-                        waitForSystemFlexibleThenMini(
-                                task,
-                                packageName,
-                                0);
-                    } catch (Throwable t) {
-                        log(
-                                Log.WARN,
-                                TAG,
-                                "BACKGROUND_SYSTEM_MINI fail-open pkg="
-                                        + packageName,
-                                t);
-                    }
-                });
-    }
-
-    /**
-     * Enter the exact OxygenOS flexible-window path for an already existing
-     * task. This uses the OEM ActivityTaskManager API instead of constructing
-     * ActivityOptions/windowingMode bundles ourselves, so bounds, caption,
-     * corner radius, input, animations and restore behavior stay system-owned.
-     */
-    private boolean requestSystemFlexibleWindow(
-            int taskId,
-            String packageName
-    ) {
-        try {
-            Class<?> type =
-                    load(
-                            systemClassLoader,
-                            "android.app.OplusActivityTaskManager");
-
-            if (type == null) {
-                diag(
-                        "BACKGROUND_SYSTEM_MINI_TOGGLE_FAIL",
-                        "pkg=" + packageName
-                                + " taskId="
-                                + taskId
-                                + " reason=class-missing");
-                return false;
-            }
-
-            Method getInstance =
-                    type.getMethod(
-                            "getInstance");
-
-            Object instance =
-                    getInstance.invoke(
-                            null);
-
-            if (instance == null) {
-                return false;
-            }
-
-            Method toggle =
-                    type.getMethod(
-                            "toggleFlexibleWindow",
-                            android.os.IBinder.class,
-                            int.class,
-                            boolean.class,
-                            boolean.class);
-
-            Object result =
-                    toggle.invoke(
-                            instance,
-                            null,
-                            taskId,
-                            true,
-                            true);
-
-            boolean accepted =
-                    toggle.getReturnType()
-                            != boolean.class
-                            || !Boolean.FALSE.equals(
-                            result);
-
-            diag(
-                    accepted
-                            ? "BACKGROUND_SYSTEM_FLEXIBLE_REQUEST"
-                            : "BACKGROUND_SYSTEM_FLEXIBLE_REJECTED",
-                    "pkg=" + packageName
-                            + " taskId="
-                            + taskId
-                            + " method="
-                            + toggle.toGenericString()
-                            + " result="
-                            + result);
-
-            return accepted;
-        } catch (Throwable t) {
-            diag(
-                    "BACKGROUND_SYSTEM_MINI_TOGGLE_FAIL",
-                    "pkg=" + packageName
-                            + " taskId="
-                            + taskId
-                            + " error="
-                            + t.getClass()
-                            .getSimpleName());
-
-            return false;
-        }
-    }
-
-    /**
-     * The OEM mini API expects a real Zoom/FlexibleWindow to exist first.
-     * Poll only the OEM-reported state; do not synthesize bounds or window
-     * configuration. As soon as OxygenOS reports the task flexible, hand the
-     * second step back to its own mini/float-handle implementation.
-     */
-    private void waitForSystemFlexibleThenMini(
-            Object task,
-            String packageName,
-            int attempt
-    ) {
-        Handler handler =
-                systemHandler;
-
-        if (handler == null
-                || task == null) {
-            return;
-        }
-
-        handler.postDelayed(
-                () -> {
-                    try {
-                        EngineBridge current =
-                                engine;
-
-                        if (current == null
-                                || !current
-                                .isBackgroundPlaybackPackage(
-                                        packageName)) {
-                            return;
-                        }
-
-                        if (current
-                                .isOplusFlexibleTask(
-                                        task)) {
-                            requestSystemMiniIcon(
-                                    packageName,
-                                    taskId(task));
-                            return;
-                        }
-
-                        if (attempt
-                                >= SYSTEM_MINI_MAX_RETRIES) {
-                            diag(
-                                    "BACKGROUND_SYSTEM_MINI_TIMEOUT",
-                                    "pkg=" + packageName
-                                            + " taskId="
-                                            + taskId(task)
-                                            + " phase=wait-flexible");
-                            return;
-                        }
-
-                        waitForSystemFlexibleThenMini(
-                                task,
-                                packageName,
-                                attempt + 1);
-                    } catch (Throwable t) {
-                        log(
-                                Log.WARN,
-                                TAG,
-                                "BACKGROUND_SYSTEM_MINI wait fail-open pkg="
-                                        + packageName,
-                                t);
-                    }
-                },
-                SYSTEM_MINI_RETRY_DELAY_MS);
-    }
-
-    /**
-     * Ask OxygenOS to convert its real small window into the stock mini/float
-     * icon. startWay=1 is the OEM "from fullscreen" path used for the
-     * fullscreen -> zoom -> mini transition.
-     */
-    private boolean requestSystemMiniIcon(
-            String packageName,
-            int taskId
-    ) {
-        try {
-            Class<?> type =
-                    load(
-                            systemClassLoader,
-                            "android.app.OplusActivityTaskManager");
-
-            if (type == null) {
-                return false;
-            }
-
-            Method getInstance =
-                    type.getMethod(
-                            "getInstance");
-
-            Object instance =
-                    getInstance.invoke(
-                            null);
-
-            if (instance == null) {
-                return false;
-            }
-
-            Method mini =
-                    type.getMethod(
-                            "startMiniZoomFromZoom",
-                            int.class);
-
-            mini.invoke(
-                    instance,
-                    OPLUS_MINI_START_FROM_FULLSCREEN);
-
-            diag(
-                    "BACKGROUND_SYSTEM_MINI_ICON",
-                    "pkg=" + packageName
-                            + " taskId="
-                            + taskId
-                            + " startWay="
-                            + OPLUS_MINI_START_FROM_FULLSCREEN
-                            + " method="
-                            + mini.toGenericString());
-
-            return true;
-        } catch (Throwable t) {
-            diag(
-                    "BACKGROUND_SYSTEM_MINI_ICON_FAIL",
-                    "pkg=" + packageName
-                            + " taskId="
-                            + taskId
-                            + " error="
-                            + t.getClass()
-                            .getSimpleName());
-
-            return false;
-        }
-    }
-
-    private static Object fieldValueByTypeSuffix(
-            Object receiver,
-            String typeSuffix
-    ) {
-        if (receiver == null
-                || typeSuffix == null) {
-            return null;
-        }
-
-        for (Class<?> current =
-             receiver.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            for (Field field :
-                    current.getDeclaredFields()) {
-                if (!field.getType()
-                        .getName()
-                        .endsWith(typeSuffix)) {
-                    continue;
-                }
-
-                try {
-                    field.setAccessible(true);
-                    return field.get(
-                            receiver);
-                } catch (Throwable ignored) {
-                    return null;
-                }
-            }
-        }
-
-        return null;
     }
 
     private void installRemovedTaskServiceGuard(
