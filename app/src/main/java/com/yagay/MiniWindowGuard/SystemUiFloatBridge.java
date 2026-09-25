@@ -33,6 +33,7 @@ final class SystemUiFloatBridge {
             "com.yagay.MiniWindowGuard.action.REQUEST_OPLUS_FLOAT_HANDLE";
     static final String EXTRA_TASK_ID = "task_id";
     static final String EXTRA_PACKAGE_NAME = "package_name";
+    static final String EXTRA_ALLOW_IMMEDIATE = "allow_immediate";
 
     private static final String TAG = "MiniWindowGuardUI";
     private static final String LAUNCHER_PACKAGE =
@@ -316,6 +317,8 @@ final class SystemUiFloatBridge {
                                             taskInfo);
 
                             if (id == request.taskId) {
+                                request.zoomReady = true;
+
                                 uiDiag(
                                         "FLOAT_ON_ZOOM_ENTER",
                                         "pkg="
@@ -464,7 +467,10 @@ final class SystemUiFloatBridge {
                             PendingRequest request =
                                     new PendingRequest(
                                             taskId,
-                                            packageName);
+                                            packageName,
+                                            intent.getBooleanExtra(
+                                                    EXTRA_ALLOW_IMMEDIATE,
+                                                    false));
 
                             pending = request;
 
@@ -475,10 +481,12 @@ final class SystemUiFloatBridge {
                                             + " taskId="
                                             + taskId);
 
-                            scheduleAttempt(
-                                    request,
-                                    "broadcast",
-                                    0L);
+                            if (request.allowImmediate) {
+                                scheduleAttempt(
+                                        request,
+                                        "broadcast-immediate",
+                                        0L);
+                            }
                         }
                     };
 
@@ -556,6 +564,14 @@ final class SystemUiFloatBridge {
                             + request.invokeCount
                             + " attempts="
                             + request.attempts);
+            return;
+        }
+
+        if (!request.allowImmediate
+                && !request.zoomReady) {
+            retry(
+                    request,
+                    "wait-zoom-enter");
             return;
         }
 
@@ -850,17 +866,21 @@ final class SystemUiFloatBridge {
         final String packageName;
         final long createdAt =
                 SystemClock.elapsedRealtime();
+        final boolean allowImmediate;
 
+        volatile boolean zoomReady;
         int attempts;
         int invokeCount;
         long lastInvokeAt;
 
         PendingRequest(
                 int taskId,
-                String packageName
+                String packageName,
+                boolean allowImmediate
         ) {
             this.taskId = taskId;
             this.packageName = packageName;
+            this.allowImmediate = allowImmediate;
         }
     }
 }
