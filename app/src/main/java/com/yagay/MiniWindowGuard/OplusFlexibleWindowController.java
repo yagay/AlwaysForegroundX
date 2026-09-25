@@ -659,6 +659,13 @@ final class OplusFlexibleWindowController {
         return true;
     }
 
+    boolean isOplusFlexibleTask(Object task) {
+        Session session = sessionForTask(task);
+        return session != null
+                && session.active
+                && isNativeOplusWindow(session);
+    }
+
     boolean shouldKeepTaskAwake(Object task) {
         Session session =
                 sessionForTask(task);
