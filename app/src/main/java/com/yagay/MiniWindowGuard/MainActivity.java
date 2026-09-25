@@ -232,8 +232,8 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 detailBlock(
-                        "普通后台播放",
-                        "从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED；返回原 App 自动解除。"));
+                        "系统小窗后台播放",
+                        "勾选的 App 离开前台时直接按 OxygenOS Launcher 的原生方式重新进入系统小窗，系统确认后再缩成 FloatHandle 小图标；小窗、小图标和锁屏继续复用现有保活。"));
 
         Button support =
                 button(
@@ -265,24 +265,24 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "运行保护",
-                        "小窗继续使用 OPlus 状态驱动；后台播放名单只在离开普通全屏后进入 BACKGROUND_PROTECTED。");
+                        "始终前台应用和后台播放应用都只在真实 OPlus 小窗、FloatHandle 或小窗锁屏状态下进入保活。后台播放不再使用普通 BACKGROUND_PROTECTED。");
 
         addSwitch(
                 card,
                 "受保护进程状态保持 TOP",
-                "对真实一加小窗/贴边/锁屏，以及 BACKGROUND_PROTECTED 普通后台进程返回 TOP。",
+                "仅对真实一加小窗、FloatHandle 和小窗锁屏状态返回 TOP。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(
                 card,
                 "受保护任务视为存在 Resumed Activity",
-                "对真实一加小窗和 BACKGROUND_PROTECTED 任务返回 true；普通前台不修改。",
+                "仅对真实一加小窗、FloatHandle 和小窗锁屏任务返回 true；普通全屏不修改。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
                 "阻止系统清理受保护进程",
-                "保护一加小窗和 BACKGROUND_PROTECTED 进程；强制停止/更新放行，普通后台任务被划掉时仍允许正常关闭。",
+                "保护真实一加小窗、FloatHandle 和小窗锁屏进程；强制停止、更新和普通全屏状态放行。",
                 ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
 
