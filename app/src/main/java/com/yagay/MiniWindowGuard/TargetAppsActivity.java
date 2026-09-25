@@ -129,9 +129,9 @@ public final class TargetAppsActivity extends Activity {
                         ? "勾选后仅放行该 App 的 OPlus FlexibleWindow 支持/黑名单判断。"
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
                         : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "勾选后会请求把该 App 加入 MiniWindowGuard 的 LSPosed 作用域。"
-                        + "系统层正常完成 Home/应用切换，App 进程层仅阻止生命周期触发的播放器暂停。"
-                        + "用户手动暂停、同 App 页面切换、Activity finishing、强制停止和真实关闭正常放行。"
+                        ? "勾选后可为每个 App 独立选择：自动检测 / 始终强制 / 仅原生。"
+                        + "自动检测会按当前播放器实例判断：原生能后台播放就不干预，真正退后台后被生命周期暂停才自动恢复并进入强制保护。"
+                        + "同 App 页面切换、用户手动暂停、Activity finishing、强制停止和真实关闭正常放行。"
                         + "首次授权作用域后请重新打开目标 App。"
                         : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
                         + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
@@ -417,8 +417,22 @@ public final class TargetAppsActivity extends Activity {
     ) {
         if (enabled) {
             selected.add(item.packageName);
+
+            if (MODE_BACKGROUND_PLAYBACK
+                    .equals(mode)) {
+                GuardApp.putBackgroundPlaybackMode(
+                        item.packageName,
+                        GuardApp.getBackgroundPlaybackMode(
+                                item.packageName));
+            }
         } else {
             selected.remove(item.packageName);
+
+            if (MODE_BACKGROUND_PLAYBACK
+                    .equals(mode)) {
+                GuardApp.removeBackgroundPlaybackMode(
+                        item.packageName);
+            }
         }
 
         GuardApp.putStringSet(
@@ -602,6 +616,48 @@ public final class TargetAppsActivity extends Activity {
                         .density);
     }
 
+    private static String playbackModeLabel(
+            String mode
+    ) {
+        if (GuardConfig.PLAYBACK_MODE_FORCE.equals(mode)) {
+            return "始终强制";
+        }
+
+        if (GuardConfig.PLAYBACK_MODE_NATIVE.equals(mode)) {
+            return "仅原生";
+        }
+
+        return "自动检测";
+    }
+
+    private static String shortPlaybackModeLabel(
+            String mode
+    ) {
+        if (GuardConfig.PLAYBACK_MODE_FORCE.equals(mode)) {
+            return "强制";
+        }
+
+        if (GuardConfig.PLAYBACK_MODE_NATIVE.equals(mode)) {
+            return "原生";
+        }
+
+        return "自动";
+    }
+
+    private static String nextPlaybackMode(
+            String mode
+    ) {
+        if (GuardConfig.PLAYBACK_MODE_FORCE.equals(mode)) {
+            return GuardConfig.PLAYBACK_MODE_NATIVE;
+        }
+
+        if (GuardConfig.PLAYBACK_MODE_NATIVE.equals(mode)) {
+            return GuardConfig.PLAYBACK_MODE_AUTO;
+        }
+
+        return GuardConfig.PLAYBACK_MODE_FORCE;
+    }
+
     private final class AppAdapter
             extends BaseAdapter {
         @Override
@@ -647,19 +703,32 @@ public final class TargetAppsActivity extends Activity {
 
             holder.title.setText(
                     item.label);
+            boolean isSelected =
+                    selected.contains(
+                            item.packageName);
+
+            String modeSuffix =
+                    MODE_BACKGROUND_PLAYBACK.equals(mode)
+                            && isSelected
+                            ? " · "
+                            + playbackModeLabel(
+                            GuardApp.getBackgroundPlaybackMode(
+                                    item.packageName))
+                            : "";
+
             holder.subtitle.setText(
                     item.packageName
                             + (item.system
                             ? " · 系统应用"
-                            : ""));
+                            : "")
+                            + modeSuffix);
 
             holder.check
                     .setOnCheckedChangeListener(
                             null);
 
             holder.check.setChecked(
-                    selected.contains(
-                            item.packageName));
+                    isSelected);
 
             holder.check
                     .setOnCheckedChangeListener(
@@ -667,6 +736,40 @@ public final class TargetAppsActivity extends Activity {
                                     toggle(
                                             item,
                                             checked));
+
+            if (MODE_BACKGROUND_PLAYBACK.equals(mode)
+                    && isSelected) {
+                String playbackMode =
+                        GuardApp.getBackgroundPlaybackMode(
+                                item.packageName);
+
+                holder.modeButton.setVisibility(
+                        View.VISIBLE);
+                holder.modeButton.setText(
+                        shortPlaybackModeLabel(
+                                playbackMode));
+                holder.modeButton.setOnClickListener(v -> {
+                    String next =
+                            nextPlaybackMode(
+                                    GuardApp.getBackgroundPlaybackMode(
+                                            item.packageName));
+
+                    GuardApp.putBackgroundPlaybackMode(
+                            item.packageName,
+                            next);
+
+                    applyFilter(
+                            search == null
+                                    ? ""
+                                    : search.getText()
+                                    .toString());
+                });
+            } else {
+                holder.modeButton.setVisibility(
+                        View.GONE);
+                holder.modeButton.setOnClickListener(
+                        null);
+            }
 
             holder.root.setOnClickListener(v ->
                     holder.check.setChecked(
@@ -719,6 +822,26 @@ public final class TargetAppsActivity extends Activity {
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                             1f));
 
+            Button modeButton =
+                    new Button(
+                            TargetAppsActivity.this);
+            modeButton.setAllCaps(false);
+            modeButton.setTextSize(12);
+            modeButton.setMinWidth(0);
+            modeButton.setMinimumWidth(0);
+            modeButton.setPadding(
+                    dp(8),
+                    0,
+                    dp(8),
+                    0);
+            modeButton.setVisibility(
+                    View.GONE);
+            row.addView(
+                    modeButton,
+                    new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            dp(40)));
+
             CheckBox check =
                     new CheckBox(
                             TargetAppsActivity.this);
@@ -729,6 +852,7 @@ public final class TargetAppsActivity extends Activity {
                             row,
                             title,
                             subtitle,
+                            modeButton,
                             check);
 
             row.setTag(holder);
@@ -741,17 +865,20 @@ public final class TargetAppsActivity extends Activity {
         final LinearLayout root;
         final TextView title;
         final TextView subtitle;
+        final Button modeButton;
         final CheckBox check;
 
         RowHolder(
                 LinearLayout root,
                 TextView title,
                 TextView subtitle,
+                Button modeButton,
                 CheckBox check
         ) {
             this.root = root;
             this.title = title;
             this.subtitle = subtitle;
+            this.modeButton = modeButton;
             this.check = check;
         }
     }
