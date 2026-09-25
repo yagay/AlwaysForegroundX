@@ -1871,12 +1871,150 @@ public final class GuardModule extends XposedModule {
                 getFlexibleTaskController();
 
         if (controller == null) {
+            diag(
+                    "BACKGROUND_AUTO_MINI_OEM_MISSING",
+                    "pkg=" + packageName
+                            + " taskId="
+                            + taskId(task)
+                            + " reason=no-controller");
             return false;
         }
 
         int id =
                 taskId(task);
 
+        if (id < 0) {
+            return false;
+        }
+
+        if (invokeDirectMiniMethod(
+                controller,
+                task,
+                id,
+                packageName)) {
+            return true;
+        }
+
+        if (invokeRecentClickedMini(
+                controller,
+                task,
+                id,
+                packageName)) {
+            return true;
+        }
+
+        if (invokeFlexibleEventMini(
+                controller,
+                task,
+                id,
+                packageName)) {
+            return true;
+        }
+
+        diag(
+                "BACKGROUND_AUTO_MINI_OEM_MISSING",
+                "pkg=" + packageName
+                        + " taskId="
+                        + id
+                        + " reason=no-supported-mini-entry");
+
+        return false;
+    }
+
+    private boolean invokeDirectMiniMethod(
+            Object controller,
+            Object task,
+            int taskId,
+            String packageName
+    ) {
+        String[] preferredNames = {
+                "minimizeFlexibleTask",
+                "minimizeFlexibleWindow",
+                "moveTaskToFloatHandle",
+                "moveToFloatHandle",
+                "enterFloatHandle",
+                "enterSuperMini",
+                "setTaskToSuperMini",
+                "requestMinimizeFlexibleTask"
+        };
+
+        for (String preferredName :
+                preferredNames) {
+            for (Class<?> current =
+                 controller.getClass();
+                 current != null;
+                 current = current.getSuperclass()) {
+                for (Method method :
+                        current.getDeclaredMethods()) {
+                    if (!preferredName.equals(
+                            method.getName())) {
+                        continue;
+                    }
+
+                    Object[] args =
+                            buildOplusMiniArgs(
+                                    method,
+                                    task,
+                                    taskId,
+                                    true);
+
+                    if (args == null) {
+                        continue;
+                    }
+
+                    try {
+                        method.setAccessible(true);
+
+                        Object result =
+                                method.invoke(
+                                        controller,
+                                        args);
+
+                        if (method.getReturnType()
+                                == boolean.class
+                                && Boolean.FALSE.equals(
+                                result)) {
+                            continue;
+                        }
+
+                        diag(
+                                "BACKGROUND_AUTO_MINI_DIRECT",
+                                "pkg="
+                                        + packageName
+                                        + " taskId="
+                                        + taskId
+                                        + " method="
+                                        + method.toGenericString()
+                                        + " result="
+                                        + result);
+
+                        return true;
+                    } catch (Throwable t) {
+                        diag(
+                                "BACKGROUND_AUTO_MINI_DIRECT_FAIL",
+                                "pkg="
+                                        + packageName
+                                        + " taskId="
+                                        + taskId
+                                        + " method="
+                                        + method.getName()
+                                        + " error="
+                                        + t.getClass()
+                                        .getSimpleName());
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean invokeRecentClickedMini(
+            Object controller,
+            Object task,
+            int taskId,
+            String packageName
+    ) {
         for (Class<?> current =
              controller.getClass();
              current != null;
@@ -1889,10 +2027,11 @@ public final class GuardModule extends XposedModule {
                 }
 
                 Object[] args =
-                        recentClickedArgs(
+                        buildOplusMiniArgs(
                                 method,
                                 task,
-                                id);
+                                taskId,
+                                true);
 
                 if (args == null) {
                     continue;
@@ -1900,17 +2039,28 @@ public final class GuardModule extends XposedModule {
 
                 try {
                     method.setAccessible(true);
-                    method.invoke(
-                            controller,
-                            args);
+
+                    Object result =
+                            method.invoke(
+                                    controller,
+                                    args);
+
+                    if (method.getReturnType()
+                            == boolean.class
+                            && Boolean.FALSE.equals(
+                            result)) {
+                        continue;
+                    }
 
                     diag(
                             "BACKGROUND_AUTO_MINI_OEM",
                             "pkg=" + packageName
                                     + " taskId="
-                                    + id
+                                    + taskId
                                     + " method="
-                                    + method.toGenericString());
+                                    + method.toGenericString()
+                                    + " result="
+                                    + result);
 
                     return true;
                 } catch (Throwable t) {
@@ -1918,9 +2068,9 @@ public final class GuardModule extends XposedModule {
                             "BACKGROUND_AUTO_MINI_OEM_FAIL",
                             "pkg=" + packageName
                                     + " taskId="
-                                    + id
+                                    + taskId
                                     + " method="
-                                    + method.getName()
+                                    + method.toGenericString()
                                     + " error="
                                     + t.getClass()
                                     .getSimpleName());
@@ -1928,44 +2078,281 @@ public final class GuardModule extends XposedModule {
             }
         }
 
-        diag(
-                "BACKGROUND_AUTO_MINI_OEM_MISSING",
-                "pkg=" + packageName
-                        + " taskId="
-                        + id);
+        return false;
+    }
+
+    private boolean invokeFlexibleEventMini(
+            Object controller,
+            Object task,
+            int taskId,
+            String packageName
+    ) {
+        for (Class<?> current =
+             controller.getClass();
+             current != null;
+             current = current.getSuperclass()) {
+            for (Method method :
+                    current.getDeclaredMethods()) {
+                if (!"notifyFlexibleTaskEvent"
+                        .equals(method.getName())) {
+                    continue;
+                }
+
+                Object[] args =
+                        buildFlexibleEventArgs(
+                                method,
+                                task,
+                                taskId,
+                                2002);
+
+                if (args == null) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    Object result =
+                            method.invoke(
+                                    controller,
+                                    args);
+
+                    if (method.getReturnType()
+                            == boolean.class
+                            && Boolean.FALSE.equals(
+                            result)) {
+                        continue;
+                    }
+
+                    diag(
+                            "BACKGROUND_AUTO_MINI_EVENT",
+                            "pkg="
+                                    + packageName
+                                    + " taskId="
+                                    + taskId
+                                    + " event=2002"
+                                    + " method="
+                                    + method.toGenericString()
+                                    + " result="
+                                    + result);
+
+                    return true;
+                } catch (Throwable t) {
+                    diag(
+                            "BACKGROUND_AUTO_MINI_EVENT_FAIL",
+                            "pkg="
+                                    + packageName
+                                    + " taskId="
+                                    + taskId
+                                    + " method="
+                                    + method.toGenericString()
+                                    + " error="
+                                    + t.getClass()
+                                    .getSimpleName());
+                }
+            }
+        }
 
         return false;
     }
 
-    private static Object[] recentClickedArgs(
+    private static Object[] buildOplusMiniArgs(
             Method method,
             Object task,
-            int taskId
+            int taskId,
+            boolean minimize
     ) {
+        if (method == null) {
+            return null;
+        }
+
         Class<?>[] types =
                 method.getParameterTypes();
 
-        if (types.length == 0) {
-            return new Object[0];
-        }
+        Object[] args =
+                new Object[types.length];
 
-        if (types.length == 1) {
-            if (types[0] == int.class) {
-                return new Object[]{
-                        taskId
-                };
+        int intIndex = 0;
+
+        for (int i = 0;
+             i < types.length;
+             i++) {
+            Class<?> type =
+                    types[i];
+
+            if (type == int.class
+                    || type == Integer.class) {
+                // First integer is almost always the target taskId. Extra
+                // integer slots on OPlus controller callbacks are commonly
+                // event/reason/user fields; zero is the safest fail-open value.
+                args[i] =
+                        intIndex++ == 0
+                                ? taskId
+                                : 0;
+                continue;
+            }
+
+            if (type == boolean.class
+                    || type == Boolean.class) {
+                args[i] = minimize;
+                continue;
+            }
+
+            if (type == String.class) {
+                args[i] =
+                        "MiniWindowGuard";
+                continue;
+            }
+
+            if (type == Bundle.class) {
+                Bundle bundle =
+                        new Bundle();
+
+                bundle.putInt(
+                        "taskId",
+                        taskId);
+                bundle.putInt(
+                        "zoom_task_id",
+                        taskId);
+                bundle.putBoolean(
+                        "minimize",
+                        minimize);
+                bundle.putBoolean(
+                        "toFloatHandle",
+                        minimize);
+
+                args[i] = bundle;
+                continue;
             }
 
             if (task != null
-                    && types[0]
-                    .isInstance(task)) {
-                return new Object[]{
-                        task
-                };
+                    && type.isInstance(
+                    task)) {
+                args[i] = task;
+                continue;
             }
+
+            if (type.isPrimitive()) {
+                if (type == long.class) {
+                    args[i] = 0L;
+                } else if (type == float.class) {
+                    args[i] = 0f;
+                } else if (type == double.class) {
+                    args[i] = 0d;
+                } else if (type == short.class) {
+                    args[i] = (short) 0;
+                } else if (type == byte.class) {
+                    args[i] = (byte) 0;
+                } else if (type == char.class) {
+                    args[i] = (char) 0;
+                } else {
+                    return null;
+                }
+                continue;
+            }
+
+            args[i] = null;
         }
 
-        return null;
+        return args;
+    }
+
+    private static Object[] buildFlexibleEventArgs(
+            Method method,
+            Object task,
+            int taskId,
+            int event
+    ) {
+        if (method == null) {
+            return null;
+        }
+
+        Class<?>[] types =
+                method.getParameterTypes();
+
+        Object[] args =
+                new Object[types.length];
+
+        boolean eventPlaced = false;
+        boolean taskIdPlaced = false;
+
+        for (int i = 0;
+             i < types.length;
+             i++) {
+            Class<?> type =
+                    types[i];
+
+            if (type == int.class
+                    || type == Integer.class) {
+                if (!eventPlaced) {
+                    args[i] = event;
+                    eventPlaced = true;
+                } else if (!taskIdPlaced) {
+                    args[i] = taskId;
+                    taskIdPlaced = true;
+                } else {
+                    args[i] = 0;
+                }
+                continue;
+            }
+
+            if (task != null
+                    && type.isInstance(task)) {
+                args[i] = task;
+                taskIdPlaced = true;
+                continue;
+            }
+
+            if (type == boolean.class
+                    || type == Boolean.class) {
+                args[i] = true;
+                continue;
+            }
+
+            if (type == String.class) {
+                args[i] =
+                        "MiniWindowGuard";
+                continue;
+            }
+
+            if (type == Bundle.class) {
+                Bundle bundle =
+                        new Bundle();
+                bundle.putInt(
+                        "taskId",
+                        taskId);
+                bundle.putInt(
+                        "event",
+                        event);
+                args[i] = bundle;
+                continue;
+            }
+
+            if (type.isPrimitive()) {
+                if (type == long.class) {
+                    args[i] = 0L;
+                } else if (type == float.class) {
+                    args[i] = 0f;
+                } else if (type == double.class) {
+                    args[i] = 0d;
+                } else if (type == short.class) {
+                    args[i] = (short) 0;
+                } else if (type == byte.class) {
+                    args[i] = (byte) 0;
+                } else if (type == char.class) {
+                    args[i] = (char) 0;
+                } else {
+                    return null;
+                }
+                continue;
+            }
+
+            args[i] = null;
+        }
+
+        return eventPlaced
+                ? args
+                : null;
     }
 
     private static Object fieldValueByTypeSuffix(
