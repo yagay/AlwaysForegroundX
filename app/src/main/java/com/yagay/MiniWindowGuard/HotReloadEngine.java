@@ -188,6 +188,17 @@ public final class HotReloadEngine {
                 finishing);
     }
 
+    public boolean shouldAutoMiniWindowOnFocusLoss(
+            Object task,
+            String nextPackage
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldAutoMiniWindowOnFocusLoss(
+                        task,
+                        nextPackage);
+    }
+
     public boolean shouldAutoMiniWindow(
             Object task
     ) {
