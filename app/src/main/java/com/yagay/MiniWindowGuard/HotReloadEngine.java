@@ -14,7 +14,7 @@ import android.util.Log;
  */
 public final class HotReloadEngine {
     private static final String TAG = "MiniWindowGuardEngine";
-    private static final int BOOTSTRAP_API_REQUIRED = 11;
+    private static final int BOOTSTRAP_API_REQUIRED = 6;
 
     private OplusFlexibleWindowController controller;
     private volatile boolean started;
@@ -186,35 +186,6 @@ public final class HotReloadEngine {
                 uiSleeping,
                 reason,
                 finishing);
-    }
-
-    public boolean shouldAutoMiniWindowOnFocusLoss(
-            Object task,
-            String nextPackage
-    ) {
-        OplusFlexibleWindowController current = controller;
-        return current != null
-                && current.shouldAutoMiniWindowOnFocusLoss(
-                        task,
-                        nextPackage);
-    }
-
-    public boolean shouldAutoMiniWindow(
-            Object task
-    ) {
-        OplusFlexibleWindowController current = controller;
-        return current != null
-                && current.shouldAutoMiniWindow(
-                        task);
-    }
-
-    public boolean isOplusFlexibleTask(
-            Object task
-    ) {
-        OplusFlexibleWindowController current = controller;
-        return current != null
-                && current.isOplusFlexibleTask(
-                        task);
     }
 
     public void onFocusedActivity(
