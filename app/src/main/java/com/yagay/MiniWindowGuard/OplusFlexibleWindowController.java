@@ -22,22 +22,21 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Runtime state for OxygenOS / ColorOS FlexibleWindow.
+ * Passive runtime state for OxygenOS / ColorOS FlexibleWindow.
  *
- * OxygenOS still owns surfaces, animations, input and navigation. For selected
- * background-playback tasks MiniWindowGuard may request the OEM's own existing
- * task -> FlexibleWindow transition; once accepted, all minimize/float-handle
- * state remains owned by OxygenOS.
+ * MiniWindowGuard never starts apps and never requests a window transition.
+ * OxygenOS owns launch, enter/exit flexible mode, surfaces, animations, input
+ * and navigation. This class only observes the OEM task and decides whether a
+ * package from the "always foreground" list is currently eligible for keepalive.
  */
 final class OplusFlexibleWindowController {
     interface Logger {
         void log(String event, String detail);
     }
 
+    private static final long UNLOCK_GRACE_MS = 2500L;
     private static final int EVENT_MINIMIZE_TO_FLOAT_HANDLE = 2002;
     private static final int EVENT_EXIT_TO_BACK = 2003;
-    private static final long AUTO_MINI_REQUEST_COOLDOWN_MS = 1500L;
-    private static final long AUTO_MINI_TRANSITION_GRACE_MS = 2500L;
     private static final Uri ENGINE_STATUS_URI =
             Uri.parse(
                     "content://com.yagay.MiniWindowGuard.engine_status");
@@ -45,7 +44,6 @@ final class OplusFlexibleWindowController {
             "backgroundPlaybackNotification";
     private static final String KEY_PACKAGE_NAME = "package_name";
     private static final String KEY_ACTIVE = "active";
-    private static final String KEY_REASON = "reason";
 
     private final Handler handler;
     private final Logger logger;
@@ -440,28 +438,8 @@ final class OplusFlexibleWindowController {
                         && !bounds.equals(
                         maxBounds);
 
-        Bundle oplusExtras =
-                taskInfoOplusExtras(
-                        taskInfo);
-
-        int flexibleState =
-                oplusExtras == null
-                        ? 0
-                        : oplusExtras.getInt(
-                        "key_flexible_task_state",
-                        0);
-
-        boolean superMini =
-                oplusExtras != null
-                        && oplusExtras.getBoolean(
-                        "flexible_super_mini_state",
-                        false);
-
         session.oemReportedFlexible =
-                embedded
-                        || bounded
-                        || flexibleState != 0
-                        || superMini;
+                embedded || bounded;
         session.lastOplusStateElapsed =
                 SystemClock.elapsedRealtime();
         session.active = true;
@@ -485,10 +463,6 @@ final class OplusFlexibleWindowController {
                         + " taskId=" + taskId
                         + " embedded=" + embedded
                         + " bounded=" + bounded
-                        + " flexibleState="
-                        + flexibleState
-                        + " superMini="
-                        + superMini
                         + " floating="
                         + isInFloatingList(taskId)
                         + " lockKeepAlive="
@@ -576,7 +550,6 @@ final class OplusFlexibleWindowController {
 
         session.edgeMinimizeRequested = false;
         session.edgeHung = false;
-        session.autoMiniPlayback = false;
         session.lastSeenElapsed =
                 SystemClock.elapsedRealtime();
 
@@ -601,9 +574,8 @@ final class OplusFlexibleWindowController {
 
         if (session == null
                 || !session.active
-                || (!GuardConfig.foregroundPackage(
-                session.packageName)
-                && !session.autoMiniPlayback)) {
+                || !GuardConfig.foregroundPackage(
+                session.packageName)) {
             return;
         }
 
@@ -708,22 +680,30 @@ final class OplusFlexibleWindowController {
             return;
         }
 
-        for (Session session :
-                sessions.values()) {
-            if (session.lockKeepAlive) {
-                session.lockKeepAlive =
-                        false;
+        handler.postDelayed(
+                () -> {
+                    if (keyguardShowing) {
+                        return;
+                    }
 
-                log(
-                        "OPLUS_LOCK_KEEPALIVE",
-                        "pkg="
-                                + session.packageName
-                                + " taskId="
-                                + session.taskId
-                                + " enabled=false"
-                                + " reason=keyguard-hidden");
-            }
-        }
+                    for (Session session :
+                            sessions.values()) {
+                        if (session.lockKeepAlive) {
+                            session.lockKeepAlive =
+                                    false;
+
+                            log(
+                                    "OPLUS_LOCK_KEEPALIVE",
+                                    "pkg="
+                                            + session.packageName
+                                            + " taskId="
+                                            + session.taskId
+                                            + " enabled=false"
+                                            + " reason=unlock");
+                        }
+                    }
+                },
+                UNLOCK_GRACE_MS);
     }
 
     boolean shouldSuppressBackgroundPause(
@@ -740,10 +720,7 @@ final class OplusFlexibleWindowController {
         if (session == null
                 || !session.active
                 || !GuardConfig.backgroundPlaybackPackage(
-                session.packageName)
-                || GuardConfig.PLAYBACK_MODE_NATIVE.equals(
-                GuardConfig.backgroundPlaybackMode(
-                        session.packageName))) {
+                session.packageName)) {
             return false;
         }
 
@@ -845,127 +822,6 @@ final class OplusFlexibleWindowController {
         return suppressFrameworkPause;
     }
 
-    boolean shouldAutoMiniWindowOnFocusLoss(
-            Object task,
-            String nextPackage
-    ) {
-        Session session =
-                sessionForTask(task);
-
-        if (session == null
-                || !session.active
-                || keyguardShowing
-                || !GuardConfig
-                .backgroundPlaybackPackage(
-                        session.packageName)
-                || GuardConfig
-                .PLAYBACK_MODE_NATIVE
-                .equals(
-                        GuardConfig
-                        .backgroundPlaybackMode(
-                                session.packageName))
-                || (nextPackage != null
-                && session.packageName
-                .equals(nextPackage))) {
-            return false;
-        }
-
-        long now =
-                SystemClock.elapsedRealtime();
-
-        if (now - session.lastAutoMiniRequestElapsed
-                < AUTO_MINI_REQUEST_COOLDOWN_MS) {
-            return false;
-        }
-
-        session.backgroundProtected = true;
-        session.backgroundNotificationEligible = true;
-        session.autoMiniPlayback = true;
-        session.lastAutoMiniRequestElapsed = now;
-        session.taskObject = task;
-        session.lastSeenElapsed = now;
-
-        updateBackgroundNotification(
-                session,
-                null,
-                "focus-loss");
-
-        log(
-                "BACKGROUND_AUTO_MINI_FOCUS_LOSS",
-                "pkg=" + session.packageName
-                        + " taskId="
-                        + session.taskId
-                        + " nextPkg="
-                        + nextPackage
-                        + " alreadyFlexible="
-                        + isNativeOplusWindow(
-                                session));
-
-        return true;
-    }
-
-    boolean shouldAutoMiniWindow(
-            Object task
-    ) {
-        Session session =
-                sessionForTask(task);
-
-        if (session == null
-                || !session.active
-                || !session.backgroundProtected
-                || keyguardShowing
-                || !GuardConfig
-                .backgroundPlaybackPackage(
-                        session.packageName)
-                || GuardConfig
-                .PLAYBACK_MODE_NATIVE
-                .equals(
-                        GuardConfig
-                        .backgroundPlaybackMode(
-                                session.packageName))) {
-            return false;
-        }
-
-        if (isNativeOplusWindow(session)
-                || session.edgeMinimizeRequested
-                || session.edgeHung) {
-            return false;
-        }
-
-        long now =
-                SystemClock.elapsedRealtime();
-
-        if (now - session.lastAutoMiniRequestElapsed
-                < AUTO_MINI_REQUEST_COOLDOWN_MS) {
-            return false;
-        }
-
-        session.autoMiniPlayback = true;
-        session.lastAutoMiniRequestElapsed = now;
-        session.taskObject = task;
-        session.lastSeenElapsed = now;
-
-        log(
-                "BACKGROUND_AUTO_MINI_REQUEST",
-                "pkg=" + session.packageName
-                        + " taskId="
-                        + session.taskId);
-
-        return true;
-    }
-
-    boolean isOplusFlexibleTask(
-            Object task
-    ) {
-        Session session =
-                sessionForTask(task);
-
-        return session != null
-                && session.active
-                && isNativeOplusWindow(
-                        session);
-    }
-
     void onFocusedActivity(
             Object activityRecord
     ) {
@@ -1000,25 +856,6 @@ final class OplusFlexibleWindowController {
             return;
         }
 
-        long now =
-                SystemClock.elapsedRealtime();
-
-        if (session.autoMiniPlayback
-                && now - session.lastAutoMiniRequestElapsed
-                < AUTO_MINI_TRANSITION_GRACE_MS) {
-            session.activityRecord = activityRecord;
-            session.taskObject = task;
-            session.lastSeenElapsed = now;
-
-            log(
-                    "BACKGROUND_AUTO_MINI_FOCUS_GRACE",
-                    "pkg=" + session.packageName
-                            + " taskId="
-                            + session.taskId);
-            return;
-        }
-
-        session.autoMiniPlayback = false;
         session.backgroundProtected = false;
         session.backgroundNotificationEligible = false;
         setBackgroundNotification(
@@ -1048,10 +885,7 @@ final class OplusFlexibleWindowController {
         if (session == null
                 || !session.active
                 || !GuardConfig.backgroundPlaybackPackage(
-                session.packageName)
-                || GuardConfig.PLAYBACK_MODE_NATIVE.equals(
-                GuardConfig.backgroundPlaybackMode(
-                        session.packageName))) {
+                session.packageName)) {
             return false;
         }
 
@@ -1421,10 +1255,7 @@ final class OplusFlexibleWindowController {
                         backgroundNotificationStates
                                 .get(packageName));
 
-        // A notification manually paused by the user can remain visible
-        // while audio is inactive. Always forward inactive events so the app
-        // process can distinguish audio-only inactivity from real cleanup.
-        if (active && visible) {
+        if (visible == active) {
             return;
         }
 
@@ -1443,11 +1274,6 @@ final class OplusFlexibleWindowController {
             extras.putBoolean(
                     KEY_ACTIVE,
                     active);
-            extras.putString(
-                    KEY_REASON,
-                    reason == null
-                            ? ""
-                            : reason);
 
             context.getContentResolver()
                     .call(
@@ -1495,9 +1321,8 @@ final class OplusFlexibleWindowController {
 
         if (session == null
                 || !session.active
-                || (!GuardConfig.foregroundPackage(
+                || !GuardConfig.foregroundPackage(
                 session.packageName)
-                && !session.autoMiniPlayback)
                 || (!session.edgeMinimizeRequested
                 && !session.edgeHung)) {
             return false;
@@ -1525,10 +1350,9 @@ final class OplusFlexibleWindowController {
 
         if (session == null
                 || !session.active
-                || (!GuardConfig
+                || !GuardConfig
                 .foregroundPackage(
                         session.packageName)
-                && !session.autoMiniPlayback)
                 || !isInFloatingList(
                 session.taskId)) {
             return false;
@@ -1700,9 +1524,8 @@ final class OplusFlexibleWindowController {
     ) {
         return session != null
                 && session.active
-                && (GuardConfig.foregroundPackage(
+                && GuardConfig.foregroundPackage(
                 session.packageName)
-                || session.autoMiniPlayback)
                 && (session.lockKeepAlive
                 || session.edgeHung
                 || session.edgeMinimizeRequested
@@ -1734,6 +1557,8 @@ final class OplusFlexibleWindowController {
         }
 
         return session.oemReportedFlexible
+                || isFlexibleTask(
+                session.taskObject)
                 || isInFloatingList(
                 session.taskId);
     }
@@ -2297,70 +2122,6 @@ final class OplusFlexibleWindowController {
         return null;
     }
 
-    private static Bundle taskInfoOplusExtras(
-            Object taskInfo
-    ) {
-        if (taskInfo == null) {
-            return null;
-        }
-
-        Object direct =
-                fieldValue(
-                        taskInfo,
-                        "mOplusExtraBundle");
-
-        if (direct instanceof Bundle bundle) {
-            return bundle;
-        }
-
-        direct =
-                fieldValue(
-                        taskInfo,
-                        "oplusExtraBundle");
-
-        if (direct instanceof Bundle bundle) {
-            return bundle;
-        }
-
-        for (Class<?> current =
-             taskInfo.getClass();
-             current != null;
-             current = current.getSuperclass()) {
-            for (Field field :
-                    current.getDeclaredFields()) {
-                if (!Bundle.class
-                        .isAssignableFrom(
-                                field.getType())) {
-                    continue;
-                }
-
-                try {
-                    field.setAccessible(true);
-
-                    Object value =
-                            field.get(
-                                    taskInfo);
-
-                    if (!(value instanceof Bundle bundle)) {
-                        continue;
-                    }
-
-                    if (bundle.containsKey(
-                            "key_flexible_task_state")
-                            || bundle.containsKey(
-                            "flexible_super_mini_state")
-                            || bundle.containsKey(
-                            "androidx.flexible.taskFrame")) {
-                        return bundle;
-                    }
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-
-        return null;
-    }
-
     private static Object fieldValue(
             Object receiver,
             String fieldName
@@ -2447,9 +2208,7 @@ final class OplusFlexibleWindowController {
         volatile boolean lockKeepAlive;
         volatile boolean backgroundProtected;
         volatile boolean backgroundNotificationEligible;
-        volatile boolean autoMiniPlayback;
 
-        volatile long lastAutoMiniRequestElapsed;
         volatile long lastOplusStateElapsed;
         volatile long lastSeenElapsed =
                 SystemClock.elapsedRealtime();
