@@ -19,7 +19,7 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 11;
+    static final int BOOTSTRAP_API = 6;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
@@ -412,47 +412,6 @@ final class EngineBridge {
                 uiSleeping,
                 reason,
                 finishing);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
-    boolean shouldAutoMiniWindowOnFocusLoss(
-            Object task,
-            String nextPackage
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "shouldAutoMiniWindowOnFocusLoss",
-                new Class<?>[]{
-                        Object.class,
-                        String.class
-                },
-                task,
-                nextPackage);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
-    boolean shouldAutoMiniWindow(
-            Object task
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "shouldAutoMiniWindow",
-                new Class<?>[]{Object.class},
-                task);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
-    boolean isOplusFlexibleTask(
-            Object task
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "isOplusFlexibleTask",
-                new Class<?>[]{Object.class},
-                task);
         return value instanceof Boolean
                 && (Boolean) value;
     }
