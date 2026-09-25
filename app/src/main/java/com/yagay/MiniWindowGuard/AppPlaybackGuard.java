@@ -39,7 +39,6 @@ final class AppPlaybackGuard {
             ThreadLocal.withInitial(
                     () -> 0);
 
-    private volatile Context appContext;
     private volatile boolean controlReceiverRegistered;
     private volatile WeakReference<Object> currentPlayer =
             new WeakReference<>(null);
@@ -688,7 +687,6 @@ final class AppPlaybackGuard {
                             null);
                 }
 
-                appContext = context;
                 controlReceiverRegistered = true;
 
                 log(
