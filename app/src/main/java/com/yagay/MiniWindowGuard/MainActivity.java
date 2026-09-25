@@ -257,7 +257,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "普通后台播放",
-                        "从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED；返回原 App 自动解除。"));
+                        "每个 App 可独立选择自动检测 / 始终强制 / 仅原生。自动模式按当前播放器实例学习：原生可后台就不干预，被生命周期暂停才自动恢复并保护。"));
 
         Button support =
                 button(
