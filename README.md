@@ -9,7 +9,9 @@
 - 播放器一旦被捕获，会主动确保当前进程的通知控制 Receiver 已注册；即使该播放进程没有 Activity，也可以接收定向控制；
 - 通知的播放 / 暂停 / 上一曲 / 下一曲只调用该目标 App 进程中捕获到的播放器；
 - 删除 `AudioManager.dispatchMediaKeyEvent()` 全局媒体键回退，无法定位目标播放器时只记录 `no-target-player`，不会误控制 Spotify、YouTube Music 或其他正在播放的 App；
-- OPlus 原生小窗、FloatHandle、锁屏 keepalive、Hans / CachedAppOptimizer 防冻结和 task-removal kill guard 保持不变。
+- 删除 `getPackageProcessState/getUidProcessState/isAppForeground/hasResumedActivity` 的前台状态伪装，不再把后台任务假装成真正前台；Hans / CachedAppOptimizer 防冻结、OPlus 小窗 keepalive 和 task-removal kill guard 继续负责真正的保活；
+- OPlus 原生小窗判定收紧为 FlexibleWindow OEM 回调或 FloatHandle 列表，不再把所有非 fullscreen / bounds 改变的窗口都当成原生 OPlus 小窗；
+- 解锁后的 `lockKeepAlive` 不再依赖固定 2500ms 延迟，收到 keyguard hidden 后立即退出锁屏专用保护，原生小窗保护继续由真实 OPlus 状态维持。
 
 Bootstrap API 升级为 7。因为固定的 system_server Hook 集合已经改变，安装 5.4.8 后需要完整重启一次；之后仅 Engine 策略变化仍可继续热重载。
 
