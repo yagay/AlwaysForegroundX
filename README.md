@@ -1,5 +1,18 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.4.8 — 后台播放生命周期与多进程修正
+
+本版把后台播放保护从 framework Activity 生命周期中进一步解耦，并修复通知媒体控制可能误控其他播放器的问题：
+
+- 后台播放不再 Hook / 阻止 `ActivityRecord.stopIfPossible()`，Android 可以正常完成 PAUSE → STOP；播放连续性只由目标 App 进程中的播放器守护负责；
+- Universal Playback Guard 现在会加载到后台播放目标包的子进程，不再只限制主进程，兼容 `:player`、`:video`、`:media` 等独立播放进程；
+- 播放器一旦被捕获，会主动确保当前进程的通知控制 Receiver 已注册；即使该播放进程没有 Activity，也可以接收定向控制；
+- 通知的播放 / 暂停 / 上一曲 / 下一曲只调用该目标 App 进程中捕获到的播放器；
+- 删除 `AudioManager.dispatchMediaKeyEvent()` 全局媒体键回退，无法定位目标播放器时只记录 `no-target-player`，不会误控制 Spotify、YouTube Music 或其他正在播放的 App；
+- OPlus 原生小窗、FloatHandle、锁屏 keepalive、Hans / CachedAppOptimizer 防冻结和 task-removal kill guard 保持不变。
+
+Bootstrap API 升级为 7。因为固定的 system_server Hook 集合已经改变，安装 5.4.8 后需要完整重启一次；之后仅 Engine 策略变化仍可继续热重载。
+
 ## 5.4.7 — 完整通知媒体控制
 
 后台播放通知改为三键 MediaStyle，并按当前状态显示中间按钮：
