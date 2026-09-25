@@ -289,19 +289,7 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "运行保护",
-                        "小窗继续使用 OPlus 状态驱动；后台播放名单只在离开普通全屏后进入 BACKGROUND_PROTECTED。");
-
-        addSwitch(
-                card,
-                "受保护进程状态保持 TOP",
-                "对真实一加小窗/贴边/锁屏，以及 BACKGROUND_PROTECTED 普通后台进程返回 TOP。",
-                ConfigKeys.SYSTEM_IMPORTANCE_TOP);
-
-        addSwitch(
-                card,
-                "受保护任务视为存在 Resumed Activity",
-                "对真实一加小窗和 BACKGROUND_PROTECTED 任务返回 true；普通前台不修改。",
-                ConfigKeys.SYSTEM_HAS_RESUMED);
+                        "小窗继续使用 OPlus 原生状态驱动；后台播放保持真实 Activity 生命周期，只阻止目标播放器被生命周期同步暂停。");
 
         addSwitch(
                 card,
@@ -317,7 +305,7 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "详细诊断",
-                        "记录 OPlus FlexibleWindow 回调、支持判断、Task 状态、前台查询和 OEM 清理链路。");
+                        "记录 OPlus FlexibleWindow 回调、支持判断、Task 状态、播放保护和 OEM 清理链路。");
 
         diagnosticsStatus =
                 statusLine(
