@@ -66,6 +66,7 @@ final class SystemUiFloatBridge {
                             false,
                             loader);
 
+            hookSystemUiApplication(loader);
             hookConstructors(managerClass);
             hookZoomEnter(managerClass);
 
@@ -77,6 +78,66 @@ final class SystemUiFloatBridge {
                     "FLOAT_BRIDGE_INSTALL_FAIL",
                     "error=" + t.getClass().getSimpleName()
                             + ":" + String.valueOf(t.getMessage()));
+        }
+    }
+
+    private void hookSystemUiApplication(
+            ClassLoader loader
+    ) {
+        try {
+            Class<?> applicationClass =
+                    Class.forName(
+                            "com.android.systemui.SystemUIApplication",
+                            false,
+                            loader);
+
+            Method onCreate =
+                    applicationClass.getDeclaredMethod(
+                            "onCreate");
+
+            onCreate.setAccessible(true);
+
+            module.hook(onCreate).intercept(chain -> {
+                Object result = chain.proceed();
+
+                Object app =
+                        chain.getThisObject();
+
+                if (app instanceof Context) {
+                    Context ctx =
+                            (Context) app;
+
+                    Context appContext =
+                            ctx.getApplicationContext();
+
+                    context =
+                            appContext != null
+                                    ? appContext
+                                    : ctx;
+
+                    if (handler == null) {
+                        handler =
+                                new Handler(
+                                        Looper.getMainLooper());
+                    }
+
+                    registerReceiverIfNeeded();
+
+                    uiDiag(
+                            "FLOAT_SYSTEMUI_READY",
+                            "source=SystemUIApplication.onCreate");
+                }
+
+                return result;
+            });
+        } catch (Throwable t) {
+            uiDiag(
+                    "FLOAT_SYSTEMUI_APP_HOOK_FAIL",
+                    "error=" + t.getClass()
+                            .getSimpleName()
+                            + ":"
+                            + String.valueOf(
+                            t.getMessage()));
         }
     }
 
