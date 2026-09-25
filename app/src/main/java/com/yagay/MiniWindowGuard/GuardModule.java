@@ -53,8 +53,10 @@ public final class GuardModule extends XposedModule {
 
     private volatile ClassLoader systemClassLoader;
     private volatile Handler systemHandler;
+    private volatile Context systemContext;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
+    private volatile SystemUiFloatBridge systemUiFloatBridge;
 
     @Override
     public void onModuleLoaded(
@@ -81,6 +83,38 @@ public final class GuardModule extends XposedModule {
     }
 
     @Override
+    public void onPackageLoaded(
+            XposedModuleInterface.PackageLoadedParam param
+    ) {
+        if (!"com.android.systemui".equals(
+                param.getPackageName())
+                || !param.isFirstPackage()) {
+            return;
+        }
+
+        try {
+            SystemUiFloatBridge bridge =
+                    new SystemUiFloatBridge(this);
+
+            bridge.install(
+                    param.getDefaultClassLoader());
+
+            systemUiFloatBridge = bridge;
+
+            log(
+                    Log.INFO,
+                    TAG,
+                    "SYSTEMUI_SCOPE native FloatHandle bridge installed");
+        } catch (Throwable t) {
+            log(
+                    Log.ERROR,
+                    TAG,
+                    "SYSTEMUI_SCOPE FloatHandle bridge failed",
+                    t);
+        }
+    }
+
+    @Override
     public void onSystemServerStarting(
             XposedModuleInterface.SystemServerStartingParam param
     ) {
@@ -94,6 +128,7 @@ public final class GuardModule extends XposedModule {
         Context context =
                 resolveSystemUiContext(
                         systemClassLoader);
+        systemContext = context;
 
         engine = new EngineBridge(
                 handler,
