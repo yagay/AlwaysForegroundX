@@ -300,6 +300,16 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
+    boolean isOplusFlexibleTask(Object task) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "isOplusFlexibleTask",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
     boolean wantsPackage(String packageName) {
         Object value = safeInvoke(
                 currentEngine(),
