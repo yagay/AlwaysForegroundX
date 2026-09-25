@@ -17,6 +17,9 @@ final class PlaybackControlContract {
     static final String EXTRA_PACKAGE_NAME =
             "package_name";
 
+    static final String EXTRA_BACKGROUND_SELF_LAUNCH =
+            "com.yagay.MiniWindowGuard.extra.BACKGROUND_SELF_LAUNCH";
+
     static final String PERMISSION_CONTROL_PLAYBACK =
             "com.yagay.MiniWindowGuard.permission.CONTROL_PLAYBACK";
 
