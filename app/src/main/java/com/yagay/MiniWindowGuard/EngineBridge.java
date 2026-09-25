@@ -416,6 +416,23 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
+    boolean shouldAutoMiniWindowOnFocusLoss(
+            Object task,
+            String nextPackage
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldAutoMiniWindowOnFocusLoss",
+                new Class<?>[]{
+                        Object.class,
+                        String.class
+                },
+                task,
+                nextPackage);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
     boolean shouldAutoMiniWindow(
             Object task
     ) {
