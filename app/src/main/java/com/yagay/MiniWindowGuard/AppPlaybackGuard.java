@@ -6,8 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 
 import java.lang.ref.WeakReference;
@@ -44,13 +42,7 @@ final class AppPlaybackGuard {
             ThreadLocal.withInitial(
                     () -> 0);
 
-    private static final long BACKGROUND_CONFIRM_DELAY_MS = 220L;
-    private final Handler mainHandler =
-            new Handler(Looper.getMainLooper());
-
     private volatile boolean controlReceiverRegistered;
-    private volatile boolean appForeground = true;
-    private volatile long foregroundStateToken;
     private volatile WeakReference<Object> currentPlayer =
             new WeakReference<>(null);
 
@@ -144,7 +136,6 @@ final class AppPlaybackGuard {
 
         guard.ensureControlReceiver(null);
         guard.installLifecycleHooks();
-        guard.installBackgroundActivityLaunchGuard();
         guard.installPlayerHooks();
 
         guard.log(
@@ -169,17 +160,10 @@ final class AppPlaybackGuard {
             String name =
                     method.getName();
 
-            boolean resume =
-                    "callActivityOnResume"
-                            .equals(name);
-
-            boolean background =
-                    "callActivityOnPause"
-                            .equals(name)
-                            || "callActivityOnStop"
-                            .equals(name);
-
-            if (!resume && !background) {
+            if (!"callActivityOnPause"
+                    .equals(name)
+                    && !"callActivityOnStop"
+                    .equals(name)) {
                 continue;
             }
 
@@ -203,39 +187,12 @@ final class AppPlaybackGuard {
                             ensureControlReceiver(
                                     chain.getArgs());
 
-                            if (resume) {
-                                appForeground = true;
-                                foregroundStateToken++;
-
-                                return chain.proceed();
-                            }
-
-                            long token =
-                                    ++foregroundStateToken;
-
                             enterLifecycle();
 
                             try {
                                 return chain.proceed();
                             } finally {
                                 exitLifecycle();
-
-                                mainHandler.postDelayed(
-                                        () -> {
-                                            if (token
-                                                    != foregroundStateToken) {
-                                                return;
-                                            }
-
-                                            appForeground = false;
-
-                                            log(
-                                                    Log.INFO,
-                                                    "APP_BACKGROUND_CONFIRMED",
-                                                    "pkg="
-                                                            + packageName);
-                                        },
-                                        BACKGROUND_CONFIRM_DELAY_MS);
                             }
                         });
             } catch (Throwable t) {
@@ -243,114 +200,6 @@ final class AppPlaybackGuard {
                         Log.WARN,
                         "APP_LIFECYCLE_HOOK_FAILED",
                         "method=" + method
-                                + " error="
-                                + t.getClass()
-                                .getSimpleName());
-            }
-        }
-    }
-
-    private void installBackgroundActivityLaunchGuard() {
-        Class<?> instrumentation =
-                load("android.app.Instrumentation");
-
-        if (instrumentation == null) {
-            return;
-        }
-
-        for (Method method :
-                instrumentation.getDeclaredMethods()) {
-            if (!"execStartActivity"
-                    .equals(method.getName())) {
-                continue;
-            }
-
-            Class<?>[] parameterTypes =
-                    method.getParameterTypes();
-
-            int intentIndex = -1;
-
-            for (int i = 0;
-                 i < parameterTypes.length;
-                 i++) {
-                if (Intent.class
-                        .isAssignableFrom(
-                                parameterTypes[i])) {
-                    intentIndex = i;
-                    break;
-                }
-            }
-
-            if (intentIndex < 0) {
-                continue;
-            }
-
-            final int finalIntentIndex =
-                    intentIndex;
-
-            try {
-                method.setAccessible(true);
-
-                String key =
-                        "background-launch:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(key)) {
-                    continue;
-                }
-
-                module.hook(method)
-                        .intercept(chain -> {
-                            if (!shouldKeepSelfLaunchInBackground()) {
-                                return chain.proceed();
-                            }
-
-                            Object value =
-                                    chain.getArg(
-                                            finalIntentIndex);
-
-                            if (!(value instanceof Intent intent)
-                                    || !isSamePackageIntent(
-                                            intent)) {
-                                return chain.proceed();
-                            }
-
-                            intent.putExtra(
-                                    PlaybackControlContract
-                                            .EXTRA_BACKGROUND_SELF_LAUNCH,
-                                    true);
-
-                            intent.addFlags(
-                                    Intent.FLAG_ACTIVITY_NO_ANIMATION);
-
-                            log(
-                                    Log.INFO,
-                                    "APP_BACKGROUND_SELF_LAUNCH",
-                                    "pkg="
-                                            + packageName
-                                            + " target="
-                                            + intent
-                                            .getComponent()
-                                            + " mode="
-                                            + GuardConfig
-                                            .backgroundPlaybackMode(
-                                                    packageName)
-                                            + " marker=true"
-                                            + " avoidMoveToFront=false");
-
-                            return chain.proceed();
-                        });
-            } catch (Throwable t) {
-                installedHooks.remove(
-                        "background-launch:"
-                                + method.toGenericString());
-
-                log(
-                        Log.WARN,
-                        "APP_BACKGROUND_LAUNCH_HOOK_FAILED",
-                        "pkg=" + packageName
-                                + " method="
-                                + method.getName()
                                 + " error="
                                 + t.getClass()
                                 .getSimpleName());
@@ -1067,60 +916,6 @@ final class AppPlaybackGuard {
         }
 
         return false;
-    }
-
-    private boolean shouldKeepSelfLaunchInBackground() {
-        if (!selected()
-                || appForeground) {
-            return false;
-        }
-
-        return !GuardConfig
-                .PLAYBACK_MODE_NATIVE
-                .equals(
-                        GuardConfig
-                        .backgroundPlaybackMode(
-                                packageName));
-    }
-
-    private boolean isSamePackageIntent(
-            Intent intent
-    ) {
-        if (intent == null) {
-            return false;
-        }
-
-        if (intent.getComponent() != null) {
-            return packageName.equals(
-                    intent.getComponent()
-                            .getPackageName());
-        }
-
-        if (intent.getPackage() != null) {
-            return packageName.equals(
-                    intent.getPackage());
-        }
-
-        Context context =
-                resolveApplicationContext();
-
-        if (context == null) {
-            return false;
-        }
-
-        try {
-            android.content.ComponentName resolved =
-                    intent.resolveActivity(
-                            context
-                                    .getPackageManager());
-
-            return resolved != null
-                    && packageName.equals(
-                            resolved
-                                    .getPackageName());
-        } catch (Throwable ignored) {
-            return false;
-        }
     }
 
     private boolean selected() {
