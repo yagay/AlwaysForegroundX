@@ -278,6 +278,7 @@ public final class GuardModule extends XposedModule {
 
         installLegacyZoomSupportHook(loader);
         installOplusFlexibleEventHook(loader);
+        installOplusTaskFocusLossHook(loader);
         installFloatHandleRestoreHook(loader);
 
         Class<?> service =
@@ -366,6 +367,141 @@ public final class GuardModule extends XposedModule {
                         "SYSTEM_SCOPE skipped OPlus callback "
                                 + name
                                 + " error=" + t);
+            }
+        }
+    }
+
+    private void installOplusTaskFocusLossHook(
+            ClassLoader loader
+    ) {
+        Class<?> controller =
+                load(
+                        loader,
+                        "com.android.server.wm.FlexibleTaskController");
+
+        if (controller == null) {
+            return;
+        }
+
+        for (Method method :
+                controller.getDeclaredMethods()) {
+            if (!"onTaskFocusChanged"
+                    .equals(method.getName())) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                String hookKey =
+                        "oplus-focus-loss:"
+                                + method.toGenericString();
+
+                if (!installedHooks.add(
+                        hookKey)) {
+                    continue;
+                }
+
+                hook(method).intercept(chain -> {
+                    Object result =
+                            chain.proceed();
+
+                    try {
+                        List<Object> args =
+                                chain.getArgs();
+
+                        Object previousTask = null;
+                        Object currentTask = null;
+
+                        for (Object arg : args) {
+                            if (arg == null
+                                    || !arg.getClass()
+                                    .getName()
+                                    .endsWith(".Task")) {
+                                continue;
+                            }
+
+                            if (previousTask == null) {
+                                previousTask = arg;
+                            } else {
+                                currentTask = arg;
+                                break;
+                            }
+                        }
+
+                        if (previousTask == null) {
+                            return result;
+                        }
+
+                        String previousPackage =
+                                packageFromObject(
+                                        previousTask);
+
+                        String currentPackage =
+                                packageFromObject(
+                                        currentTask);
+
+                        if (previousPackage == null
+                                || previousPackage.isBlank()
+                                || previousPackage.equals(
+                                        currentPackage)) {
+                            return result;
+                        }
+
+                        EngineBridge current =
+                                engine;
+
+                        if (current == null
+                                || !current
+                                .isBackgroundPlaybackPackage(
+                                        previousPackage)
+                                || !current
+                                .shouldAutoMiniWindowOnFocusLoss(
+                                        previousTask,
+                                        currentPackage)) {
+                            return result;
+                        }
+
+                        diag(
+                                "BACKGROUND_FOCUS_LOSS_TRIGGER",
+                                "pkg="
+                                        + previousPackage
+                                        + " taskId="
+                                        + taskId(
+                                        previousTask)
+                                        + " nextPkg="
+                                        + currentPackage
+                                        + " method="
+                                        + method
+                                        .toGenericString());
+
+                        scheduleAutoMiniWindow(
+                                previousTask,
+                                previousPackage);
+                    } catch (Throwable t) {
+                        log(
+                                Log.WARN,
+                                TAG,
+                                "BACKGROUND_FOCUS_LOSS fail-open",
+                                t);
+                    }
+
+                    return result;
+                });
+
+                log(
+                        Log.INFO,
+                        TAG,
+                        "SYSTEM_SCOPE installed OPlus focus-loss hook "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                log(
+                        Log.WARN,
+                        TAG,
+                        "SYSTEM_SCOPE skipped OPlus focus-loss hook "
+                                + method.getName()
+                                + " error="
+                                + t);
             }
         }
     }
@@ -1636,6 +1772,28 @@ public final class GuardModule extends XposedModule {
                                 || !current
                                 .isBackgroundPlaybackPackage(
                                         packageName)) {
+                            return;
+                        }
+
+                        boolean alreadyFlexible =
+                                current
+                                .isOplusFlexibleTask(
+                                        task);
+
+                        if (alreadyFlexible) {
+                            boolean minimized =
+                                    requestSystemMiniIcon(
+                                            packageName,
+                                            id);
+
+                            diag(
+                                    "BACKGROUND_SYSTEM_MINI_ALREADY_FLEXIBLE",
+                                    "pkg="
+                                            + packageName
+                                            + " taskId="
+                                            + id
+                                            + " minimized="
+                                            + minimized);
                             return;
                         }
 
