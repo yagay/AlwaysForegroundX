@@ -1,5 +1,22 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.2 — 回归 5.4.5 生命周期后台播放模型
+
+根据红果主页、剧集页和自动下一集的实际表现，移除 5.4.9～5.5.1 逐步加入的播放器自适应状态机，后台播放重新采用 5.4.5 已验证的核心逻辑：
+
+- **自动检测**不再维护 UNKNOWN / NATIVE / FORCED，也不再锁定或切换 backgroundPlayer；
+- 不再根据 `isPlaying` / `playWhenReady` 猜测当前播放器，不再做播放器 handoff；
+- 不再因为“退后台后 playing=false”主动调用 `play()/start()/resume()`；
+- 自动模式只在 `Instrumentation.callActivityOnPause/callActivityOnStop` 的同步生命周期调用栈中，阻止常见播放器的 `pause()/stop()/setPlayWhenReady(false)`；
+- 如果 App 本身没有在生命周期里暂停播放器，则 MiniWindowGuard 完全不干预，这等价于让原生后台能力自然工作；
+- 用户手动暂停、切换视频、正常播放下一集等非生命周期调用继续按 App 原逻辑执行；
+- 播放器实例追踪仅保留给通知栏的显式播放/暂停/上一曲/下一曲控制，不再参与后台保护判定；
+- 保留多进程 AppPlaybackGuard、定向通知控制以及去除全局 MediaKey fallback 的后续改进；
+- 保留后台同包 Activity 的 `avoidMoveToFront` 保护，但它只依据“App 已经真正处于后台 + 模式不是仅原生”，不再依赖当前播放器实例，因此后台进入剧集不会因为播放器交接状态被阻断；
+- “仅原生”继续完全放行生命周期 pause/stop；“自动/强制”在 App 进程侧都使用生命周期拦截，强制模式仍可配合系统侧更强保活策略。
+
+本版只修改 App 进程 Hook、配置说明和 UI，Bootstrap API 仍为 7。安装后彻底结束并重新打开目标 App 即可加载新逻辑，不需要再次完整重启手机。
+
 ## 5.5.1 — 主页预加载误切下一条修复
 
 修复红果主页/短视频信息流切到后台时，自动模式可能误把“下一条预加载播放器”当成当前播放器并主动播放的问题：
