@@ -34,7 +34,6 @@ final class OplusFlexibleWindowController {
         void log(String event, String detail);
     }
 
-    private static final long UNLOCK_GRACE_MS = 2500L;
     private static final int EVENT_MINIMIZE_TO_FLOAT_HANDLE = 2002;
     private static final int EVENT_EXIT_TO_BACK = 2003;
     private static final Uri ENGINE_STATUS_URI =
@@ -681,30 +680,22 @@ final class OplusFlexibleWindowController {
             return;
         }
 
-        handler.postDelayed(
-                () -> {
-                    if (keyguardShowing) {
-                        return;
-                    }
+        for (Session session :
+                sessions.values()) {
+            if (session.lockKeepAlive) {
+                session.lockKeepAlive =
+                        false;
 
-                    for (Session session :
-                            sessions.values()) {
-                        if (session.lockKeepAlive) {
-                            session.lockKeepAlive =
-                                    false;
-
-                            log(
-                                    "OPLUS_LOCK_KEEPALIVE",
-                                    "pkg="
-                                            + session.packageName
-                                            + " taskId="
-                                            + session.taskId
-                                            + " enabled=false"
-                                            + " reason=unlock");
-                        }
-                    }
-                },
-                UNLOCK_GRACE_MS);
+                log(
+                        "OPLUS_LOCK_KEEPALIVE",
+                        "pkg="
+                                + session.packageName
+                                + " taskId="
+                                + session.taskId
+                                + " enabled=false"
+                                + " reason=keyguard-hidden");
+            }
+        }
     }
 
     boolean shouldSuppressBackgroundPause(
@@ -1566,8 +1557,6 @@ final class OplusFlexibleWindowController {
         }
 
         return session.oemReportedFlexible
-                || isFlexibleTask(
-                session.taskObject)
                 || isInFloatingList(
                 session.taskId);
     }
