@@ -14,7 +14,7 @@ import android.util.Log;
  */
 public final class HotReloadEngine {
     private static final String TAG = "MiniWindowGuardEngine";
-    private static final int BOOTSTRAP_API_REQUIRED = 1;
+    private static final int BOOTSTRAP_API_REQUIRED = 3;
 
     private OplusFlexibleWindowController controller;
     private volatile boolean started;
