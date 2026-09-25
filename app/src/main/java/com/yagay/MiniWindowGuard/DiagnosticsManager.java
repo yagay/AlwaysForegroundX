@@ -292,8 +292,6 @@ final class DiagnosticsManager {
         ArrayList<String> keys = new ArrayList<>();
         keys.add(ConfigKeys.MASTER_ENABLED);
         keys.add(ConfigKeys.ENGINE_AUTO_RELOAD);
-        keys.add(ConfigKeys.SYSTEM_IMPORTANCE_TOP);
-        keys.add(ConfigKeys.SYSTEM_HAS_RESUMED);
         keys.add(ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
         return keys;
     }
