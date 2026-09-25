@@ -8,6 +8,7 @@ import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -22,9 +23,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * system_server is allowed to complete Activity lifecycle transitions normally.
  * Per-app playback policy can be automatic, forced or native-only. Automatic
- * mode learns per player instance: a lifecycle pause is allowed once, then the
- * player is recovered only if the app truly stayed in background; players that
- * keep running natively are left untouched. Manual pause remains untouched.
+ * mode learns per player instance: native background playback is trusted only
+ * while the player still reports playing; otherwise it is recovered and forced.
+ * Background self-launches can stay inside the task without moving it to front.
+ * Manual pause remains untouched.
  */
 final class AppPlaybackGuard {
     private static final String TAG =
@@ -36,6 +38,10 @@ final class AppPlaybackGuard {
     private static final long AUTO_FORCE_DELAY_MS = 450L;
     private static final long AUTO_NATIVE_DELAY_MS = 700L;
     private static final long AUTO_PROBE_WINDOW_MS = 1500L;
+    private static final long BACKGROUND_CONFIRM_DELAY_MS = 220L;
+
+    private static final String OPTION_AVOID_MOVE_TO_FRONT =
+            "android.activity.avoidMoveToFront";
 
     private static final int ADAPTIVE_UNKNOWN = 0;
     private static final int ADAPTIVE_NATIVE = 1;
@@ -62,6 +68,8 @@ final class AppPlaybackGuard {
     private volatile long lifecyclePauseDetectedToken = -1L;
     private volatile boolean backgroundWasPlaying;
     private volatile boolean lastPlaySignal;
+    private volatile boolean appForeground;
+    private volatile long foregroundStateToken;
     private volatile WeakReference<Object> currentPlayer =
             new WeakReference<>(null);
 
@@ -155,6 +163,7 @@ final class AppPlaybackGuard {
 
         guard.ensureControlReceiver(null);
         guard.installLifecycleHooks();
+        guard.installBackgroundActivityLaunchGuard();
         guard.installPlayerHooks();
 
         guard.log(
@@ -251,6 +260,138 @@ final class AppPlaybackGuard {
                         Log.WARN,
                         "APP_LIFECYCLE_HOOK_FAILED",
                         "method=" + method
+                                + " error="
+                                + t.getClass()
+                                .getSimpleName());
+            }
+        }
+    }
+
+    private void installBackgroundActivityLaunchGuard() {
+        Class<?> instrumentation =
+                load("android.app.Instrumentation");
+
+        if (instrumentation == null) {
+            return;
+        }
+
+        for (Method method :
+                instrumentation.getDeclaredMethods()) {
+            if (!"execStartActivity"
+                    .equals(method.getName())) {
+                continue;
+            }
+
+            Class<?>[] parameterTypes =
+                    method.getParameterTypes();
+
+            int intentIndex = -1;
+            int optionsIndex = -1;
+
+            for (int i = 0;
+                 i < parameterTypes.length;
+                 i++) {
+                if (Intent.class
+                        .isAssignableFrom(
+                                parameterTypes[i])) {
+                    intentIndex = i;
+                } else if (Bundle.class
+                        .isAssignableFrom(
+                                parameterTypes[i])) {
+                    optionsIndex = i;
+                }
+            }
+
+            if (intentIndex < 0
+                    || optionsIndex < 0) {
+                continue;
+            }
+
+            final int finalIntentIndex =
+                    intentIndex;
+            final int finalOptionsIndex =
+                    optionsIndex;
+
+            try {
+                method.setAccessible(true);
+
+                String key =
+                        "background-launch:"
+                                + method
+                                .toGenericString();
+
+                if (!installedHooks.add(key)) {
+                    continue;
+                }
+
+                module.hook(method)
+                        .intercept(chain -> {
+                            if (!shouldKeepSelfLaunchInBackground()) {
+                                return chain.proceed();
+                            }
+
+                            Object value =
+                                    chain.getArg(
+                                            finalIntentIndex);
+
+                            if (!(value
+                                    instanceof Intent intent)
+                                    || !isSamePackageIntent(
+                                            intent)) {
+                                return chain.proceed();
+                            }
+
+                            Object[] args =
+                                    chain.getArgs()
+                                            .toArray();
+
+                            Bundle original =
+                                    args[finalOptionsIndex]
+                                            instanceof Bundle bundle
+                                            ? bundle
+                                            : null;
+
+                            Bundle guarded =
+                                    original == null
+                                            ? new Bundle()
+                                            : new Bundle(
+                                                    original);
+
+                            guarded.putBoolean(
+                                    OPTION_AVOID_MOVE_TO_FRONT,
+                                    true);
+
+                            args[finalOptionsIndex] =
+                                    guarded;
+
+                            log(
+                                    Log.INFO,
+                                    "APP_BACKGROUND_SELF_LAUNCH",
+                                    "pkg="
+                                            + packageName
+                                            + " target="
+                                            + intent
+                                            .getComponent()
+                                            + " mode="
+                                            + GuardConfig
+                                            .backgroundPlaybackMode(
+                                                    packageName)
+                                            + " avoidMoveToFront=true");
+
+                            return chain.proceed(
+                                    args);
+                        });
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        "background-launch:"
+                                + method.toGenericString());
+
+                log(
+                        Log.WARN,
+                        "APP_BACKGROUND_LAUNCH_HOOK_FAILED",
+                        "pkg=" + packageName
+                                + " method="
+                                + method.getName()
                                 + " error="
                                 + t.getClass()
                                 .getSimpleName());
@@ -1127,6 +1268,27 @@ final class AppPlaybackGuard {
         long token =
                 backgroundProbeToken;
 
+        long stateToken =
+                ++foregroundStateToken;
+
+        mainHandler.postDelayed(
+                () -> {
+                    if (stateToken
+                            != foregroundStateToken) {
+                        return;
+                    }
+
+                    appForeground = false;
+
+                    log(
+                            Log.INFO,
+                            "APP_BACKGROUND_CONFIRMED",
+                            "pkg=" + packageName
+                                    + " token="
+                                    + token);
+                },
+                BACKGROUND_CONFIRM_DELAY_MS);
+
         log(
                 Log.INFO,
                 "APP_BACKGROUND_PROBE",
@@ -1152,6 +1314,8 @@ final class AppPlaybackGuard {
     private void onActivityResumed(
             Activity activity
     ) {
+        appForeground = true;
+        foregroundStateToken++;
         backgroundProbeToken++;
         backgroundProbeUntilElapsed = 0L;
         lifecyclePauseDetectedToken = -1L;
@@ -1256,19 +1420,50 @@ final class AppPlaybackGuard {
                         return;
                     }
 
+                    boolean playing =
+                            playerIsPlaying(
+                                    player);
+
+                    if (playing) {
+                        adaptiveState =
+                                ADAPTIVE_NATIVE;
+
+                        log(
+                                Log.INFO,
+                                "APP_AUTO_NATIVE_DETECTED",
+                                "pkg=" + packageName
+                                        + " player="
+                                        + player.getClass()
+                                        .getName()
+                                        + " playing=true"
+                                        + " token="
+                                        + token);
+                        return;
+                    }
+
                     adaptiveState =
-                            ADAPTIVE_NATIVE;
+                            ADAPTIVE_FORCED;
+
+                    boolean recovered =
+                            invokePlay(
+                                    player);
+
+                    if (recovered) {
+                        lastPlaySignal = true;
+                    }
 
                     log(
-                            Log.INFO,
-                            "APP_AUTO_NATIVE_DETECTED",
+                            recovered
+                                    ? Log.INFO
+                                    : Log.WARN,
+                            "APP_AUTO_FORCE_STATE_DETECTED",
                             "pkg=" + packageName
                                     + " player="
                                     + player.getClass()
                                     .getName()
-                                    + " playing="
-                                    + playerIsPlaying(
-                                            player)
+                                    + " playing=false"
+                                    + " recovered="
+                                    + recovered
                                     + " token="
                                     + token);
                 },
@@ -1340,6 +1535,63 @@ final class AppPlaybackGuard {
         }
 
         return null;
+    }
+
+    private boolean shouldKeepSelfLaunchInBackground() {
+        if (!selected()
+                || appForeground
+                || currentPlayer.get() == null) {
+            return false;
+        }
+
+        String mode =
+                GuardConfig
+                        .backgroundPlaybackMode(
+                                packageName);
+
+        return !GuardConfig
+                .PLAYBACK_MODE_NATIVE
+                .equals(mode);
+    }
+
+    private boolean isSamePackageIntent(
+            Intent intent
+    ) {
+        if (intent == null) {
+            return false;
+        }
+
+        if (intent.getComponent() != null) {
+            return packageName.equals(
+                    intent.getComponent()
+                            .getPackageName());
+        }
+
+        if (intent.getPackage() != null) {
+            return packageName.equals(
+                    intent.getPackage());
+        }
+
+        Context context =
+                resolveApplicationContext();
+
+        if (context == null) {
+            return false;
+        }
+
+        try {
+            android.content.ComponentName resolved =
+                    intent.resolveActivity(
+                            context
+                                    .getPackageManager());
+
+            return resolved != null
+                    && packageName.equals(
+                            resolved
+                                    .getPackageName());
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private boolean selected() {
