@@ -5,10 +5,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.media.AudioManager;
 import android.os.Build;
 import android.util.Log;
-import android.view.KeyEvent;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
@@ -75,8 +73,7 @@ final class AppPlaybackGuard {
                             .ACTION_PAUSE
                             .equals(action)) {
                         controlFromNotification(
-                                false,
-                                KeyEvent.KEYCODE_MEDIA_PAUSE);
+                                false);
                         return;
                     }
 
@@ -84,8 +81,7 @@ final class AppPlaybackGuard {
                             .ACTION_PLAY
                             .equals(action)) {
                         controlFromNotification(
-                                true,
-                                KeyEvent.KEYCODE_MEDIA_PLAY);
+                                true);
                         return;
                     }
 
@@ -136,6 +132,7 @@ final class AppPlaybackGuard {
                         packageName,
                         classLoader);
 
+        guard.ensureControlReceiver(null);
         guard.installLifecycleHooks();
         guard.installPlayerHooks();
 
@@ -615,6 +612,7 @@ final class AppPlaybackGuard {
             currentPlayer =
                     new WeakReference<>(
                             player);
+            ensureControlReceiver(null);
         }
     }
 
@@ -642,6 +640,10 @@ final class AppPlaybackGuard {
                     break;
                 }
             }
+        }
+
+        if (context == null) {
+            context = resolveApplicationContext();
         }
 
         if (context == null) {
@@ -706,8 +708,7 @@ final class AppPlaybackGuard {
     }
 
     private void controlFromNotification(
-            boolean play,
-            int fallbackKeyCode
+            boolean play
     ) {
         Object player =
                 currentPlayer.get();
@@ -718,13 +719,8 @@ final class AppPlaybackGuard {
                         ? invokePlay(player)
                         : invokePause(player));
 
-        if (!direct) {
-            dispatchMediaKey(
-                    fallbackKeyCode);
-        }
-
         log(
-                Log.INFO,
+                direct ? Log.INFO : Log.WARN,
                 play
                         ? "APP_PLAYBACK_CONTROL_PLAY"
                         : "APP_PLAYBACK_CONTROL_PAUSE",
@@ -732,7 +728,7 @@ final class AppPlaybackGuard {
                         + " mode="
                         + (direct
                         ? "direct"
-                        : "media-key"));
+                        : "no-target-player"));
     }
 
     private void skipFromNotification(
@@ -747,15 +743,8 @@ final class AppPlaybackGuard {
                         player,
                         next);
 
-        if (!direct) {
-            dispatchMediaKey(
-                    next
-                            ? KeyEvent.KEYCODE_MEDIA_NEXT
-                            : KeyEvent.KEYCODE_MEDIA_PREVIOUS);
-        }
-
         log(
-                Log.INFO,
+                direct ? Log.INFO : Log.WARN,
                 next
                         ? "APP_PLAYBACK_CONTROL_NEXT"
                         : "APP_PLAYBACK_CONTROL_PREVIOUS",
@@ -763,57 +752,7 @@ final class AppPlaybackGuard {
                         + " mode="
                         + (direct
                         ? "direct"
-                        : "media-key"));
-    }
-
-    private void dispatchMediaKey(
-            int keyCode
-    ) {
-        Context context = appContext;
-
-        if (context == null) {
-            return;
-        }
-
-        try {
-            AudioManager audioManager =
-                    context.getSystemService(
-                            AudioManager.class);
-
-            if (audioManager == null) {
-                return;
-            }
-
-            long now =
-                    android.os.SystemClock
-                            .uptimeMillis();
-
-            audioManager.dispatchMediaKeyEvent(
-                    new KeyEvent(
-                            now,
-                            now,
-                            KeyEvent.ACTION_DOWN,
-                            keyCode,
-                            0));
-
-            audioManager.dispatchMediaKeyEvent(
-                    new KeyEvent(
-                            now,
-                            now,
-                            KeyEvent.ACTION_UP,
-                            keyCode,
-                            0));
-        } catch (Throwable t) {
-            log(
-                    Log.WARN,
-                    "APP_PLAYBACK_CONTROL_FAILED",
-                    "pkg=" + packageName
-                            + " keyCode="
-                            + keyCode
-                            + " error="
-                            + t.getClass()
-                            .getSimpleName());
-        }
+                        : "no-target-player"));
     }
 
     private boolean invokePause(
@@ -1017,6 +956,45 @@ final class AppPlaybackGuard {
         }
 
         return false;
+    }
+
+    private Context resolveApplicationContext() {
+        try {
+            Class<?> activityThread =
+                    load("android.app.ActivityThread");
+            if (activityThread == null) {
+                return null;
+            }
+
+            Method currentApplication =
+                    activityThread.getDeclaredMethod(
+                            "currentApplication");
+            currentApplication.setAccessible(true);
+
+            Object value =
+                    currentApplication.invoke(null);
+
+            if (value instanceof Context context) {
+                Context app =
+                        context.getApplicationContext();
+                return app == null
+                        ? context
+                        : app;
+            }
+        } catch (Throwable t) {
+            log(
+                    Log.WARN,
+                    "APP_PLAYBACK_CONTEXT_UNAVAILABLE",
+                    "pkg=" + packageName
+                            + " process="
+                            + android.app.Application
+                            .getProcessName()
+                            + " error="
+                            + t.getClass()
+                            .getSimpleName());
+        }
+
+        return null;
     }
 
     private Class<?> load(
