@@ -27,8 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * foreground. Preloaded/feed players cannot replace that target. Automatic
  * recovery requires an explicit lifecycle pause on the locked player; lack of
  * a pause signal never triggers play() on another candidate. Background episode
- * handoff is allowed only after the old player is no longer playing and the new
- * player reports active. Manual pause remains untouched.
+ * handoff uses a short retry window: a new episode player may start while the
+ * old feed player is still winding down, but ownership moves only after the old
+ * player stops and the new player remains active. Manual pause remains untouched.
  */
 final class AppPlaybackGuard {
     private static final String TAG =
@@ -41,6 +42,8 @@ final class AppPlaybackGuard {
     private static final long AUTO_NATIVE_DELAY_MS = 700L;
     private static final long AUTO_PROBE_WINDOW_MS = 1500L;
     private static final long BACKGROUND_CONFIRM_DELAY_MS = 220L;
+    private static final long BACKGROUND_HANDOFF_RETRY_MS = 250L;
+    private static final int BACKGROUND_HANDOFF_MAX_ATTEMPTS = 6;
 
     private static final String OPTION_AVOID_MOVE_TO_FRONT =
             "android.activity.avoidMoveToFront";
@@ -78,6 +81,7 @@ final class AppPlaybackGuard {
             new WeakReference<>(null);
     private volatile WeakReference<Object> lastPlaySignalPlayer =
             new WeakReference<>(null);
+    private volatile long backgroundHandoffToken;
 
     private final BroadcastReceiver controlReceiver =
             new BroadcastReceiver() {
@@ -977,53 +981,54 @@ final class AppPlaybackGuard {
                     playerReportedPlaying(
                             locked);
 
-            boolean canHandoff =
-                    Boolean.TRUE.equals(reported)
-                            && !Boolean.TRUE.equals(
-                                    lockedPlaying);
-
-            if (!canHandoff) {
-                log(
-                        Log.INFO,
-                        "APP_PLAYER_PRELOAD_IGNORED",
-                        "pkg=" + packageName
-                                + " candidate="
-                                + player.getClass()
-                                .getName()
-                                + " candidatePlaying="
-                                + reported
-                                + " lockedPlaying="
-                                + lockedPlaying);
+            if (Boolean.TRUE.equals(reported)
+                    && !Boolean.TRUE.equals(
+                            lockedPlaying)) {
+                completeBackgroundPlayerHandoff(
+                        locked,
+                        player,
+                        "immediate");
                 return;
             }
 
-            backgroundPlayer =
-                    new WeakReference<>(
-                            player);
-            currentPlayer =
-                    new WeakReference<>(
-                            player);
-            lastPlaySignalPlayer =
-                    new WeakReference<>(
-                            player);
-            lastPlaySignal = true;
-            backgroundWasPlaying = true;
-            lifecyclePauseDetectedToken = -1L;
+            if (Boolean.TRUE.equals(reported)
+                    && Boolean.TRUE.equals(
+                            lockedPlaying)) {
+                long token =
+                        ++backgroundHandoffToken;
+
+                log(
+                        Log.INFO,
+                        "APP_BACKGROUND_HANDOFF_PENDING",
+                        "pkg=" + packageName
+                                + " from="
+                                + locked.getClass()
+                                .getName()
+                                + " to="
+                                + player.getClass()
+                                .getName()
+                                + " token="
+                                + token);
+
+                scheduleBackgroundPlayerHandoff(
+                        locked,
+                        player,
+                        token,
+                        1);
+                return;
+            }
 
             log(
                     Log.INFO,
-                    "APP_BACKGROUND_PLAYER_HANDOFF",
+                    "APP_PLAYER_PRELOAD_IGNORED",
                     "pkg=" + packageName
-                            + " from="
-                            + locked.getClass()
-                            .getName()
-                            + " to="
+                            + " candidate="
                             + player.getClass()
                             .getName()
-                            + " adaptive="
-                            + adaptiveState);
-
-            ensureControlReceiver(null);
+                            + " candidatePlaying="
+                            + reported
+                            + " lockedPlaying="
+                            + lockedPlaying);
             return;
         }
 
@@ -1083,6 +1088,134 @@ final class AppPlaybackGuard {
                 new WeakReference<>(
                         player);
         lastPlaySignal = true;
+        ensureControlReceiver(null);
+    }
+
+    private void scheduleBackgroundPlayerHandoff(
+            Object oldPlayer,
+            Object newPlayer,
+            long token,
+            int attempt
+    ) {
+        if (oldPlayer == null
+                || newPlayer == null) {
+            return;
+        }
+
+        mainHandler.postDelayed(
+                () -> {
+                    if (!selected()
+                            || appForeground
+                            || token
+                            != backgroundHandoffToken
+                            || backgroundPlayer.get()
+                            != oldPlayer) {
+                        return;
+                    }
+
+                    Boolean newPlaying =
+                            playerReportedPlaying(
+                                    newPlayer);
+
+                    Boolean oldPlaying =
+                            playerReportedPlaying(
+                                    oldPlayer);
+
+                    if (Boolean.TRUE.equals(
+                            newPlaying)
+                            && !Boolean.TRUE.equals(
+                                    oldPlaying)) {
+                        completeBackgroundPlayerHandoff(
+                                oldPlayer,
+                                newPlayer,
+                                "delayed-"
+                                        + attempt);
+                        return;
+                    }
+
+                    if (!Boolean.TRUE.equals(
+                            newPlaying)) {
+                        log(
+                                Log.INFO,
+                                "APP_BACKGROUND_HANDOFF_CANCEL",
+                                "pkg=" + packageName
+                                        + " reason=new-not-playing"
+                                        + " attempt="
+                                        + attempt
+                                        + " token="
+                                        + token);
+                        return;
+                    }
+
+                    if (attempt
+                            >= BACKGROUND_HANDOFF_MAX_ATTEMPTS) {
+                        log(
+                                Log.INFO,
+                                "APP_BACKGROUND_HANDOFF_CANCEL",
+                                "pkg=" + packageName
+                                        + " reason=old-still-playing"
+                                        + " attempt="
+                                        + attempt
+                                        + " token="
+                                        + token);
+                        return;
+                    }
+
+                    scheduleBackgroundPlayerHandoff(
+                            oldPlayer,
+                            newPlayer,
+                            token,
+                            attempt + 1);
+                },
+                BACKGROUND_HANDOFF_RETRY_MS);
+    }
+
+    private void completeBackgroundPlayerHandoff(
+            Object oldPlayer,
+            Object newPlayer,
+            String reason
+    ) {
+        if (oldPlayer == null
+                || newPlayer == null
+                || appForeground
+                || backgroundPlayer.get()
+                != oldPlayer
+                || !Boolean.TRUE.equals(
+                playerReportedPlaying(
+                        newPlayer))) {
+            return;
+        }
+
+        backgroundHandoffToken++;
+
+        backgroundPlayer =
+                new WeakReference<>(
+                        newPlayer);
+        currentPlayer =
+                new WeakReference<>(
+                        newPlayer);
+        lastPlaySignalPlayer =
+                new WeakReference<>(
+                        newPlayer);
+        lastPlaySignal = true;
+        backgroundWasPlaying = true;
+        lifecyclePauseDetectedToken = -1L;
+
+        log(
+                Log.INFO,
+                "APP_BACKGROUND_PLAYER_HANDOFF",
+                "pkg=" + packageName
+                        + " from="
+                        + oldPlayer.getClass()
+                        .getName()
+                        + " to="
+                        + newPlayer.getClass()
+                        .getName()
+                        + " reason="
+                        + reason
+                        + " adaptive="
+                        + adaptiveState);
+
         ensureControlReceiver(null);
     }
 
@@ -1397,6 +1530,7 @@ final class AppPlaybackGuard {
 
         if (backgroundProbeUntilElapsed <= now) {
             backgroundProbeToken++;
+            backgroundHandoffToken++;
             lifecyclePauseDetectedToken = -1L;
 
             Object player =
@@ -1497,6 +1631,7 @@ final class AppPlaybackGuard {
         appForeground = true;
         foregroundStateToken++;
         backgroundProbeToken++;
+        backgroundHandoffToken++;
         backgroundProbeUntilElapsed = 0L;
         lifecyclePauseDetectedToken = -1L;
         backgroundWasPlaying = false;
