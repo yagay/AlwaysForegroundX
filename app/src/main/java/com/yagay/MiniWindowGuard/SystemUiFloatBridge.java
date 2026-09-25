@@ -10,19 +10,23 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.util.List;
 
 import io.github.libxposed.api.XposedModule;
 
 /**
- * System Launcher-side bridge for the native OPlus FloatHandle state machine.
+ * Launcher-side bridge to OPlus Shell IZoom.
  *
- * system_server only decides which task should become a background playback
- * target. The real ZoomStateManager lives in com.android.launcher; it creates
- * ZoomPositionInfo/FloatHandleInfo and drives the SystemUI FloatHandle UI.
+ * The system_server side only selects the target task. Launcher owns
+ * ZoomController/IZoom, so the actual FloatHandle transition is delegated to
+ * the same public shell surface used by OPlus:
+ *
+ *   ZoomController.asZoom()
+ *     -> IZoom.requestChangeZoomState(taskId, 5)
+ *
+ * State 5 is FLOAT/FloatHandle. ZoomStateManager.onZoomEnter is used only as a
+ * readiness signal so we never depend on its private implementation.
  */
 final class SystemUiFloatBridge {
     static final String ACTION_REQUEST_FLOAT =
@@ -31,23 +35,24 @@ final class SystemUiFloatBridge {
     static final String EXTRA_PACKAGE_NAME = "package_name";
 
     private static final String TAG = "MiniWindowGuardUI";
-    private static final String LAUNCHER_PACKAGE = "com.android.launcher";
+    private static final String LAUNCHER_PACKAGE =
+            "com.android.launcher";
     private static final String SENDER_PERMISSION =
             "android.permission.MANAGE_ACTIVITY_TASKS";
 
-    private static final int OPLUS_EXTERNAL_STATE_FLOAT = 5;
+    private static final int OPLUS_ZOOM_STATE_FLOAT = 5;
     private static final long REQUEST_TTL_MS = 5000L;
-    private static final long RETRY_MS = 45L;
-    private static final int MAX_RETRIES = 50;
-    private static final long REINVOKE_MS = 220L;
+    private static final long RETRY_MS = 55L;
+    private static final int MAX_RETRIES = 60;
+    private static final long REINVOKE_MS = 240L;
 
     private final XposedModule module;
 
-    private volatile Object zoomStateManager;
-    private volatile ClassLoader launcherClassLoader;
+    private volatile Object zoomController;
+    private volatile Object iZoom;
     private volatile Context context;
     private volatile Handler handler;
-    private volatile BroadcastReceiver systemUiReceiver;
+    private volatile BroadcastReceiver receiver;
     private volatile PendingRequest pending;
     private volatile boolean receiverRegistered;
 
@@ -56,13 +61,217 @@ final class SystemUiFloatBridge {
     }
 
     void install(ClassLoader loader) {
-        launcherClassLoader = loader;
-
         if (loader == null) {
-            uiDiag("FLOAT_BRIDGE_INSTALL_FAIL", "reason=null-classloader");
+            uiDiag(
+                    "FLOAT_BRIDGE_INSTALL_FAIL",
+                    "reason=null-classloader");
             return;
         }
 
+        boolean controllerHooked =
+                hookZoomController(loader);
+
+        boolean zoomEnterHooked =
+                hookZoomEnter(loader);
+
+        ensureContext();
+
+        uiDiag(
+                "FLOAT_BRIDGE_INSTALLED",
+                "controllerHooked="
+                        + controllerHooked
+                        + " zoomEnterHooked="
+                        + zoomEnterHooked);
+    }
+
+    private boolean hookZoomController(
+            ClassLoader loader
+    ) {
+        try {
+            Class<?> controllerClass =
+                    Class.forName(
+                            "com.oplus.zoom.ZoomController",
+                            false,
+                            loader);
+
+            int hooked = 0;
+
+            for (Constructor<?> constructor :
+                    controllerClass.getDeclaredConstructors()) {
+                try {
+                    constructor.setAccessible(true);
+
+                    module.hook(constructor)
+                            .intercept(chain -> {
+                                Object result =
+                                        chain.proceed();
+
+                                Object controller =
+                                        chain.getThisObject();
+
+                                captureZoomController(
+                                        controller,
+                                        chain.getArgs(),
+                                        "constructor");
+
+                                return result;
+                            });
+
+                    hooked++;
+                } catch (Throwable t) {
+                    uiDiag(
+                            "FLOAT_CONTROLLER_CTOR_HOOK_FAIL",
+                            "ctor="
+                                    + constructor
+                                    .toGenericString()
+                                    + " error="
+                                    + t.getClass()
+                                    .getSimpleName());
+                }
+            }
+
+            for (Method method :
+                    controllerClass.getDeclaredMethods()) {
+                if (!"asZoom".equals(
+                        method.getName())
+                        || method.getParameterCount()
+                        != 0) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    module.hook(method)
+                            .intercept(chain -> {
+                                Object value =
+                                        chain.proceed();
+
+                                if (value != null) {
+                                    zoomController =
+                                            chain.getThisObject();
+                                    iZoom = value;
+
+                                    ensureContext();
+
+                                    uiDiag(
+                                            "FLOAT_IZOOM_READY",
+                                            "source=asZoom"
+                                                    + " class="
+                                                    + value
+                                                    .getClass()
+                                                    .getName());
+
+                                    PendingRequest request =
+                                            pending;
+
+                                    if (request != null) {
+                                        scheduleAttempt(
+                                                request,
+                                                "asZoom",
+                                                0L);
+                                    }
+                                }
+
+                                return value;
+                            });
+
+                    hooked++;
+                } catch (Throwable t) {
+                    uiDiag(
+                            "FLOAT_ASZOOM_HOOK_FAIL",
+                            "error="
+                                    + t.getClass()
+                                    .getSimpleName());
+                }
+            }
+
+            uiDiag(
+                    "FLOAT_CONTROLLER_HOOKED",
+                    "class="
+                            + controllerClass.getName()
+                            + " hooks="
+                            + hooked);
+
+            return hooked > 0;
+        } catch (Throwable t) {
+            uiDiag(
+                    "FLOAT_CONTROLLER_HOOK_FAIL",
+                    "error="
+                            + t.getClass()
+                            .getSimpleName()
+                            + ":"
+                            + String.valueOf(
+                            t.getMessage()));
+            return false;
+        }
+    }
+
+    private void captureZoomController(
+            Object controller,
+            List<Object> args,
+            String source
+    ) {
+        if (controller == null) {
+            return;
+        }
+
+        zoomController = controller;
+
+        if (args != null) {
+            for (Object arg : args) {
+                if (arg instanceof Context) {
+                    setContext(
+                            (Context) arg,
+                            source + "-arg");
+                    break;
+                }
+            }
+        }
+
+        ensureContext();
+
+        Object value =
+                invokeNoArg(
+                        controller,
+                        "asZoom");
+
+        if (value != null) {
+            iZoom = value;
+
+            uiDiag(
+                    "FLOAT_CONTROLLER_READY",
+                    "source=" + source
+                            + " controller="
+                            + controller.getClass()
+                            .getName()
+                            + " iZoom="
+                            + value.getClass()
+                            .getName());
+        } else {
+            uiDiag(
+                    "FLOAT_CONTROLLER_READY",
+                    "source=" + source
+                            + " controller="
+                            + controller.getClass()
+                            .getName()
+                            + " iZoom=null");
+        }
+
+        PendingRequest request =
+                pending;
+
+        if (request != null) {
+            scheduleAttempt(
+                    request,
+                    "controller-ready",
+                    0L);
+        }
+    }
+
+    private boolean hookZoomEnter(
+            ClassLoader loader
+    ) {
         try {
             Class<?> managerClass =
                     Class.forName(
@@ -70,217 +279,139 @@ final class SystemUiFloatBridge {
                             false,
                             loader);
 
-            hookLauncherApplication(loader);
-            hookConstructors(managerClass);
-            hookZoomEnter(managerClass);
+            int hooked = 0;
 
-            uiDiag(
-                    "FLOAT_BRIDGE_INSTALLED",
-                    "class=" + managerClass.getName());
-        } catch (Throwable t) {
-            uiDiag(
-                    "FLOAT_BRIDGE_INSTALL_FAIL",
-                    "error=" + t.getClass().getSimpleName()
-                            + ":" + String.valueOf(t.getMessage()));
-        }
-    }
-
-    private void hookLauncherApplication(
-            ClassLoader loader
-    ) {
-        try {
-            Class<?> applicationClass =
-                    Class.forName(
-                            "com.android.common.LauncherApplication",
-                            false,
-                            loader);
-
-            Method onCreate =
-                    applicationClass.getDeclaredMethod(
-                            "onCreate");
-
-            onCreate.setAccessible(true);
-
-            module.hook(onCreate).intercept(chain -> {
-                Object result = chain.proceed();
-
-                Object app =
-                        chain.getThisObject();
-
-                if (app instanceof Context) {
-                    Context ctx =
-                            (Context) app;
-
-                    Context appContext =
-                            ctx.getApplicationContext();
-
-                    context =
-                            appContext != null
-                                    ? appContext
-                                    : ctx;
-
-                    if (handler == null) {
-                        handler =
-                                new Handler(
-                                        Looper.getMainLooper());
-                    }
-
-                    registerReceiverIfNeeded();
-                    resolveZoomStateManager(
-                            "launcher-onCreate");
-
-                    uiDiag(
-                            "FLOAT_LAUNCHER_READY",
-                            "source=LauncherApplication.onCreate");
+            for (Method method :
+                    managerClass.getDeclaredMethods()) {
+                if (!"onZoomEnter".equals(
+                        method.getName())
+                        || method.getParameterCount()
+                        < 1) {
+                    continue;
                 }
 
-                return result;
-            });
+                method.setAccessible(true);
+
+                module.hook(method)
+                        .intercept(chain -> {
+                            Object result =
+                                    chain.proceed();
+
+                            PendingRequest request =
+                                    pending;
+
+                            if (request == null) {
+                                return result;
+                            }
+
+                            Object taskInfo =
+                                    chain.getArgs()
+                                            .isEmpty()
+                                            ? null
+                                            : chain.getArgs()
+                                            .get(0);
+
+                            int id =
+                                    taskIdFromObject(
+                                            taskInfo);
+
+                            if (id == request.taskId) {
+                                uiDiag(
+                                        "FLOAT_ON_ZOOM_ENTER",
+                                        "pkg="
+                                                + request.packageName
+                                                + " taskId="
+                                                + request.taskId);
+
+                                scheduleAttempt(
+                                        request,
+                                        "onZoomEnter",
+                                        0L);
+                            }
+
+                            return result;
+                        });
+
+                hooked++;
+            }
+
+            uiDiag(
+                    "FLOAT_ZOOM_ENTER_HOOKED",
+                    "hooks=" + hooked);
+
+            return hooked > 0;
         } catch (Throwable t) {
             uiDiag(
-                    "FLOAT_LAUNCHER_APP_HOOK_FAIL",
-                    "error=" + t.getClass()
+                    "FLOAT_ZOOM_ENTER_HOOK_FAIL",
+                    "error="
+                            + t.getClass()
                             .getSimpleName()
                             + ":"
                             + String.valueOf(
                             t.getMessage()));
+            return false;
         }
     }
 
-    private void hookConstructors(Class<?> managerClass) {
-        for (Constructor<?> constructor :
-                managerClass.getDeclaredConstructors()) {
-            try {
-                constructor.setAccessible(true);
-
-                module.hook(constructor).intercept(chain -> {
-                    Object result = chain.proceed();
-
-                    Object manager =
-                            chain.getThisObject();
-
-                    List<Object> args =
-                            chain.getArgs();
-
-                    Context ctx = null;
-                    if (!args.isEmpty()
-                            && args.get(0) instanceof Context) {
-                        ctx = (Context) args.get(0);
-                    }
-
-                    onManagerReady(
-                            manager,
-                            ctx,
-                            "constructor");
-
-                    return result;
-                });
-            } catch (Throwable t) {
-                uiDiag(
-                        "FLOAT_BRIDGE_CONSTRUCTOR_HOOK_FAIL",
-                        "ctor=" + constructor.toGenericString()
-                                + " error="
-                                + t.getClass().getSimpleName());
-            }
-        }
-    }
-
-    private void hookZoomEnter(Class<?> managerClass) {
-        for (Method method :
-                managerClass.getDeclaredMethods()) {
-            if (!"onZoomEnter".equals(method.getName())
-                    || method.getParameterCount() < 1) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                module.hook(method).intercept(chain -> {
-                    Object result = chain.proceed();
-
-                    Object manager =
-                            chain.getThisObject();
-
-                    if (manager != null) {
-                        zoomStateManager = manager;
-                    }
-
-                    Object zoomTaskInfo =
-                            chain.getArgs().isEmpty()
-                                    ? null
-                                    : chain.getArgs().get(0);
-
-                    PendingRequest request = pending;
-
-                    if (request != null
-                            && zoomTaskMatches(
-                            zoomTaskInfo,
-                            request)) {
-                        uiDiag(
-                                "FLOAT_ON_ZOOM_ENTER",
-                                "pkg=" + request.packageName
-                                        + " taskId="
-                                        + request.taskId);
-
-                        scheduleAttempt(
-                                request,
-                                "onZoomEnter",
-                                0L);
-                    }
-
-                    return result;
-                });
-            } catch (Throwable t) {
-                uiDiag(
-                        "FLOAT_BRIDGE_ZOOM_ENTER_HOOK_FAIL",
-                        "method=" + method.toGenericString()
-                                + " error="
-                                + t.getClass().getSimpleName());
-            }
-        }
-    }
-
-    private void onManagerReady(
-            Object manager,
-            Context ctx,
-            String source
-    ) {
-        if (manager == null) {
+    private void ensureContext() {
+        if (context != null) {
+            registerReceiverIfNeeded();
             return;
         }
 
-        zoomStateManager = manager;
+        try {
+            Class<?> activityThread =
+                    Class.forName(
+                            "android.app.ActivityThread");
 
-        if (ctx != null) {
-            Context app =
-                    ctx.getApplicationContext();
-            context = app != null
-                    ? app
-                    : ctx;
+            Method currentApplication =
+                    activityThread.getDeclaredMethod(
+                            "currentApplication");
 
-            if (handler == null) {
-                handler =
-                        new Handler(
-                                Looper.getMainLooper());
+            currentApplication.setAccessible(true);
+
+            Object app =
+                    currentApplication.invoke(
+                            null);
+
+            if (app instanceof Context) {
+                setContext(
+                        (Context) app,
+                        "ActivityThread.currentApplication");
             }
-
-            registerReceiverIfNeeded();
+        } catch (Throwable ignored) {
         }
+    }
+
+    private void setContext(
+            Context value,
+            String source
+    ) {
+        if (value == null) {
+            return;
+        }
+
+        Context app =
+                value.getApplicationContext();
+
+        context =
+                app != null
+                        ? app
+                        : value;
+
+        if (handler == null) {
+            handler =
+                    new Handler(
+                            Looper.getMainLooper());
+        }
+
+        registerReceiverIfNeeded();
 
         uiDiag(
-                "FLOAT_MANAGER_READY",
+                "FLOAT_LAUNCHER_READY",
                 "source=" + source
-                        + " context="
-                        + (context != null));
-
-        PendingRequest request = pending;
-        if (request != null) {
-            scheduleAttempt(
-                    request,
-                    "manager-ready",
-                    0L);
-        }
+                        + " package="
+                        + context.getPackageName());
     }
 
     private void registerReceiverIfNeeded() {
@@ -295,7 +426,7 @@ final class SystemUiFloatBridge {
                 return;
             }
 
-            BroadcastReceiver receiver =
+            BroadcastReceiver created =
                     new BroadcastReceiver() {
                         @Override
                         public void onReceive(
@@ -323,7 +454,7 @@ final class SystemUiFloatBridge {
                                     || packageName.isBlank()) {
                                 uiDiag(
                                         "FLOAT_REQUEST_REJECTED",
-                                        "reason=bad-extra taskId="
+                                        "taskId="
                                                 + taskId
                                                 + " pkg="
                                                 + packageName);
@@ -339,7 +470,8 @@ final class SystemUiFloatBridge {
 
                             uiDiag(
                                     "FLOAT_REQUEST_RECEIVED",
-                                    "pkg=" + packageName
+                                    "pkg="
+                                            + packageName
                                             + " taskId="
                                             + taskId);
 
@@ -355,18 +487,19 @@ final class SystemUiFloatBridge {
                             ACTION_REQUEST_FLOAT);
 
             context.registerReceiver(
-                    receiver,
+                    created,
                     filter,
                     SENDER_PERMISSION,
                     handler,
                     Context.RECEIVER_EXPORTED);
 
-            systemUiReceiver = receiver;
+            receiver = created;
             receiverRegistered = true;
 
             uiDiag(
                     "FLOAT_RECEIVER_READY",
-                    "package=" + LAUNCHER_PACKAGE);
+                    "package="
+                            + LAUNCHER_PACKAGE);
         }
     }
 
@@ -375,14 +508,22 @@ final class SystemUiFloatBridge {
             String source,
             long delayMs
     ) {
-        Handler currentHandler = handler;
+        Handler current =
+                handler;
 
-        if (currentHandler == null
+        if (current == null
                 || request == null) {
+            ensureContext();
+            current = handler;
+        }
+
+        if (current == null) {
             return;
         }
 
-        currentHandler.postDelayed(
+        Handler target = current;
+
+        target.postDelayed(
                 () -> attemptFloat(
                         request,
                         source),
@@ -403,147 +544,91 @@ final class SystemUiFloatBridge {
 
         if (now - request.createdAt
                 > REQUEST_TTL_MS) {
-            if (pending == request) {
-                pending = null;
-            }
-
-            uiDiag(
-                    "FLOAT_REQUEST_TIMEOUT",
-                    "pkg=" + request.packageName
-                            + " taskId="
-                            + request.taskId
-                            + " attempts="
-                            + request.attempts);
-            return;
-        }
-
-        Object manager =
-                zoomStateManager;
-
-        if (manager == null) {
-            manager =
-                    resolveZoomStateManager(
-                            "attempt-" + request.attempts);
-        }
-
-        if (manager == null) {
-            retry(
-                    request,
-                    "manager-null");
-            return;
-        }
-
-        Object zoomTaskInfo =
-                invokeNoArg(
-                        manager,
-                        "getZoomTaskInfo");
-
-        if (!zoomTaskMatches(
-                zoomTaskInfo,
-                request)) {
-            retry(
-                    request,
-                    "zoom-task-not-ready");
-            return;
-        }
-
-        if (booleanNoArg(
-                manager,
-                "isExiting")) {
-            retry(
-                    request,
-                    "zoom-exiting");
-            return;
-        }
-
-        Object uiManager =
-                invokeNoArg(
-                        manager,
-                        "getUiManager");
-
-        Object existingInfo =
-                invoke(
-                        uiManager,
-                        "getFloatHandleInfo",
-                        request.taskId);
-
-        if (existingInfo != null) {
             pending = null;
 
             uiDiag(
-                    "FLOAT_HANDLE_READY",
-                    "pkg=" + request.packageName
+                    "FLOAT_REQUEST_TIMEOUT",
+                    "pkg="
+                            + request.packageName
                             + " taskId="
                             + request.taskId
-                            + " source="
-                            + source
+                            + " invokes="
+                            + request.invokeCount
                             + " attempts="
                             + request.attempts);
+            return;
+        }
+
+        Object surface =
+                iZoom;
+
+        if (surface == null) {
+            Object controller =
+                    zoomController;
+
+            if (controller != null) {
+                surface =
+                        invokeNoArg(
+                                controller,
+                                "asZoom");
+
+                if (surface != null) {
+                    iZoom = surface;
+                }
+            }
+        }
+
+        if (surface == null) {
+            retry(
+                    request,
+                    "iZoom-null");
             return;
         }
 
         if (now - request.lastInvokeAt
                 >= REINVOKE_MS) {
-            Method floatRequest =
+            Method change =
                     findMethod(
-                            manager.getClass(),
-                            "requestFloatZoomFromOutside",
-                            boolean.class,
-                            boolean.class);
-
-            Method stateRequest =
-                    findMethod(
-                            manager.getClass(),
-                            "requestChangeZoomStateFromOutside",
+                            surface.getClass(),
+                            "requestChangeZoomState",
                             int.class,
-                            boolean.class,
-                            boolean.class);
+                            int.class);
 
-            if (floatRequest == null
-                    && stateRequest == null) {
+            if (change == null) {
                 pending = null;
 
                 uiDiag(
                         "FLOAT_REQUEST_FAIL",
-                        "pkg=" + request.packageName
+                        "pkg="
+                                + request.packageName
                                 + " taskId="
                                 + request.taskId
-                                + " reason=native-float-method-missing");
+                                + " reason=requestChangeZoomState-missing"
+                                + " iZoomClass="
+                                + surface.getClass()
+                                .getName());
                 return;
             }
 
             try {
-                String methodName;
+                change.setAccessible(true);
 
-                if (floatRequest != null) {
-                    floatRequest.setAccessible(true);
-                    floatRequest.invoke(
-                            manager,
-                            true,
-                            true);
-                    methodName =
-                            "requestFloatZoomFromOutside";
-                } else {
-                    stateRequest.setAccessible(true);
-                    stateRequest.invoke(
-                            manager,
-                            OPLUS_EXTERNAL_STATE_FLOAT,
-                            true,
-                            true);
-                    methodName =
-                            "requestChangeZoomStateFromOutside";
-                }
+                change.invoke(
+                        surface,
+                        request.taskId,
+                        OPLUS_ZOOM_STATE_FLOAT);
 
                 request.lastInvokeAt = now;
                 request.invokeCount++;
 
                 uiDiag(
-                        "FLOAT_NATIVE_MINIMIZE_REQUEST",
-                        "pkg=" + request.packageName
+                        "FLOAT_IZOOM_REQUEST",
+                        "pkg="
+                                + request.packageName
                                 + " taskId="
                                 + request.taskId
-                                + " method="
-                                + methodName
+                                + " state="
+                                + OPLUS_ZOOM_STATE_FLOAT
                                 + " invoke="
                                 + request.invokeCount
                                 + " source="
@@ -551,7 +636,8 @@ final class SystemUiFloatBridge {
             } catch (Throwable t) {
                 uiDiag(
                         "FLOAT_REQUEST_INVOKE_FAIL",
-                        "pkg=" + request.packageName
+                        "pkg="
+                                + request.packageName
                                 + " taskId="
                                 + request.taskId
                                 + " error="
@@ -565,230 +651,7 @@ final class SystemUiFloatBridge {
 
         retry(
                 request,
-                "wait-float-handle");
-    }
-
-    private Object resolveZoomStateManager(
-            String source
-    ) {
-        Object cached = zoomStateManager;
-        if (cached != null) {
-            return cached;
-        }
-
-        ClassLoader loader =
-                launcherClassLoader;
-
-        if (loader == null) {
-            return null;
-        }
-
-        Object manager = null;
-        Object root = null;
-
-        try {
-            Class<?> rootClass =
-                    Class.forName(
-                            "com.oplus.zoom.ZoomRootTaskManager",
-                            false,
-                            loader);
-
-            root =
-                    resolveSingleton(
-                            rootClass);
-
-            if (root != null) {
-                manager =
-                        invokeNoArg(
-                                root,
-                                "getZoomStateManager");
-
-                if (manager == null) {
-                    manager =
-                            fieldValue(
-                                    root,
-                                    "mZoomStateManager");
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-
-        if (manager == null) {
-            try {
-                Class<?> managerClass =
-                        Class.forName(
-                                "com.oplus.zoom.zoomstate.ZoomStateManager",
-                                false,
-                                loader);
-
-                manager =
-                        resolveSingleton(
-                                managerClass);
-            } catch (Throwable ignored) {
-            }
-        }
-
-        if (manager != null) {
-            onManagerReady(
-                    manager,
-                    null,
-                    "resolver:" + source);
-
-            uiDiag(
-                    "FLOAT_MANAGER_RESOLVED",
-                    "source=" + source
-                            + " class="
-                            + manager.getClass()
-                            .getName()
-                            + " viaRoot="
-                            + (root != null));
-
-            return manager;
-        }
-
-        if (source != null
-                && (source.endsWith("-0")
-                || source.endsWith("-10")
-                || source.endsWith("-20")
-                || source.endsWith("-30")
-                || source.endsWith("-40")
-                || source.endsWith("-50")
-                || "launcher-onCreate".equals(
-                source))) {
-            uiDiag(
-                    "FLOAT_MANAGER_RESOLVE_WAIT",
-                    "source=" + source
-                            + " root="
-                            + (root != null));
-        }
-
-        return null;
-    }
-
-    private Object resolveSingleton(
-            Class<?> type
-    ) {
-        if (type == null) {
-            return null;
-        }
-
-        String[] factories = {
-                "getInstance",
-                "getInstanceNoCreate",
-                "getInstanceIfExists",
-                "getINSTANCE",
-                "getsInstance"
-        };
-
-        for (String name :
-                factories) {
-            for (Method method :
-                    type.getDeclaredMethods()) {
-                if (!name.equals(
-                        method.getName())
-                        || !Modifier.isStatic(
-                        method.getModifiers())) {
-                    continue;
-                }
-
-                Class<?>[] params =
-                        method.getParameterTypes();
-
-                try {
-                    method.setAccessible(true);
-
-                    if (params.length == 0) {
-                        Object value =
-                                method.invoke(
-                                        null);
-
-                        if (value != null) {
-                            return value;
-                        }
-                    } else if (params.length == 1
-                            && context != null
-                            && params[0].isInstance(
-                            context)) {
-                        Object value =
-                                method.invoke(
-                                        null,
-                                        context);
-
-                        if (value != null) {
-                            return value;
-                        }
-                    } else if (params.length == 1
-                            && context != null
-                            && Context.class
-                            .isAssignableFrom(
-                                    params[0])) {
-                        Object value =
-                                method.invoke(
-                                        null,
-                                        context);
-
-                        if (value != null) {
-                            return value;
-                        }
-                    }
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-
-        String[] fields = {
-                "sInstance",
-                "mInstance",
-                "INSTANCE",
-                "instance"
-        };
-
-        for (String name :
-                fields) {
-            Object value =
-                    staticFieldValue(
-                            type,
-                            name);
-
-            if (value != null) {
-                return value;
-            }
-        }
-
-        return null;
-    }
-
-    private static Object staticFieldValue(
-            Class<?> type,
-            String name
-    ) {
-        Class<?> current = type;
-
-        while (current != null) {
-            try {
-                Field field =
-                        current.getDeclaredField(
-                                name);
-
-                if (!Modifier.isStatic(
-                        field.getModifiers())) {
-                    current =
-                            current.getSuperclass();
-                    continue;
-                }
-
-                field.setAccessible(true);
-                return field.get(
-                        null);
-            } catch (NoSuchFieldException ignored) {
-                current =
-                        current.getSuperclass();
-            } catch (Throwable ignored) {
-                return null;
-            }
-        }
-
-        return null;
+                "wait-native-float");
     }
 
     private void retry(
@@ -808,7 +671,8 @@ final class SystemUiFloatBridge {
 
             uiDiag(
                     "FLOAT_REQUEST_TIMEOUT",
-                    "pkg=" + request.packageName
+                    "pkg="
+                            + request.packageName
                             + " taskId="
                             + request.taskId
                             + " reason="
@@ -822,7 +686,8 @@ final class SystemUiFloatBridge {
                 || request.attempts % 10 == 0) {
             uiDiag(
                     "FLOAT_REQUEST_WAIT",
-                    "pkg=" + request.packageName
+                    "pkg="
+                            + request.packageName
                             + " taskId="
                             + request.taskId
                             + " reason="
@@ -837,59 +702,70 @@ final class SystemUiFloatBridge {
                 RETRY_MS);
     }
 
-    private static boolean zoomTaskMatches(
-            Object zoomTaskInfo,
-            PendingRequest request
+    private static int taskIdFromObject(
+            Object value
     ) {
-        if (zoomTaskInfo == null
-                || request == null) {
-            return false;
+        if (value == null) {
+            return -1;
         }
 
-        int taskId =
-                intField(
-                        zoomTaskInfo,
-                        "taskId",
-                        -1);
+        Object result =
+                fieldValue(
+                        value,
+                        "taskId");
 
-        String pkg =
-                stringField(
-                        zoomTaskInfo,
-                        "pkgName");
+        if (result instanceof Number) {
+            return ((Number) result)
+                    .intValue();
+        }
 
-        return taskId == request.taskId
-                && (pkg == null
-                || pkg.isBlank()
-                || request.packageName.equals(
-                pkg));
+        result =
+                invokeNoArg(
+                        value,
+                        "getTaskId");
+
+        if (result instanceof Number) {
+            return ((Number) result)
+                    .intValue();
+        }
+
+        return -1;
     }
 
-    private static boolean booleanNoArg(
+    private static Object fieldValue(
             Object receiver,
             String name
     ) {
-        Object value =
-                invokeNoArg(
-                        receiver,
-                        name);
+        if (receiver == null) {
+            return null;
+        }
 
-        return value instanceof Boolean
-                && (Boolean) value;
+        Class<?> current =
+                receiver.getClass();
+
+        while (current != null) {
+            try {
+                java.lang.reflect.Field field =
+                        current.getDeclaredField(
+                                name);
+
+                field.setAccessible(true);
+                return field.get(
+                        receiver);
+            } catch (NoSuchFieldException ignored) {
+                current =
+                        current.getSuperclass();
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private static Object invokeNoArg(
             Object receiver,
             String name
-    ) {
-        return invoke(
-                receiver,
-                name);
-    }
-
-    private static Object invoke(
-            Object receiver,
-            String name,
-            Object... args
     ) {
         if (receiver == null) {
             return null;
@@ -904,16 +780,14 @@ final class SystemUiFloatBridge {
                 if (!name.equals(
                         method.getName())
                         || method.getParameterCount()
-                        != args.length) {
+                        != 0) {
                     continue;
                 }
 
                 try {
                     method.setAccessible(true);
                     return method.invoke(
-                            receiver,
-                            args);
-                } catch (IllegalArgumentException ignored) {
+                            receiver);
                 } catch (Throwable ignored) {
                     return null;
                 }
@@ -931,7 +805,8 @@ final class SystemUiFloatBridge {
             String name,
             Class<?>... parameterTypes
     ) {
-        Class<?> current = type;
+        Class<?> current =
+                type;
 
         while (current != null) {
             try {
@@ -941,65 +816,6 @@ final class SystemUiFloatBridge {
             } catch (NoSuchMethodException ignored) {
                 current =
                         current.getSuperclass();
-            }
-        }
-
-        return null;
-    }
-
-    private static int intField(
-            Object receiver,
-            String name,
-            int fallback
-    ) {
-        Object value =
-                fieldValue(
-                        receiver,
-                        name);
-
-        return value instanceof Number
-                ? ((Number) value).intValue()
-                : fallback;
-    }
-
-    private static String stringField(
-            Object receiver,
-            String name
-    ) {
-        Object value =
-                fieldValue(
-                        receiver,
-                        name);
-
-        return value instanceof String
-                ? (String) value
-                : null;
-    }
-
-    private static Object fieldValue(
-            Object receiver,
-            String name
-    ) {
-        if (receiver == null) {
-            return null;
-        }
-
-        Class<?> current =
-                receiver.getClass();
-
-        while (current != null) {
-            try {
-                Field field =
-                        current.getDeclaredField(
-                                name);
-                field.setAccessible(true);
-                return field.get(
-                        receiver);
-            } catch (NoSuchFieldException ignored) {
-                current =
-                        current.getSuperclass();
-            } catch (Throwable ignored) {
-                return null;
             }
         }
 
