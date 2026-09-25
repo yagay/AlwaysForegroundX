@@ -1,5 +1,18 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.0 — 剧集后台切换与自动连播修正
+
+根据红果 `com.phoenix.read` 诊断日志修复两个实际运行问题：
+
+- 自动检测不再以“没有捕获到生命周期 pause 调用”直接认定为原生后台能力；只有当前播放器在退后台后仍真实报告 `isPlaying=true` / `playWhenReady=true` 才进入 NATIVE；
+- 如果退后台后没有捕获到 pause Hook，但播放器状态已经变成停止，会改判为 FORCED 并主动恢复，修复剧集页被错误记录成 `APP_AUTO_NATIVE_DETECTED ... playing=false` 后无法继续下一集的问题；
+- 新增后台同包 Activity 启动保护：当受保护 App 已经真正处于后台、当前仍有播放实例且模式为“自动/强制”时，App 自己启动同包 Activity 会注入 Android `ActivityOptions` 的 `avoidMoveToFront` 标记；
+- 这样剧集切换仍可在原任务中创建/更新页面，但不会因为 App 自己调用 `startActivity` 把整个任务从桌面强行拉回前台；
+- 前台正常点击进入剧集不受影响；“仅原生”模式也不会注入后台启动保护；
+- 新增 `APP_BACKGROUND_CONFIRMED`、`APP_BACKGROUND_SELF_LAUNCH`、`APP_AUTO_FORCE_STATE_DETECTED` 日志，方便区分“真正退后台”“后台内部换页”和“播放器状态型强制恢复”。
+
+诊断包同时显示设备当前 system_server 仍运行 5.4.7 / Bootstrap 6，而 5.4.8+ 需要 Bootstrap 7。5.5.0 本身没有新增 system_server 固定 Hook，Bootstrap API 仍为 7；但从 Bootstrap 6 升上来的设备必须完整重启一次，才能真正加载此前已经修改过的 system_server 生命周期/保活逻辑。
+
 ## 5.4.9 — 每 App 自适应后台播放模式
 
 后台播放名单现在支持每个 App 独立选择三种模式，并把自动判断细化到当前播放器实例：
