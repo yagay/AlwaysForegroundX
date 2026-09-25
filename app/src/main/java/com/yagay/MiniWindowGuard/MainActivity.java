@@ -189,7 +189,7 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "应用名单",
-                        "App 的启动、进入小窗、恢复和关闭完全使用 OxygenOS 自己的方式。MiniWindowGuard 只监听一加小窗状态。");
+                        "始终前台名单中的 App 切到后台时可自动进入 OxygenOS 原生 FlexibleWindow，并继续缩成系统 FloatHandle 小图标。");
 
         Button foreground =
                 button(
@@ -211,7 +211,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "始终前台",
-                        "勾选的 App 只有在真实 OPlus FlexibleWindow、贴边/最小化小窗，或该小窗进入锁屏状态时才保持运行。普通全屏状态不干预。"));
+                        "勾选的 App 在小窗、FloatHandle 和锁屏时继续沿用 5.2.0 的保护；开启自动切换后，普通全屏失去前台焦点会先进入系统小窗，再缩成系统小图标。"));
 
         Button support =
                 button(
@@ -244,6 +244,12 @@ public final class MainActivity extends Activity {
                         parent,
                         "小窗前台保护",
                         "普通全屏仍完全交给 OxygenOS；只有白名单中的真实一加小窗在贴边或锁屏时才做定向保活。");
+
+        addSwitch(
+                card,
+                "切后台自动系统小窗",
+                "默认开启。始终前台名单中的普通全屏 App 切到其他 App/桌面时，先请求 OPlus FlexibleWindow，系统确认后再调用原生 Mini/FloatHandle。锁屏不走这条路径。",
+                ConfigKeys.AUTO_MINI_ON_BACKGROUND);
 
         addSwitch(
                 card,
