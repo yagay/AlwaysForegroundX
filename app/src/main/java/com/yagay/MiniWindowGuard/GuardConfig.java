@@ -83,6 +83,23 @@ final class GuardConfig {
                 .contains(packageName);
     }
 
+    static boolean smallWindowBackgroundPackage(
+            String packageName
+    ) {
+        return packageName != null
+                && stringSet(
+                ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)
+                .contains(packageName);
+    }
+
+    static boolean protectedWindowPackage(
+            String packageName
+    ) {
+        return foregroundPackage(packageName)
+                || smallWindowBackgroundPackage(
+                packageName);
+    }
+
     static boolean forceSupportPackage(String packageName) {
         return packageName != null
                 && stringSet(
