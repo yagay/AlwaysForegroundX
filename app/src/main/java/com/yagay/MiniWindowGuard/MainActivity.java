@@ -257,7 +257,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "普通后台播放",
-                        "每个 App 可独立选择自动检测 / 始终强制 / 仅原生。自动模式采用 5.4.5 的生命周期策略：只阻止 onPause/onStop 同步触发的播放器暂停，不主动 play，也不接管 App 自己的剧集/播放列表状态。"));
+                        "自动/强制模式离开前台时会把现有 Task 转成真实 OPlus FlexibleWindow，并立即收成浮动图标继续播放；播放器保护仍采用 5.4.5 的生命周期策略，不主动 play、不接管剧集/播放列表。仅原生模式不强制转小窗。"));
 
         Button support =
                 button(
