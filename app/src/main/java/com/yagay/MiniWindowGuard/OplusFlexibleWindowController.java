@@ -4,7 +4,9 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.graphics.Rect;
+import android.os.Binder;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.SystemClock;
 
 import java.lang.reflect.Field;
@@ -28,6 +30,10 @@ final class OplusFlexibleWindowController {
     private static final long UNLOCK_GRACE_MS = 2500L;
     private static final int EVENT_MINIMIZE_TO_FLOAT_HANDLE = 2002;
     private static final int EVENT_EXIT_TO_BACK = 2003;
+    private static final long AUTO_MINI_REQUEST_COOLDOWN_MS = 1500L;
+    private static final long AUTO_MINI_RETRY_DELAY_MS = 120L;
+    private static final int AUTO_MINI_MAX_RETRIES = 10;
+    private static final int OPLUS_MINI_REASON = 7;
 
     private final Handler handler;
     private final Logger logger;
@@ -37,6 +43,11 @@ final class OplusFlexibleWindowController {
     private volatile Context systemContext;
     private volatile boolean running;
     private volatile boolean keyguardShowing;
+
+    private volatile Object oplusActivityTaskManager;
+    private volatile Method toggleFlexibleWindow;
+    private volatile Object oplusZoomWindowManager;
+    private volatile Method startMiniZoomFromZoom;
 
     OplusFlexibleWindowController(
             Handler handler,
@@ -51,6 +62,7 @@ final class OplusFlexibleWindowController {
     void start() {
         if (running) return;
         running = true;
+        resolveAutoMiniApis();
 
         log(
                 "OPLUS_ENGINE_READY",
@@ -414,6 +426,7 @@ final class OplusFlexibleWindowController {
 
         if (event
                 == EVENT_MINIMIZE_TO_FLOAT_HANDLE) {
+            session.autoMiniPending = false;
             session.edgeMinimizeRequested = true;
             session.edgeHung = true;
             session.lastSeenElapsed =
@@ -428,6 +441,7 @@ final class OplusFlexibleWindowController {
         }
 
         if (event == EVENT_EXIT_TO_BACK) {
+            session.autoMiniPending = false;
             session.edgeMinimizeRequested = false;
             session.edgeHung = false;
 
@@ -531,6 +545,323 @@ final class OplusFlexibleWindowController {
                     }
                 },
                 UNLOCK_GRACE_MS);
+    }
+
+    boolean shouldAutoMiniOnFocusLoss(
+            Object task,
+            String nextPackage
+    ) {
+        if (!running
+                || !GuardConfig.bool(
+                ConfigKeys.AUTO_MINI_ON_BACKGROUND)
+                || keyguardShowing
+                || task == null
+                || nextPackage == null) {
+            return false;
+        }
+
+        Session session = sessionForTask(task);
+
+        if (session == null
+                || !session.active
+                || !GuardConfig.foregroundPackage(
+                session.packageName)
+                || session.packageName.equals(nextPackage)
+                || session.lockKeepAlive
+                || session.edgeHung
+                || session.edgeMinimizeRequested
+                || isNativeOplusWindow(session)) {
+            return false;
+        }
+
+        long now = SystemClock.elapsedRealtime();
+
+        if (session.autoMiniPending
+                || now - session.lastAutoMiniRequestElapsed
+                < AUTO_MINI_REQUEST_COOLDOWN_MS) {
+            return false;
+        }
+
+        session.autoMiniPending = true;
+        session.lastAutoMiniRequestElapsed = now;
+        session.taskObject = task;
+        session.lastSeenElapsed = now;
+
+        log(
+                "OPLUS_AUTO_MINI_ARM",
+                "pkg=" + session.packageName
+                        + " taskId=" + session.taskId
+                        + " nextPkg=" + nextPackage);
+
+        return true;
+    }
+
+    void requestAutoMiniWindow(
+            Object task,
+            String reason
+    ) {
+        Session session = sessionForTask(task);
+
+        if (session == null
+                || !session.active
+                || !session.autoMiniPending) {
+            return;
+        }
+
+        handler.post(
+                () -> performAutoMiniWindow(
+                        session,
+                        reason));
+    }
+
+    private void performAutoMiniWindow(
+            Session session,
+            String reason
+    ) {
+        if (!running
+                || session == null
+                || !session.active
+                || !session.autoMiniPending
+                || keyguardShowing
+                || !GuardConfig.bool(
+                ConfigKeys.AUTO_MINI_ON_BACKGROUND)
+                || !GuardConfig.foregroundPackage(
+                session.packageName)) {
+            if (session != null) {
+                session.autoMiniPending = false;
+            }
+            return;
+        }
+
+        if (isNativeOplusWindow(session)) {
+            waitForFlexibleThenMinimize(
+                    session,
+                    reason,
+                    0);
+            return;
+        }
+
+        resolveAutoMiniApis();
+
+        Object manager = oplusActivityTaskManager;
+        Method toggle = toggleFlexibleWindow;
+
+        if (manager == null || toggle == null) {
+            session.autoMiniPending = false;
+            log(
+                    "OPLUS_AUTO_MINI_FAILED",
+                    "pkg=" + session.packageName
+                            + " taskId=" + session.taskId
+                            + " stage=enter-flexible"
+                            + " reason=no-toggle-api");
+            return;
+        }
+
+        long identity = Binder.clearCallingIdentity();
+
+        try {
+            Object result =
+                    toggle.invoke(
+                            manager,
+                            null,
+                            session.taskId,
+                            true,
+                            true);
+
+            if (result instanceof Boolean
+                    && Boolean.FALSE.equals(result)) {
+                session.autoMiniPending = false;
+                log(
+                        "OPLUS_AUTO_MINI_FAILED",
+                        "pkg=" + session.packageName
+                                + " taskId=" + session.taskId
+                                + " stage=enter-flexible"
+                                + " result=false");
+                return;
+            }
+
+            log(
+                    "OPLUS_AUTO_MINI_ENTER",
+                    "pkg=" + session.packageName
+                            + " taskId=" + session.taskId
+                            + " result=" + result
+                            + " reason=" + reason);
+        } catch (Throwable t) {
+            session.autoMiniPending = false;
+            log(
+                    "OPLUS_AUTO_MINI_FAILED",
+                    "pkg=" + session.packageName
+                            + " taskId=" + session.taskId
+                            + " stage=enter-flexible"
+                            + " error="
+                            + t.getClass().getSimpleName());
+            return;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+
+        waitForFlexibleThenMinimize(
+                session,
+                reason,
+                0);
+    }
+
+    private void waitForFlexibleThenMinimize(
+            Session session,
+            String reason,
+            int attempt
+    ) {
+        handler.postDelayed(
+                () -> {
+                    if (!running
+                            || session == null
+                            || !session.active
+                            || !session.autoMiniPending
+                            || keyguardShowing) {
+                        if (session != null && keyguardShowing) {
+                            session.autoMiniPending = false;
+                        }
+                        return;
+                    }
+
+                    refreshSessionState(
+                            session,
+                            "auto-mini-wait-" + attempt);
+
+                    if (isNativeOplusWindow(session)
+                            && requestSystemMiniIcon(
+                            session,
+                            reason)) {
+                        session.autoMiniPending = false;
+                        return;
+                    }
+
+                    if (attempt >= AUTO_MINI_MAX_RETRIES) {
+                        session.autoMiniPending = false;
+                        log(
+                                "OPLUS_AUTO_MINI_FAILED",
+                                "pkg=" + session.packageName
+                                        + " taskId=" + session.taskId
+                                        + " stage=minimize"
+                                        + " attempts=" + attempt);
+                        return;
+                    }
+
+                    waitForFlexibleThenMinimize(
+                            session,
+                            reason,
+                            attempt + 1);
+                },
+                AUTO_MINI_RETRY_DELAY_MS);
+    }
+
+    private boolean requestSystemMiniIcon(
+            Session session,
+            String reason
+    ) {
+        resolveAutoMiniApis();
+
+        Object manager = oplusZoomWindowManager;
+        Method mini = startMiniZoomFromZoom;
+
+        if (manager == null || mini == null) {
+            return false;
+        }
+
+        long identity = Binder.clearCallingIdentity();
+
+        try {
+            Object result =
+                    mini.invoke(
+                            manager,
+                            OPLUS_MINI_REASON);
+
+            if (result instanceof Boolean
+                    && Boolean.FALSE.equals(result)) {
+                return false;
+            }
+
+            log(
+                    "OPLUS_AUTO_MINI_ICON",
+                    "pkg=" + session.packageName
+                            + " taskId=" + session.taskId
+                            + " result=" + result
+                            + " reason=" + reason);
+            return true;
+        } catch (Throwable t) {
+            log(
+                    "OPLUS_AUTO_MINI_ICON_FAIL",
+                    "pkg=" + session.packageName
+                            + " taskId=" + session.taskId
+                            + " error="
+                            + t.getClass().getSimpleName());
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
+    private synchronized void resolveAutoMiniApis() {
+        if (toggleFlexibleWindow == null) {
+            try {
+                Class<?> type =
+                        loadSystemClass(
+                                "android.app.OplusActivityTaskManager");
+                Object manager =
+                        type.getMethod(
+                                "getInstance")
+                                .invoke(null);
+                Method toggle =
+                        type.getMethod(
+                                "toggleFlexibleWindow",
+                                IBinder.class,
+                                int.class,
+                                boolean.class,
+                                boolean.class);
+                toggle.setAccessible(true);
+                oplusActivityTaskManager = manager;
+                toggleFlexibleWindow = toggle;
+
+                log(
+                        "OPLUS_AUTO_MINI_API",
+                        "flexible="
+                                + toggle.toGenericString());
+            } catch (Throwable t) {
+                log(
+                        "OPLUS_AUTO_MINI_API_MISSING",
+                        "flexible="
+                                + t.getClass().getSimpleName());
+            }
+        }
+
+        if (startMiniZoomFromZoom == null) {
+            try {
+                Class<?> type =
+                        loadSystemClass(
+                                "com.oplus.zoomwindow.OplusZoomWindowManager");
+                Object manager =
+                        type.getMethod(
+                                "getInstance")
+                                .invoke(null);
+                Method mini =
+                        type.getMethod(
+                                "startMiniZoomFromZoom",
+                                int.class);
+                mini.setAccessible(true);
+                oplusZoomWindowManager = manager;
+                startMiniZoomFromZoom = mini;
+
+                log(
+                        "OPLUS_AUTO_MINI_API",
+                        "mini="
+                                + mini.toGenericString());
+            } catch (Throwable t) {
+                log(
+                        "OPLUS_AUTO_MINI_API_MISSING",
+                        "mini="
+                                + t.getClass().getSimpleName());
+            }
+        }
     }
 
     boolean shouldSuppressRecentsPause(
@@ -722,7 +1053,8 @@ final class OplusFlexibleWindowController {
             return false;
         }
 
-        return session.lockKeepAlive
+        return session.autoMiniPending
+                || session.lockKeepAlive
                 || session.edgeHung
                 || isNativeOplusWindow(
                 session);
@@ -1255,11 +1587,13 @@ final class OplusFlexibleWindowController {
 
         volatile boolean active = true;
         volatile boolean oemReportedFlexible;
+        volatile boolean autoMiniPending;
         volatile boolean edgeMinimizeRequested;
         volatile boolean edgeHung;
         volatile boolean lockKeepAlive;
 
         volatile long lastOplusStateElapsed;
+        volatile long lastAutoMiniRequestElapsed;
         volatile long lastSeenElapsed =
                 SystemClock.elapsedRealtime();
 
