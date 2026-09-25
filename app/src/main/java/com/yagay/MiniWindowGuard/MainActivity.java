@@ -127,7 +127,7 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 statusLine(
-                        "LSPosed 固定作用域：system + com.android.systemui"));
+                        "LSPosed 固定作用域：system + com.android.launcher"));
 
         addSwitch(
                 card,
@@ -233,7 +233,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "直接系统小图标后台播放",
-                        "勾选的 App 离开前台时先预通知 SystemUI。OPlus Zoom session 一建立，立即由系统自己的 ZoomStateManager 完整进入 FloatHandle；不再等待小窗显示后再二次最小化。"));
+                        "勾选的 App 离开前台时先通知系统桌面。OPlus Zoom session 一建立，直接调用桌面小窗自身的 requestFloatZoomFromOutside 原生最小化链，生成系统 FloatHandle 小图标。"));
 
         Button support =
                 button(
