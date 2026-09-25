@@ -19,7 +19,7 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 1;
+    static final int BOOTSTRAP_API = 2;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
@@ -288,6 +288,18 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
+    boolean isBackgroundPlaybackPackage(
+            String packageName
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "isBackgroundPlaybackPackage",
+                new Class<?>[]{String.class},
+                packageName);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
     boolean wantsPackage(String packageName) {
         Object value = safeInvoke(
                 currentEngine(),
@@ -338,6 +350,45 @@ final class EngineBridge {
                 },
                 taskId,
                 event);
+    }
+
+    boolean shouldSuppressBackgroundPause(
+            Object task,
+            String resumingPackage,
+            boolean userLeaving,
+            boolean uiSleeping,
+            String reason,
+            boolean finishing
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldSuppressBackgroundPause",
+                new Class<?>[]{
+                        Object.class,
+                        String.class,
+                        boolean.class,
+                        boolean.class,
+                        String.class,
+                        boolean.class
+                },
+                task,
+                resumingPackage,
+                userLeaving,
+                uiSleeping,
+                reason,
+                finishing);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    void onFocusedActivity(
+            Object activityRecord
+    ) {
+        safeInvoke(
+                currentEngine(),
+                "onFocusedActivity",
+                new Class<?>[]{Object.class},
+                activityRecord);
     }
 
     boolean shouldSuppressRecentsPause(
@@ -394,6 +445,18 @@ final class EngineBridge {
                 "shouldKeepTaskAwake",
                 new Class<?>[]{Object.class},
                 task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    boolean shouldBlockTaskRemoval(
+            String packageName
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldBlockTaskRemoval",
+                new Class<?>[]{String.class},
+                packageName);
         return value instanceof Boolean
                 && (Boolean) value;
     }
