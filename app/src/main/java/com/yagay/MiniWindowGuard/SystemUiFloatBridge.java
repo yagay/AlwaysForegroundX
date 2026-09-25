@@ -12,6 +12,7 @@ import android.util.Log;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.List;
 
 import io.github.libxposed.api.XposedModule;
@@ -43,6 +44,7 @@ final class SystemUiFloatBridge {
     private final XposedModule module;
 
     private volatile Object zoomStateManager;
+    private volatile ClassLoader systemUiClassLoader;
     private volatile Context context;
     private volatile Handler handler;
     private volatile BroadcastReceiver systemUiReceiver;
@@ -54,6 +56,8 @@ final class SystemUiFloatBridge {
     }
 
     void install(ClassLoader loader) {
+        systemUiClassLoader = loader;
+
         if (loader == null) {
             uiDiag("FLOAT_BRIDGE_INSTALL_FAIL", "reason=null-classloader");
             return;
@@ -122,6 +126,8 @@ final class SystemUiFloatBridge {
                     }
 
                     registerReceiverIfNeeded();
+                    resolveZoomStateManager(
+                            "systemui-onCreate");
 
                     uiDiag(
                             "FLOAT_SYSTEMUI_READY",
@@ -415,6 +421,12 @@ final class SystemUiFloatBridge {
                 zoomStateManager;
 
         if (manager == null) {
+            manager =
+                    resolveZoomStateManager(
+                            "attempt-" + request.attempts);
+        }
+
+        if (manager == null) {
             retry(
                     request,
                     "manager-null");
@@ -534,6 +546,229 @@ final class SystemUiFloatBridge {
         retry(
                 request,
                 "wait-float-handle");
+    }
+
+    private Object resolveZoomStateManager(
+            String source
+    ) {
+        Object cached = zoomStateManager;
+        if (cached != null) {
+            return cached;
+        }
+
+        ClassLoader loader =
+                systemUiClassLoader;
+
+        if (loader == null) {
+            return null;
+        }
+
+        Object manager = null;
+        Object root = null;
+
+        try {
+            Class<?> rootClass =
+                    Class.forName(
+                            "com.oplus.zoom.ZoomRootTaskManager",
+                            false,
+                            loader);
+
+            root =
+                    resolveSingleton(
+                            rootClass);
+
+            if (root != null) {
+                manager =
+                        invokeNoArg(
+                                root,
+                                "getZoomStateManager");
+
+                if (manager == null) {
+                    manager =
+                            fieldValue(
+                                    root,
+                                    "mZoomStateManager");
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        if (manager == null) {
+            try {
+                Class<?> managerClass =
+                        Class.forName(
+                                "com.oplus.zoom.zoomstate.ZoomStateManager",
+                                false,
+                                loader);
+
+                manager =
+                        resolveSingleton(
+                                managerClass);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        if (manager != null) {
+            onManagerReady(
+                    manager,
+                    null,
+                    "resolver:" + source);
+
+            uiDiag(
+                    "FLOAT_MANAGER_RESOLVED",
+                    "source=" + source
+                            + " class="
+                            + manager.getClass()
+                            .getName()
+                            + " viaRoot="
+                            + (root != null));
+
+            return manager;
+        }
+
+        if (source != null
+                && (source.endsWith("-0")
+                || source.endsWith("-10")
+                || source.endsWith("-20")
+                || source.endsWith("-30")
+                || source.endsWith("-40")
+                || source.endsWith("-50")
+                || "systemui-onCreate".equals(
+                source))) {
+            uiDiag(
+                    "FLOAT_MANAGER_RESOLVE_WAIT",
+                    "source=" + source
+                            + " root="
+                            + (root != null));
+        }
+
+        return null;
+    }
+
+    private Object resolveSingleton(
+            Class<?> type
+    ) {
+        if (type == null) {
+            return null;
+        }
+
+        String[] factories = {
+                "getInstance",
+                "getInstanceNoCreate",
+                "getInstanceIfExists",
+                "getINSTANCE",
+                "getsInstance"
+        };
+
+        for (String name :
+                factories) {
+            for (Method method :
+                    type.getDeclaredMethods()) {
+                if (!name.equals(
+                        method.getName())
+                        || !Modifier.isStatic(
+                        method.getModifiers())) {
+                    continue;
+                }
+
+                Class<?>[] params =
+                        method.getParameterTypes();
+
+                try {
+                    method.setAccessible(true);
+
+                    if (params.length == 0) {
+                        Object value =
+                                method.invoke(
+                                        null);
+
+                        if (value != null) {
+                            return value;
+                        }
+                    } else if (params.length == 1
+                            && context != null
+                            && params[0].isInstance(
+                            context)) {
+                        Object value =
+                                method.invoke(
+                                        null,
+                                        context);
+
+                        if (value != null) {
+                            return value;
+                        }
+                    } else if (params.length == 1
+                            && context != null
+                            && Context.class
+                            .isAssignableFrom(
+                                    params[0])) {
+                        Object value =
+                                method.invoke(
+                                        null,
+                                        context);
+
+                        if (value != null) {
+                            return value;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        String[] fields = {
+                "sInstance",
+                "mInstance",
+                "INSTANCE",
+                "instance"
+        };
+
+        for (String name :
+                fields) {
+            Object value =
+                    staticFieldValue(
+                            type,
+                            name);
+
+            if (value != null) {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static Object staticFieldValue(
+            Class<?> type,
+            String name
+    ) {
+        Class<?> current = type;
+
+        while (current != null) {
+            try {
+                Field field =
+                        current.getDeclaredField(
+                                name);
+
+                if (!Modifier.isStatic(
+                        field.getModifiers())) {
+                    current =
+                            current.getSuperclass();
+                    continue;
+                }
+
+                field.setAccessible(true);
+                return field.get(
+                        null);
+            } catch (NoSuchFieldException ignored) {
+                current =
+                        current.getSuperclass();
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private void retry(
