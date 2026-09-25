@@ -19,6 +19,7 @@ public final class GuardApp extends Application {
     private static final String[] BOOLEAN_KEYS = {
             ConfigKeys.MASTER_ENABLED,
             ConfigKeys.ENGINE_AUTO_RELOAD,
+            ConfigKeys.AUTO_MINI_ON_BACKGROUND,
             ConfigKeys.SYSTEM_IMPORTANCE_TOP,
             ConfigKeys.SYSTEM_HAS_RESUMED,
             ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL,
