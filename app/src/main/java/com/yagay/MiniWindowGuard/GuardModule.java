@@ -85,7 +85,7 @@ public final class GuardModule extends XposedModule {
     public void onPackageLoaded(
             XposedModuleInterface.PackageLoadedParam param
     ) {
-        if (!"com.android.systemui".equals(
+        if (!"com.android.launcher".equals(
                 param.getPackageName())
                 || !param.isFirstPackage()) {
             return;
@@ -103,12 +103,12 @@ public final class GuardModule extends XposedModule {
             log(
                     Log.INFO,
                     TAG,
-                    "SYSTEMUI_SCOPE native FloatHandle bridge installed");
+                    "LAUNCHER_SCOPE native FloatHandle bridge installed");
         } catch (Throwable t) {
             log(
                     Log.ERROR,
                     TAG,
-                    "SYSTEMUI_SCOPE FloatHandle bridge failed",
+                    "LAUNCHER_SCOPE FloatHandle bridge failed",
                     t);
         }
     }
@@ -1213,7 +1213,7 @@ public final class GuardModule extends XposedModule {
                 || id < 0
                 || packageName == null) {
             diag(
-                    "BACKGROUND_SYSTEMUI_FLOAT_FAIL",
+                    "BACKGROUND_LAUNCHER_FLOAT_FAIL",
                     "pkg=" + packageName
                             + " taskId=" + id
                             + " source=" + source
@@ -1231,7 +1231,7 @@ public final class GuardModule extends XposedModule {
                                     .ACTION_REQUEST_FLOAT);
 
             request.setPackage(
-                    "com.android.systemui");
+                    "com.android.launcher");
 
             request.putExtra(
                     SystemUiFloatBridge.EXTRA_TASK_ID,
@@ -1248,7 +1248,7 @@ public final class GuardModule extends XposedModule {
                     request);
 
             diag(
-                    "BACKGROUND_SYSTEMUI_FLOAT_ARM",
+                    "BACKGROUND_LAUNCHER_FLOAT_ARM",
                     "pkg=" + packageName
                             + " taskId=" + id
                             + " source=" + source);
