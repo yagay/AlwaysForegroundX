@@ -127,7 +127,7 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 statusLine(
-                        "LSPosed 固定作用域：system / system_server"));
+                        "LSPosed 固定作用域：system + com.android.systemui"));
 
         addSwitch(
                 card,
@@ -232,8 +232,8 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 detailBlock(
-                        "系统小窗后台播放",
-                        "勾选的 App 离开前台时直接按 OxygenOS Launcher 的原生方式重新进入系统小窗，系统确认后再缩成 FloatHandle 小图标；小窗、小图标和锁屏继续复用现有保活。"));
+                        "直接系统小图标后台播放",
+                        "勾选的 App 离开前台时先预通知 SystemUI。OPlus Zoom session 一建立，立即由系统自己的 ZoomStateManager 完整进入 FloatHandle；不再等待小窗显示后再二次最小化。"));
 
         Button support =
                 button(
