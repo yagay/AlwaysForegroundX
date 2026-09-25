@@ -159,6 +159,29 @@ public final class HotReloadEngine {
                 task);
     }
 
+    public boolean shouldAutoMiniOnFocusLoss(
+            Object task,
+            String nextPackage
+    ) {
+        OplusFlexibleWindowController current = controller;
+        return current != null
+                && current.shouldAutoMiniOnFocusLoss(
+                task,
+                nextPackage);
+    }
+
+    public void requestAutoMiniWindow(
+            Object task,
+            String reason
+    ) {
+        OplusFlexibleWindowController current = controller;
+        if (current != null) {
+            current.requestAutoMiniWindow(
+                    task,
+                    reason);
+        }
+    }
+
     public void preArmLockKeepAlive(String reason) {
         OplusFlexibleWindowController current = controller;
         if (current != null) {
