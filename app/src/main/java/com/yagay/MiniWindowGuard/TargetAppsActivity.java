@@ -130,9 +130,9 @@ public final class TargetAppsActivity extends Activity {
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
                         : MODE_BACKGROUND_PLAYBACK.equals(mode)
                         ? "勾选后可为每个 App 独立选择：自动检测 / 始终强制 / 仅原生。"
-                        + "自动检测恢复 5.4.5 的简单策略：只有播放器 pause/stop 是由 Activity onPause/onStop 生命周期同步触发时才阻止，不主动恢复、不判断播放器实例。"
-                        + "这样原生能后台播放的页面不会被额外干预；主页预加载、剧集切换和下一集继续由 App 自己管理。用户手动暂停仍正常放行。"
-                        + "首次授权作用域后请重新打开目标 App。"
+                        + "自动/强制模式离开前台时会优先把当前 Task 转成 OxygenOS 真实 FlexibleWindow，并立即最小化成浮动图标继续播放。"
+                        + "播放器仍采用 5.4.5 的生命周期保护：只阻止 onPause/onStop 同步触发的 pause/stop，不主动恢复、不判断播放器实例，剧集切换和下一集由 App 自己管理。"
+                        + "仅原生模式不强制转小窗，也不阻止系统 STOP。首次授权作用域后请重新打开目标 App。"
                         : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
                         + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
         help.setTextSize(13.5f);
