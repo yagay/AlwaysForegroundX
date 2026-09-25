@@ -1,5 +1,18 @@
 # MiniWindowGuard / 小窗守护
 
+## 5.5.5 — 直接调用 OxygenOS 原生小窗与系统图标
+
+后台播放自动小窗路径再次简化，不再由 MiniWindowGuard 构造小窗参数或模拟系统样式：
+
+- 前台播放 App 离开前台后，调用 `android.app.OplusActivityTaskManager.toggleFlexibleWindow(...)`，把现有 Task 交给 OxygenOS 自己切换成原生 FlexibleWindow；
+- 不再使用 `startActivityFromRecents + windowingMode=100 + zoom_task_id` 人工拼接小窗，因此尺寸、圆角、标题栏、动画、输入和恢复行为都由系统原生实现；
+- 等系统确认 Task 已进入真实 FlexibleWindow 后，调用 `startMiniZoomFromZoom(1)`，由 OxygenOS 自己缩成系统 mini/FloatHandle 图标；
+- 删除多入口猜测：不再尝试多个内部 `minimizeFlexibleTask/onRecentClicked/notifyFlexibleTaskEvent` 反射组合；
+- MiniWindowGuard 只负责触发系统流程，系统负责窗口和图标形态；
+- 播放器保护继续沿用 5.4.5 生命周期策略，不主动恢复播放、不接管剧集和播放列表。
+
+本版修改 system_server 固定 Bootstrap 逻辑，Bootstrap API 升到 10。安装后需要完整重启手机一次。
+
 ## 5.5.4 — 退后台自动转真实 OPlus 图标小窗
 
 后台播放策略不再把普通 fullscreen Task 留在后台再伪装前台，也不再使用 5.5.3 的“后台 Activity Resume 后 moveTaskToBack”补偿路径。自动/强制模式改为复用 OxygenOS 自己的 FlexibleWindow：
