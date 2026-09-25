@@ -45,6 +45,7 @@ public final class GuardModule extends XposedModule {
     private volatile ClassLoader systemClassLoader;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
+    private volatile Handler systemHandler;
     private volatile String processName = "";
 
     @Override
@@ -135,6 +136,8 @@ public final class GuardModule extends XposedModule {
                 new Handler(
                         Looper.getMainLooper());
 
+        systemHandler = handler;
+
         Context context =
                 resolveSystemUiContext(
                         systemClassLoader);
@@ -151,6 +154,8 @@ public final class GuardModule extends XposedModule {
         installOplusFlexibleWindowHooks(
                 systemClassLoader);
         installOplusEdgeKeepaliveHooks(
+                systemClassLoader);
+        installBackgroundStopKeepaliveHook(
                 systemClassLoader);
         installOplusLockKeepaliveHooks(
                 systemClassLoader);
@@ -1400,42 +1405,81 @@ public final class GuardModule extends XposedModule {
                     Object result =
                             chain.proceed();
 
-                    if (!enabled()) {
-                        return result;
-                    }
+                    try {
+                        if (!enabled()) {
+                            return result;
+                        }
 
-                    List<Object> args =
-                            chain.getArgs();
+                        List<Object> args =
+                                chain.getArgs();
 
-                    if (args.isEmpty()
-                            || !"RESUMED".equals(
-                            String.valueOf(
-                                    args.get(0)))) {
-                        return result;
-                    }
+                        if (args.isEmpty()
+                                || !"RESUMED".equals(
+                                String.valueOf(
+                                        args.get(0)))) {
+                            return result;
+                        }
 
-                    Object activityRecord =
-                            chain.getThisObject();
+                        Object activityRecord =
+                                chain.getThisObject();
 
-                    String pkg =
-                            activityPackage(
-                                    activityRecord);
+                        String pkg =
+                                activityPackage(
+                                        activityRecord);
 
-                    EngineBridge current = engine;
+                        EngineBridge current =
+                                engine;
 
-                    if (current != null
-                            && current.wantsPackage(pkg)) {
-                        diag(
-                                "OPLUS_ACTIVITY_RESUMED",
-                                "pkg=" + pkg
-                                        + " activity="
-                                        + fieldValue(
-                                        activityRecord,
-                                        "mActivityComponent"));
+                        boolean returnToBackground =
+                                current != null
+                                        && current
+                                        .isBackgroundPlaybackPackage(
+                                                pkg)
+                                        && consumeBackgroundSelfLaunchMarker(
+                                                activityRecord);
 
-                        current.capture(
-                                activityRecord,
-                                pkg);
+                        if (current != null
+                                && current.wantsPackage(pkg)) {
+                            diag(
+                                    "OPLUS_ACTIVITY_RESUMED",
+                                    "pkg=" + pkg
+                                            + " activity="
+                                            + fieldValue(
+                                            activityRecord,
+                                            "mActivityComponent")
+                                            + " backgroundSelfLaunch="
+                                            + returnToBackground);
+
+                            current.capture(
+                                    activityRecord,
+                                    pkg);
+                        }
+
+                        if (returnToBackground) {
+                            Object task =
+                                    invokeNoArg(
+                                            activityRecord,
+                                            "getTask");
+
+                            Handler handler =
+                                    systemHandler;
+
+                            if (task != null
+                                    && handler != null) {
+                                handler.post(
+                                        () ->
+                                                returnTaskToBackgroundAfterResume(
+                                                        task,
+                                                        activityRecord,
+                                                        pkg));
+                            }
+                        }
+                    } catch (Throwable t) {
+                        log(
+                                Log.WARN,
+                                TAG,
+                                "SYSTEM_SCOPE ActivityRecord.setState observer fail-open",
+                                t);
                     }
 
                     return result;
@@ -1455,6 +1499,237 @@ public final class GuardModule extends XposedModule {
                         "SYSTEM_SCOPE skipped ActivityRecord.setState observer error="
                                 + t);
             }
+        }
+    }
+
+    private void installBackgroundStopKeepaliveHook(
+            ClassLoader loader
+    ) {
+        Class<?> record =
+                load(
+                        loader,
+                        "com.android.server.wm.ActivityRecord");
+
+        if (record == null) return;
+
+        for (Method method :
+                record.getDeclaredMethods()) {
+            if (!"stopIfPossible"
+                    .equals(method.getName())
+                    || method.getReturnType()
+                    != void.class) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+
+                String hookKey =
+                        "background-stop:"
+                                + method.toGenericString();
+
+                if (!installedHooks.add(hookKey)) {
+                    continue;
+                }
+
+                hook(method).intercept(chain -> {
+                    try {
+                        Object activityRecord =
+                                chain.getThisObject();
+
+                        String pkg =
+                                activityPackage(
+                                        activityRecord);
+
+                        EngineBridge current =
+                                engine;
+
+                        if (current == null
+                                || !current
+                                .isBackgroundPlaybackPackage(
+                                        pkg)) {
+                            return chain.proceed();
+                        }
+
+                        Object task =
+                                invokeNoArg(
+                                        activityRecord,
+                                        "getTask");
+
+                        boolean finishing =
+                                Boolean.TRUE.equals(
+                                        fieldValue(
+                                                activityRecord,
+                                                "finishing"));
+
+                        if (task == null
+                                || !current
+                                .shouldBlockBackgroundStop(
+                                        task,
+                                        finishing)) {
+                            return chain.proceed();
+                        }
+
+                        invokeNoArg(
+                                activityRecord,
+                                "resumeKeyDispatchingLocked");
+
+                        diag(
+                                "BACKGROUND_STOP_BLOCK",
+                                "taskId="
+                                        + taskId(task)
+                                        + " pkg="
+                                        + pkg
+                                        + " activity="
+                                        + fieldValue(
+                                        activityRecord,
+                                        "mActivityComponent"));
+
+                        return null;
+                    } catch (Throwable t) {
+                        log(
+                                Log.WARN,
+                                TAG,
+                                "BACKGROUND_STOP_GUARD fail-open",
+                                t);
+
+                        return chain.proceed();
+                    }
+                });
+
+                log(
+                        Log.INFO,
+                        TAG,
+                        "SYSTEM_SCOPE installed background stop guard "
+                                + method.toGenericString());
+            } catch (Throwable t) {
+                installedHooks.remove(
+                        hookKey(method));
+            }
+        }
+    }
+
+    private static String hookKey(
+            Method method
+    ) {
+        return "background-stop:"
+                + (method == null
+                ? ""
+                : method.toGenericString());
+    }
+
+    private boolean consumeBackgroundSelfLaunchMarker(
+            Object activityRecord
+    ) {
+        try {
+            Object value =
+                    fieldValue(
+                            activityRecord,
+                            "intent");
+
+            if (!(value instanceof Intent)) {
+                value =
+                        fieldValue(
+                                activityRecord,
+                                "mIntent");
+            }
+
+            if (!(value instanceof Intent intent)
+                    || !intent.getBooleanExtra(
+                    PlaybackControlContract
+                            .EXTRA_BACKGROUND_SELF_LAUNCH,
+                    false)) {
+                return false;
+            }
+
+            intent.removeExtra(
+                    PlaybackControlContract
+                            .EXTRA_BACKGROUND_SELF_LAUNCH);
+
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private void returnTaskToBackgroundAfterResume(
+            Object task,
+            Object activityRecord,
+            String pkg
+    ) {
+        try {
+            if (task == null
+                    || activityRecord == null
+                    || pkg == null
+                    || pkg.isBlank()) {
+                return;
+            }
+
+            Object state =
+                    fieldValue(
+                            activityRecord,
+                            "mState");
+
+            if (state != null
+                    && !"RESUMED".equals(
+                    String.valueOf(state))) {
+                diag(
+                        "BACKGROUND_SELF_LAUNCH_RETURN_SKIP",
+                        "pkg=" + pkg
+                                + " taskId="
+                                + taskId(task)
+                                + " state="
+                                + state);
+                return;
+            }
+
+            Object rootTask =
+                    invokeNoArg(
+                            task,
+                            "getRootTask");
+
+            if (rootTask == null) {
+                rootTask = task;
+            }
+
+            Object moved =
+                    invokeMethod(
+                            rootTask,
+                            "moveTaskToBack",
+                            task);
+
+            boolean success =
+                    Boolean.TRUE.equals(
+                            moved);
+
+            if (!success) {
+                invokeMethod(
+                        rootTask,
+                        "moveToBack",
+                        "MiniWindowGuard-background-self-launch",
+                        task);
+
+                focusTaskBehind(task);
+            }
+
+            diag(
+                    "BACKGROUND_SELF_LAUNCH_RETURN",
+                    "pkg=" + pkg
+                            + " taskId="
+                            + taskId(task)
+                            + " activity="
+                            + fieldValue(
+                            activityRecord,
+                            "mActivityComponent")
+                            + " moveTaskToBack="
+                            + moved);
+        } catch (Throwable t) {
+            log(
+                    Log.WARN,
+                    TAG,
+                    "BACKGROUND_SELF_LAUNCH_RETURN fail-open pkg="
+                            + pkg,
+                    t);
         }
     }
 
