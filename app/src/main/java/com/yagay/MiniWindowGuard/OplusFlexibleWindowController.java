@@ -712,7 +712,10 @@ final class OplusFlexibleWindowController {
         if (session == null
                 || !session.active
                 || !GuardConfig.backgroundPlaybackPackage(
-                session.packageName)) {
+                session.packageName)
+                || GuardConfig.PLAYBACK_MODE_NATIVE.equals(
+                GuardConfig.backgroundPlaybackMode(
+                        session.packageName))) {
             return false;
         }
 
