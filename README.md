@@ -1,21 +1,5 @@
 # MiniWindowGuard / 小窗守护
 
-## 5.2.1 — 切后台自动系统小窗 + FloatHandle
-
-在 5.2.0 锁屏播放与系统 FloatHandle 保活逻辑不变的基础上，新增“切后台自动系统小窗”。
-
-- 仅作用于“始终前台应用”名单；
-- 普通全屏 App 的焦点真正切到另一个包时才触发，锁屏/焦点为空不触发；
-- 第一阶段调用 OPlus `toggleFlexibleWindow`，把现有 Task 交给系统 FlexibleWindow；
-- 等待系统回调/Task 状态确认已经进入原生小窗；
-- 第二阶段调用系统 `OplusZoomWindowManager.startMiniZoomFromZoom(7)`，缩成 OxygenOS 自己的 Mini/FloatHandle 小图标；
-- 整个过程不创建 Overlay、VirtualDisplay 或自定义小窗；
-- 5.2.0 的 `onScreenLockedChanged → lockKeepAlive → sleep/freeze/stopUid` 锁屏播放链保持不变；
-- 进入 FlexibleWindow 的过渡期只做短暂进程保护，不把普通后台并入独立 BACKGROUND_PROTECTED 状态；
-- 新增诊断事件：`OPLUS_AUTO_MINI_ARM`、`OPLUS_AUTO_MINI_ENTER`、`OPLUS_AUTO_MINI_ICON`、`OPLUS_AUTO_MINI_FAILED`。
-
-本版本修改了 system_server Bootstrap 的现有 `DisplayContent.setFocusedApp` Hook，首次安装需要完整重启一次。
-
 ## 5.2.0 — 状态驱动生命周期守护
 
 5.2.0 不再依赖“锁屏前提前几毫秒”或“动画结束后再补救”的时序方案。

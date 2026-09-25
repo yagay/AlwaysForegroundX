@@ -32,7 +32,6 @@ import java.util.concurrent.Executors;
 public final class TargetAppsActivity extends Activity {
     static final String EXTRA_MODE = "mode";
     static final String MODE_FOREGROUND = "foreground";
-    static final String MODE_BACKGROUND_PLAYBACK = "background_playback";
     static final String MODE_FORCE_SUPPORT = "force_support";
 
     private final ExecutorService executor =
@@ -59,16 +58,13 @@ public final class TargetAppsActivity extends Activity {
                 ? MODE_FOREGROUND
                 : getIntent().getStringExtra(EXTRA_MODE);
 
-        if (!MODE_FORCE_SUPPORT.equals(mode)
-                && !MODE_BACKGROUND_PLAYBACK.equals(mode)) {
+        if (!MODE_FORCE_SUPPORT.equals(mode)) {
             mode = MODE_FOREGROUND;
         }
 
         preferenceKey =
                 MODE_FORCE_SUPPORT.equals(mode)
                         ? ConfigKeys.FORCE_SUPPORT_PACKAGES
-                        : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES
                         : ConfigKeys.FOREGROUND_PACKAGES;
 
         selected.addAll(
@@ -111,9 +107,7 @@ public final class TargetAppsActivity extends Activity {
         title.setText(
                 MODE_FORCE_SUPPORT.equals(mode)
                         ? "强制允许一加小窗"
-                        : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "后台播放应用"
-                        : "小窗后台应用");
+                        : "始终前台应用");
         title.setTextSize(26);
         title.setTypeface(
                 Typeface.DEFAULT,
@@ -126,9 +120,8 @@ public final class TargetAppsActivity extends Activity {
                 MODE_FORCE_SUPPORT.equals(mode)
                         ? "勾选后仅放行该 App 的 OPlus FlexibleWindow 支持/黑名单判断。"
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
-                        : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "普通后台播放名单。App 保持普通全屏任务，切到桌面、其他 App 或锁屏时走普通后台播放保护，不要求进入系统小窗。"
-                        : "小窗后台名单。App 切到后台时自动进入 OxygenOS 原生 FlexibleWindow，并缩成系统 FloatHandle 小图标；进入小窗后继续使用 5.2.0 的小窗、小图标和锁屏播放保护。");
+                        : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
+                        + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
         help.setTextSize(13.5f);
         help.setTextColor(0xFF666A73);
         help.setPadding(
