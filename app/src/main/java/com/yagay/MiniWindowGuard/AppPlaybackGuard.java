@@ -23,10 +23,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * system_server is allowed to complete Activity lifecycle transitions normally.
  * Per-app playback policy can be automatic, forced or native-only. Automatic
- * mode learns per player instance: native background playback is trusted only
- * while the player still reports playing; otherwise it is recovered and forced.
- * Background self-launches can stay inside the task without moving it to front.
- * Manual pause remains untouched.
+ * mode freezes the exact player that was really playing when the app leaves the
+ * foreground. Preloaded/feed players cannot replace that target. Automatic
+ * recovery requires an explicit lifecycle pause on the locked player; lack of
+ * a pause signal never triggers play() on another candidate. Background episode
+ * handoff is allowed only after the old player is no longer playing and the new
+ * player reports active. Manual pause remains untouched.
  */
 final class AppPlaybackGuard {
     private static final String TAG =
@@ -71,6 +73,10 @@ final class AppPlaybackGuard {
     private volatile boolean appForeground;
     private volatile long foregroundStateToken;
     private volatile WeakReference<Object> currentPlayer =
+            new WeakReference<>(null);
+    private volatile WeakReference<Object> backgroundPlayer =
+            new WeakReference<>(null);
+    private volatile WeakReference<Object> lastPlaySignalPlayer =
             new WeakReference<>(null);
 
     private final BroadcastReceiver controlReceiver =
@@ -666,6 +672,8 @@ final class AppPlaybackGuard {
                                 chain.getThisObject();
                         Object tracked =
                                 currentPlayer.get();
+                        Object locked =
+                                backgroundPlayer.get();
 
                         boolean lifecycleRelated =
                                 lifecyclePauseActive()
@@ -674,17 +682,31 @@ final class AppPlaybackGuard {
                         if (!lifecycleRelated) {
                             if (tracked == player) {
                                 lastPlaySignal = false;
+                                lastPlaySignalPlayer =
+                                        new WeakReference<>(
+                                                null);
                             }
                             return chain.proceed();
                         }
 
-                        if (tracked != null
-                                && tracked != player) {
+                        if (locked != null
+                                && locked != player) {
+                            log(
+                                    Log.INFO,
+                                    "APP_PLAYER_BACKGROUND_NON_TARGET",
+                                    "pkg=" + packageName
+                                            + " player="
+                                            + className
+                                            + " method="
+                                            + method.getName());
                             return chain.proceed();
                         }
 
-                        if (tracked == null
-                                && player != null) {
+                        if (locked == null) {
+                            return chain.proceed();
+                        }
+
+                        if (tracked != player) {
                             currentPlayer =
                                     new WeakReference<>(
                                             player);
@@ -711,11 +733,23 @@ final class AppPlaybackGuard {
                             return chain.proceed();
                         }
 
+                        Boolean reportedPlaying =
+                                playerReportedPlaying(
+                                        player);
+
+                        boolean signaledPlaying =
+                                lastPlaySignal
+                                        && lastPlaySignalPlayer.get()
+                                        == player;
+
                         boolean wasPlaying =
                                 backgroundWasPlaying
-                                        || lastPlaySignal
-                                        || playerIsPlaying(
-                                                player);
+                                        && backgroundPlayer.get()
+                                        == player
+                                        && (Boolean.TRUE.equals(
+                                        reportedPlaying)
+                                        || reportedPlaying == null
+                                        && signaledPlaying);
 
                         if (!wasPlaying) {
                             lastPlaySignal = false;
@@ -748,6 +782,12 @@ final class AppPlaybackGuard {
 
                         lifecyclePauseDetectedToken =
                                 token;
+                        backgroundPlayer =
+                                new WeakReference<>(
+                                        player);
+                        lastPlaySignalPlayer =
+                                new WeakReference<>(
+                                        player);
 
                         if (adaptiveState
                                 == ADAPTIVE_FORCED
@@ -923,8 +963,96 @@ final class AppPlaybackGuard {
             return;
         }
 
+        Boolean reported =
+                playerReportedPlaying(
+                        player);
+
+        Object locked =
+                backgroundPlayer.get();
+
+        if (!appForeground
+                && locked != null
+                && locked != player) {
+            Boolean lockedPlaying =
+                    playerReportedPlaying(
+                            locked);
+
+            boolean canHandoff =
+                    Boolean.TRUE.equals(reported)
+                            && !Boolean.TRUE.equals(
+                                    lockedPlaying);
+
+            if (!canHandoff) {
+                log(
+                        Log.INFO,
+                        "APP_PLAYER_PRELOAD_IGNORED",
+                        "pkg=" + packageName
+                                + " candidate="
+                                + player.getClass()
+                                .getName()
+                                + " candidatePlaying="
+                                + reported
+                                + " lockedPlaying="
+                                + lockedPlaying);
+                return;
+            }
+
+            backgroundPlayer =
+                    new WeakReference<>(
+                            player);
+            currentPlayer =
+                    new WeakReference<>(
+                            player);
+            lastPlaySignalPlayer =
+                    new WeakReference<>(
+                            player);
+            lastPlaySignal = true;
+            backgroundWasPlaying = true;
+            lifecyclePauseDetectedToken = -1L;
+
+            log(
+                    Log.INFO,
+                    "APP_BACKGROUND_PLAYER_HANDOFF",
+                    "pkg=" + packageName
+                            + " from="
+                            + locked.getClass()
+                            .getName()
+                            + " to="
+                            + player.getClass()
+                            .getName()
+                            + " adaptive="
+                            + adaptiveState);
+
+            ensureControlReceiver(null);
+            return;
+        }
+
         Object previous =
                 currentPlayer.get();
+
+        boolean accept =
+                Boolean.TRUE.equals(reported)
+                        || previous == null
+                        || previous == player
+                        || Boolean.FALSE.equals(
+                                playerReportedPlaying(
+                                        previous));
+
+        if (!accept) {
+            log(
+                    Log.INFO,
+                    "APP_PLAYER_PRELOAD_IGNORED",
+                    "pkg=" + packageName
+                            + " candidate="
+                            + player.getClass()
+                            .getName()
+                            + " candidatePlaying="
+                            + reported
+                            + " current="
+                            + previous.getClass()
+                            .getName());
+            return;
+        }
 
         if (previous != player) {
             currentPlayer =
@@ -932,9 +1060,12 @@ final class AppPlaybackGuard {
                             player);
             adaptiveState = ADAPTIVE_UNKNOWN;
             lifecyclePauseDetectedToken = -1L;
-            backgroundProbeToken++;
-            backgroundProbeUntilElapsed = 0L;
-            backgroundWasPlaying = false;
+
+            if (!backgroundProbeActive()) {
+                backgroundProbeToken++;
+                backgroundProbeUntilElapsed = 0L;
+                backgroundWasPlaying = false;
+            }
 
             log(
                     Log.INFO,
@@ -943,9 +1074,14 @@ final class AppPlaybackGuard {
                             + " player="
                             + player.getClass()
                             .getName()
+                            + " playing="
+                            + reported
                             + " adaptive=unknown");
         }
 
+        lastPlaySignalPlayer =
+                new WeakReference<>(
+                        player);
         lastPlaySignal = true;
         ensureControlReceiver(null);
     }
@@ -1054,6 +1190,16 @@ final class AppPlaybackGuard {
 
         if (direct) {
             lastPlaySignal = play;
+            lastPlaySignalPlayer =
+                    new WeakReference<>(
+                            play ? player : null);
+
+            if (play && !appForeground) {
+                backgroundPlayer =
+                        new WeakReference<>(
+                                player);
+                backgroundWasPlaying = true;
+            }
         }
 
         log(
@@ -1256,10 +1402,44 @@ final class AppPlaybackGuard {
             Object player =
                     currentPlayer.get();
 
+            Boolean reported =
+                    playerReportedPlaying(
+                            player);
+
+            boolean signaled =
+                    player != null
+                            && lastPlaySignal
+                            && lastPlaySignalPlayer.get()
+                            == player;
+
             backgroundWasPlaying =
-                    lastPlaySignal
-                            || playerIsPlaying(
-                                    player);
+                    Boolean.TRUE.equals(
+                            reported)
+                            || (reported == null
+                            && signaled);
+
+            backgroundPlayer =
+                    backgroundWasPlaying
+                            ? new WeakReference<>(
+                                    player)
+                            : new WeakReference<>(
+                                    null);
+
+            log(
+                    Log.INFO,
+                    "APP_BACKGROUND_PLAYER_LOCK",
+                    "pkg=" + packageName
+                            + " player="
+                            + (player == null
+                            ? ""
+                            : player.getClass()
+                            .getName())
+                            + " reported="
+                            + reported
+                            + " signaled="
+                            + signaled
+                            + " locked="
+                            + backgroundWasPlaying);
         }
 
         backgroundProbeUntilElapsed =
@@ -1320,6 +1500,9 @@ final class AppPlaybackGuard {
         backgroundProbeUntilElapsed = 0L;
         lifecyclePauseDetectedToken = -1L;
         backgroundWasPlaying = false;
+        backgroundPlayer =
+                new WeakReference<>(
+                        null);
 
         log(
                 Log.INFO,
@@ -1352,7 +1535,8 @@ final class AppPlaybackGuard {
                     if (!selected()
                             || token
                             != backgroundProbeToken
-                            || currentPlayer.get()
+                            || appForeground
+                            || backgroundPlayer.get()
                             != player
                             || !GuardConfig
                             .PLAYBACK_MODE_AUTO
@@ -1406,7 +1590,8 @@ final class AppPlaybackGuard {
                     if (!selected()
                             || token
                             != backgroundProbeToken
-                            || currentPlayer.get()
+                            || appForeground
+                            || backgroundPlayer.get()
                             != player
                             || !GuardConfig
                             .PLAYBACK_MODE_AUTO
@@ -1420,11 +1605,12 @@ final class AppPlaybackGuard {
                         return;
                     }
 
-                    boolean playing =
-                            playerIsPlaying(
+                    Boolean playing =
+                            playerReportedPlaying(
                                     player);
 
-                    if (playing) {
+                    if (Boolean.TRUE.equals(
+                            playing)) {
                         adaptiveState =
                                 ADAPTIVE_NATIVE;
 
@@ -1442,28 +1628,19 @@ final class AppPlaybackGuard {
                     }
 
                     adaptiveState =
-                            ADAPTIVE_FORCED;
-
-                    boolean recovered =
-                            invokePlay(
-                                    player);
-
-                    if (recovered) {
-                        lastPlaySignal = true;
-                    }
+                            ADAPTIVE_UNKNOWN;
 
                     log(
-                            recovered
-                                    ? Log.INFO
-                                    : Log.WARN,
-                            "APP_AUTO_FORCE_STATE_DETECTED",
+                            Log.INFO,
+                            "APP_AUTO_UNKNOWN_NO_PAUSE",
                             "pkg=" + packageName
                                     + " player="
                                     + player.getClass()
                                     .getName()
-                                    + " playing=false"
-                                    + " recovered="
-                                    + recovered
+                                    + " playing="
+                                    + playing
+                                    + " recovered=false"
+                                    + " reason=no-explicit-lifecycle-pause"
                                     + " token="
                                     + token);
                 },
@@ -1473,8 +1650,16 @@ final class AppPlaybackGuard {
     private boolean playerIsPlaying(
             Object player
     ) {
+        return Boolean.TRUE.equals(
+                playerReportedPlaying(
+                        player));
+    }
+
+    private Boolean playerReportedPlaying(
+            Object player
+    ) {
         if (player == null) {
-            return false;
+            return Boolean.FALSE;
         }
 
         Boolean playing =
@@ -1486,16 +1671,9 @@ final class AppPlaybackGuard {
             return playing;
         }
 
-        Boolean playWhenReady =
-                readBooleanNoArg(
-                        player,
-                        "getPlayWhenReady");
-
-        if (playWhenReady != null) {
-            return playWhenReady;
-        }
-
-        return lastPlaySignal;
+        return readBooleanNoArg(
+                player,
+                "getPlayWhenReady");
     }
 
     private Boolean readBooleanNoArg(
