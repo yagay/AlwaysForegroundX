@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -33,6 +34,11 @@ import io.github.libxposed.api.XposedModuleInterface;
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
     private static final int PROCESS_STATE_TOP = 2;
+    private static final int OPLUS_ZOOM_LAUNCH_FLAG = 2;
+    private static final int OPLUS_MINI_START_WAY = 1;
+    private static final long SYSTEM_WINDOW_RETRY_MS = 80L;
+    private static final int SYSTEM_WINDOW_MAX_RETRIES = 24;
+    private static final long SYSTEM_WINDOW_COOLDOWN_MS = 1800L;
     private static final long MODULE_VERSION_CODE =
             BuildConfig.VERSION_CODE;
 
@@ -42,8 +48,11 @@ public final class GuardModule extends XposedModule {
             ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Integer, String[]> uidPackages =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Long> systemWindowRequestedAt =
+            new ConcurrentHashMap<>();
 
     private volatile ClassLoader systemClassLoader;
+    private volatile Handler systemHandler;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
 
@@ -80,6 +89,7 @@ public final class GuardModule extends XposedModule {
         Handler handler =
                 new Handler(
                         Looper.getMainLooper());
+        systemHandler = handler;
 
         Context context =
                 resolveSystemUiContext(
