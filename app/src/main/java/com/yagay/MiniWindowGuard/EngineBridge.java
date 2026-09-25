@@ -416,6 +416,30 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
+    boolean shouldAutoMiniWindow(
+            Object task
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "shouldAutoMiniWindow",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
+    boolean isOplusFlexibleTask(
+            Object task
+    ) {
+        Object value = safeInvoke(
+                currentEngine(),
+                "isOplusFlexibleTask",
+                new Class<?>[]{Object.class},
+                task);
+        return value instanceof Boolean
+                && (Boolean) value;
+    }
+
     void onFocusedActivity(
             Object activityRecord
     ) {
