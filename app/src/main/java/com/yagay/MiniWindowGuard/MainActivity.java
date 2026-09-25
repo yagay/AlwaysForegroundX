@@ -257,7 +257,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "普通后台播放",
-                        "自动/强制模式离开前台时会把现有 Task 转成真实 OPlus FlexibleWindow，并立即收成浮动图标继续播放；播放器保护仍采用 5.4.5 的生命周期策略，不主动 play、不接管剧集/播放列表。仅原生模式不强制转小窗。"));
+                        "从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED；返回原 App 自动解除。"));
 
         Button support =
                 button(
@@ -289,7 +289,19 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "运行保护",
-                        "小窗继续使用 OPlus 原生状态驱动；后台播放保持真实 Activity 生命周期，只阻止目标播放器被生命周期同步暂停。");
+                        "小窗继续使用 OPlus 状态驱动；后台播放名单只在离开普通全屏后进入 BACKGROUND_PROTECTED。");
+
+        addSwitch(
+                card,
+                "受保护进程状态保持 TOP",
+                "对真实一加小窗/贴边/锁屏，以及 BACKGROUND_PROTECTED 普通后台进程返回 TOP。",
+                ConfigKeys.SYSTEM_IMPORTANCE_TOP);
+
+        addSwitch(
+                card,
+                "受保护任务视为存在 Resumed Activity",
+                "对真实一加小窗和 BACKGROUND_PROTECTED 任务返回 true；普通前台不修改。",
+                ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
@@ -305,7 +317,7 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "详细诊断",
-                        "记录 OPlus FlexibleWindow 回调、支持判断、Task 状态、播放保护和 OEM 清理链路。");
+                        "记录 OPlus FlexibleWindow 回调、支持判断、Task 状态、前台查询和 OEM 清理链路。");
 
         diagnosticsStatus =
                 statusLine(
