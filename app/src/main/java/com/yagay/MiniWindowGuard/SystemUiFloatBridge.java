@@ -18,11 +18,11 @@ import java.util.List;
 import io.github.libxposed.api.XposedModule;
 
 /**
- * SystemUI-side bridge for the native OPlus FloatHandle state machine.
+ * System Launcher-side bridge for the native OPlus FloatHandle state machine.
  *
  * system_server only decides which task should become a background playback
- * target. SystemUI owns ZoomStateManager, ZoomPositionInfo, FloatHandleInfo and
- * IZoomUiManager, so the native FLOAT transition must be requested here.
+ * target. The real ZoomStateManager lives in com.android.launcher; it creates
+ * ZoomPositionInfo/FloatHandleInfo and drives the SystemUI FloatHandle UI.
  */
 final class SystemUiFloatBridge {
     static final String ACTION_REQUEST_FLOAT =
@@ -31,7 +31,7 @@ final class SystemUiFloatBridge {
     static final String EXTRA_PACKAGE_NAME = "package_name";
 
     private static final String TAG = "MiniWindowGuardUI";
-    private static final String SYSTEMUI_PACKAGE = "com.android.systemui";
+    private static final String LAUNCHER_PACKAGE = "com.android.launcher";
     private static final String SENDER_PERMISSION =
             "android.permission.MANAGE_ACTIVITY_TASKS";
 
@@ -44,7 +44,7 @@ final class SystemUiFloatBridge {
     private final XposedModule module;
 
     private volatile Object zoomStateManager;
-    private volatile ClassLoader systemUiClassLoader;
+    private volatile ClassLoader launcherClassLoader;
     private volatile Context context;
     private volatile Handler handler;
     private volatile BroadcastReceiver systemUiReceiver;
@@ -56,7 +56,7 @@ final class SystemUiFloatBridge {
     }
 
     void install(ClassLoader loader) {
-        systemUiClassLoader = loader;
+        launcherClassLoader = loader;
 
         if (loader == null) {
             uiDiag("FLOAT_BRIDGE_INSTALL_FAIL", "reason=null-classloader");
@@ -70,7 +70,7 @@ final class SystemUiFloatBridge {
                             false,
                             loader);
 
-            hookSystemUiApplication(loader);
+            hookLauncherApplication(loader);
             hookConstructors(managerClass);
             hookZoomEnter(managerClass);
 
@@ -85,13 +85,13 @@ final class SystemUiFloatBridge {
         }
     }
 
-    private void hookSystemUiApplication(
+    private void hookLauncherApplication(
             ClassLoader loader
     ) {
         try {
             Class<?> applicationClass =
                     Class.forName(
-                            "com.android.systemui.SystemUIApplication",
+                            "com.android.common.LauncherApplication",
                             false,
                             loader);
 
@@ -127,18 +127,18 @@ final class SystemUiFloatBridge {
 
                     registerReceiverIfNeeded();
                     resolveZoomStateManager(
-                            "systemui-onCreate");
+                            "launcher-onCreate");
 
                     uiDiag(
-                            "FLOAT_SYSTEMUI_READY",
-                            "source=SystemUIApplication.onCreate");
+                            "FLOAT_LAUNCHER_READY",
+                            "source=LauncherApplication.onCreate");
                 }
 
                 return result;
             });
         } catch (Throwable t) {
             uiDiag(
-                    "FLOAT_SYSTEMUI_APP_HOOK_FAIL",
+                    "FLOAT_LAUNCHER_APP_HOOK_FAIL",
                     "error=" + t.getClass()
                             .getSimpleName()
                             + ":"
@@ -366,7 +366,7 @@ final class SystemUiFloatBridge {
 
             uiDiag(
                     "FLOAT_RECEIVER_READY",
-                    "package=" + SYSTEMUI_PACKAGE);
+                    "package=" + LAUNCHER_PACKAGE);
         }
     }
 
@@ -484,7 +484,14 @@ final class SystemUiFloatBridge {
 
         if (now - request.lastInvokeAt
                 >= REINVOKE_MS) {
-            Method change =
+            Method floatRequest =
+                    findMethod(
+                            manager.getClass(),
+                            "requestFloatZoomFromOutside",
+                            boolean.class,
+                            boolean.class);
+
+            Method stateRequest =
                     findMethod(
                             manager.getClass(),
                             "requestChangeZoomStateFromOutside",
@@ -492,7 +499,8 @@ final class SystemUiFloatBridge {
                             boolean.class,
                             boolean.class);
 
-            if (change == null) {
+            if (floatRequest == null
+                    && stateRequest == null) {
                 pending = null;
 
                 uiDiag(
@@ -500,30 +508,42 @@ final class SystemUiFloatBridge {
                         "pkg=" + request.packageName
                                 + " taskId="
                                 + request.taskId
-                                + " reason=method-missing");
+                                + " reason=native-float-method-missing");
                 return;
             }
 
             try {
-                change.setAccessible(true);
-                change.invoke(
-                        manager,
-                        OPLUS_EXTERNAL_STATE_FLOAT,
-                        true,
-                        true);
+                String methodName;
+
+                if (floatRequest != null) {
+                    floatRequest.setAccessible(true);
+                    floatRequest.invoke(
+                            manager,
+                            true,
+                            true);
+                    methodName =
+                            "requestFloatZoomFromOutside";
+                } else {
+                    stateRequest.setAccessible(true);
+                    stateRequest.invoke(
+                            manager,
+                            OPLUS_EXTERNAL_STATE_FLOAT,
+                            true,
+                            true);
+                    methodName =
+                            "requestChangeZoomStateFromOutside";
+                }
 
                 request.lastInvokeAt = now;
                 request.invokeCount++;
 
                 uiDiag(
-                        "FLOAT_STATE_REQUEST",
+                        "FLOAT_NATIVE_MINIMIZE_REQUEST",
                         "pkg=" + request.packageName
                                 + " taskId="
                                 + request.taskId
-                                + " state="
-                                + OPLUS_EXTERNAL_STATE_FLOAT
-                                + " animate=true"
-                                + " requestTaskChange=true"
+                                + " method="
+                                + methodName
                                 + " invoke="
                                 + request.invokeCount
                                 + " source="
@@ -557,7 +577,7 @@ final class SystemUiFloatBridge {
         }
 
         ClassLoader loader =
-                systemUiClassLoader;
+                launcherClassLoader;
 
         if (loader == null) {
             return null;
@@ -633,7 +653,7 @@ final class SystemUiFloatBridge {
                 || source.endsWith("-30")
                 || source.endsWith("-40")
                 || source.endsWith("-50")
-                || "systemui-onCreate".equals(
+                || "launcher-onCreate".equals(
                 source))) {
             uiDiag(
                     "FLOAT_MANAGER_RESOLVE_WAIT",
