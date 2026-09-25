@@ -257,7 +257,7 @@ public final class MainActivity extends Activity {
         card.addView(
                 detailBlock(
                         "普通后台播放",
-                        "每个 App 可独立选择自动检测 / 始终强制 / 仅原生。自动模式按当前播放器实例学习：原生可后台就不干预，被生命周期暂停才自动恢复并保护。"));
+                        "每个 App 可独立选择自动检测 / 始终强制 / 仅原生。自动模式采用 5.4.5 的生命周期策略：只阻止 onPause/onStop 同步触发的播放器暂停，不主动 play，也不接管 App 自己的剧集/播放列表状态。"));
 
         Button support =
                 button(
