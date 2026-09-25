@@ -32,8 +32,6 @@ import java.util.concurrent.Executors;
 public final class TargetAppsActivity extends Activity {
     static final String EXTRA_MODE = "mode";
     static final String MODE_FOREGROUND = "foreground";
-    static final String MODE_BACKGROUND_PLAYBACK =
-            "background_playback";
     static final String MODE_FORCE_SUPPORT = "force_support";
 
     private final ExecutorService executor =
@@ -49,7 +47,6 @@ public final class TargetAppsActivity extends Activity {
     private ProgressBar progress;
     private EditText search;
     private TextView countView;
-    private Button scopeSyncButton;
     private String mode;
     private String preferenceKey;
 
@@ -61,16 +58,13 @@ public final class TargetAppsActivity extends Activity {
                 ? MODE_FOREGROUND
                 : getIntent().getStringExtra(EXTRA_MODE);
 
-        if (!MODE_FORCE_SUPPORT.equals(mode)
-                && !MODE_BACKGROUND_PLAYBACK.equals(mode)) {
+        if (!MODE_FORCE_SUPPORT.equals(mode)) {
             mode = MODE_FOREGROUND;
         }
 
         preferenceKey =
                 MODE_FORCE_SUPPORT.equals(mode)
                         ? ConfigKeys.FORCE_SUPPORT_PACKAGES
-                        : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES
                         : ConfigKeys.FOREGROUND_PACKAGES;
 
         selected.addAll(
@@ -113,8 +107,6 @@ public final class TargetAppsActivity extends Activity {
         title.setText(
                 MODE_FORCE_SUPPORT.equals(mode)
                         ? "强制允许一加小窗"
-                        : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "后台播放应用"
                         : "始终前台应用");
         title.setTextSize(26);
         title.setTypeface(
@@ -128,11 +120,6 @@ public final class TargetAppsActivity extends Activity {
                 MODE_FORCE_SUPPORT.equals(mode)
                         ? "勾选后仅放行该 App 的 OPlus FlexibleWindow 支持/黑名单判断。"
                         + "App 仍由 OxygenOS 自己启动和进入小窗。"
-                        : MODE_BACKGROUND_PLAYBACK.equals(mode)
-                        ? "勾选后会请求把该 App 加入 MiniWindowGuard 的 LSPosed 作用域。"
-                        + "系统层正常完成 Home/应用切换，App 进程层仅阻止生命周期触发的播放器暂停。"
-                        + "用户手动暂停、同 App 页面切换、Activity finishing、强制停止和真实关闭正常放行。"
-                        + "首次授权作用域后请重新打开目标 App。"
                         : "勾选后，只有当该 App 当前真实处于一加小窗、贴边小窗或锁屏中的一加小窗时，"
                         + "MiniWindowGuard 才维持前台和后台播放；普通全屏状态完全不干预。");
         help.setTextSize(13.5f);
@@ -154,22 +141,6 @@ public final class TargetAppsActivity extends Activity {
                 new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        if (MODE_BACKGROUND_PLAYBACK
-                .equals(mode)) {
-            scopeSyncButton =
-                    new Button(this);
-            scopeSyncButton.setText(
-                    "同步到 LSPosed 作用域");
-            scopeSyncButton.setAllCaps(false);
-            scopeSyncButton.setOnClickListener(
-                    v -> syncSelectedScopes());
-            root.addView(
-                    scopeSyncButton,
-                    new LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT));
-        }
 
         countView =
                 new TextView(this);
@@ -208,7 +179,6 @@ public final class TargetAppsActivity extends Activity {
         root.addView(close);
 
         setContentView(root);
-        SystemBarInsets.apply(root);
 
         search.addTextChangedListener(
                 new TextWatcher() {
@@ -388,22 +358,6 @@ public final class TargetAppsActivity extends Activity {
             }
         }
 
-        filteredApps.sort(
-                Comparator
-                        .comparing(
-                                (AppItem item) ->
-                                        selected.contains(
-                                                item.packageName)
-                                                ? 0
-                                                : 1)
-                        .thenComparing(
-                                item ->
-                                        item.label,
-                                String.CASE_INSENSITIVE_ORDER)
-                        .thenComparing(
-                                item ->
-                                        item.packageName));
-
         if (adapter != null) {
             adapter.notifyDataSetChanged();
         }
@@ -425,126 +379,18 @@ public final class TargetAppsActivity extends Activity {
                 preferenceKey,
                 selected);
 
-        applyFilter(
-                search == null
-                        ? ""
-                        : search
-                        .getText()
-                        .toString());
-    }
-
-    private void syncSelectedScopes() {
-        if (!MODE_BACKGROUND_PLAYBACK
-                .equals(mode)) {
-            return;
-        }
-
-        if (selected.isEmpty()) {
-            Toast.makeText(
-                    this,
-                    "请先选择后台播放应用",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        if (scopeSyncButton != null) {
-            scopeSyncButton.setEnabled(
-                    false);
-            scopeSyncButton.setText(
-                    "正在请求 LSPosed…");
-        }
-
-        GuardApp.syncAll();
-
-        GuardApp.requestSelectedPlaybackScopes(
-                new HashSet<>(selected),
-                (selectedCount,
-                 alreadyPresent,
-                 addedCount,
-                 notAddedCount,
-                 error) ->
-                        runOnUiThread(() -> {
-                            if (scopeSyncButton != null) {
-                                scopeSyncButton.setEnabled(
-                                        true);
-                                scopeSyncButton.setText(
-                                        "同步到 LSPosed 作用域");
-                            }
-
-                            String message;
-
-                            if (error != null
-                                    && !error.isBlank()) {
-                                message =
-                                        "同步失败："
-                                                + error;
-                            } else if (notAddedCount > 0) {
-                                message =
-                                        "已选择 "
-                                                + selectedCount
-                                                + " 个，已在作用域 "
-                                                + alreadyPresent
-                                                + " 个，本次新增 "
-                                                + addedCount
-                                                + " 个，仍有 "
-                                                + notAddedCount
-                                                + " 个未加入";
-                            } else {
-                                message =
-                                        "同步完成：已选择 "
-                                                + selectedCount
-                                                + " 个，已在作用域 "
-                                                + alreadyPresent
-                                                + " 个，本次新增 "
-                                                + addedCount
-                                                + " 个";
-                            }
-
-                            Toast.makeText(
-                                    this,
-                                    message
-                                            + "\n新增后重新打开目标 App 生效",
-                                    notAddedCount > 0
-                                            || error != null
-                                            ? Toast.LENGTH_LONG
-                                            : Toast.LENGTH_SHORT)
-                                    .show();
-
-                            refreshCount();
-                        }));
+        refreshCount();
     }
 
     private void refreshCount() {
         if (countView == null) return;
 
-        if (MODE_BACKGROUND_PLAYBACK
-                .equals(mode)) {
-            int scoped = 0;
-
-            for (String packageName :
-                    selected) {
-                if (GuardApp.hasPlaybackScope(
-                        packageName)) {
-                    scoped++;
-                }
-            }
-
-            countView.setText(
-                    "已选择 "
-                            + selected.size()
-                            + " 个 · 已加入 LSPosed "
-                            + scoped
-                            + " 个 · 当前显示 "
-                            + filteredApps.size()
-                            + " 个");
-        } else {
-            countView.setText(
-                    "已选择 "
-                            + selected.size()
-                            + " 个 · 当前显示 "
-                            + filteredApps.size()
-                            + " 个");
-        }
+        countView.setText(
+                "已选择 "
+                        + selected.size()
+                        + " 个 · 当前显示 "
+                        + filteredApps.size()
+                        + " 个");
     }
 
     private void showFatal(Throwable t) {
@@ -591,7 +437,6 @@ public final class TargetAppsActivity extends Activity {
         root.addView(close);
 
         setContentView(root);
-        SystemBarInsets.apply(root);
     }
 
     private int dp(float value) {

@@ -24,11 +24,11 @@ import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 /**
- * System-server keepalive bootstrap.
+ * OPlus-only system_server bootstrap.
  *
- * OPlus FlexibleWindow protection stays OEM-state-driven. A second independent
- * BACKGROUND_PROTECTED state keeps selected normal fullscreen tasks alive when
- * focus moves to Home/another package or the display sleeps, without timers.
+ * OxygenOS owns window lifecycle, visibility, surfaces, focus and navigation.
+ * MiniWindowGuard hooks OPlus FlexibleWindow itself, then applies foreground
+ * and anti-cleanup policy only while the OEM task is actually flexible/floating.
  */
 public final class GuardModule extends XposedModule {
     private static final String TAG = "MiniWindowGuard";
@@ -46,18 +46,12 @@ public final class GuardModule extends XposedModule {
     private volatile ClassLoader systemClassLoader;
     private volatile SharedPreferences remotePrefs;
     private volatile EngineBridge engine;
-    private volatile String processName = "";
 
     @Override
     public void onModuleLoaded(
             XposedModuleInterface.ModuleLoadedParam param
     ) {
         try {
-            processName =
-                    param == null
-                            ? ""
-                            : String.valueOf(
-                            param.getProcessName());
             remotePrefs =
                     getRemotePreferences(
                             ConfigKeys.REMOTE_GROUP);
@@ -73,56 +67,6 @@ public final class GuardModule extends XposedModule {
                     Log.WARN,
                     TAG,
                     "SYSTEM_SCOPE remote settings unavailable",
-                    t);
-        }
-    }
-
-    @Override
-    public void onPackageReady(
-            XposedModuleInterface.PackageReadyParam param
-    ) {
-        if (param == null
-                || !param.isFirstPackage()) {
-            return;
-        }
-
-        String packageName =
-                param.getPackageName();
-
-        if (packageName == null
-                || packageName.isBlank()
-                || "system".equals(processName)
-                || !packageName.equals(processName)) {
-            return;
-        }
-
-        try {
-            GuardConfig.initialize(
-                    remotePrefs);
-
-            if (!GuardConfig.enabled()
-                    || !GuardConfig
-                    .backgroundPlaybackPackage(
-                            packageName)) {
-                return;
-            }
-
-            AppPlaybackGuard.install(
-                    this,
-                    packageName,
-                    param.getClassLoader());
-
-            log(
-                    Log.INFO,
-                    TAG,
-                    "APP_SCOPE playback guard ready pkg="
-                            + packageName);
-        } catch (Throwable t) {
-            log(
-                    Log.WARN,
-                    TAG,
-                    "APP_SCOPE playback guard failed pkg="
-                            + packageName,
                     t);
         }
     }
@@ -153,8 +97,6 @@ public final class GuardModule extends XposedModule {
         installOplusFlexibleWindowHooks(
                 systemClassLoader);
         installOplusEdgeKeepaliveHooks(
-                systemClassLoader);
-        installBackgroundStopKeepaliveHook(
                 systemClassLoader);
         installOplusLockKeepaliveHooks(
                 systemClassLoader);
@@ -277,7 +219,6 @@ public final class GuardModule extends XposedModule {
 
         installLegacyZoomSupportHook(loader);
         installOplusFlexibleEventHook(loader);
-        installFloatHandleRestoreHook(loader);
 
         Class<?> service =
                 load(
@@ -556,97 +497,6 @@ public final class GuardModule extends XposedModule {
         }
     }
 
-    private void installFloatHandleRestoreHook(
-            ClassLoader loader
-    ) {
-        Class<?> controller =
-                load(
-                        loader,
-                        "com.android.server.wm.FloatHandleController");
-
-        if (controller == null) return;
-
-        for (Method method :
-                controller.getDeclaredMethods()) {
-            if (!"startActivityByFloatInfo"
-                    .equals(method.getName())) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                String hookKey =
-                        "float-handle-restore:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(hookKey)) {
-                    continue;
-                }
-
-                hook(method).intercept(chain -> {
-                    int taskId = -1;
-
-                    for (Object arg :
-                            chain.getArgs()) {
-                        if (arg instanceof Integer value
-                                && value > 0) {
-                            taskId = value;
-                            break;
-                        }
-
-                        if (arg == null) {
-                            continue;
-                        }
-
-                        taskId =
-                                intField(
-                                        arg,
-                                        "taskId",
-                                        -1);
-
-                        if (taskId < 0) {
-                            taskId =
-                                    intField(
-                                            arg,
-                                            "mTaskId",
-                                            -1);
-                        }
-
-                        if (taskId >= 0) {
-                            break;
-                        }
-                    }
-
-                    EngineBridge current = engine;
-
-                    if (current != null
-                            && taskId >= 0) {
-                        current.onFloatHandleOpened(
-                                taskId);
-
-                        diag(
-                                "OPLUS_EDGE_RESTORE",
-                                "taskId=" + taskId
-                                        + " source=startActivityByFloatInfo");
-                    }
-
-                    return chain.proceed();
-                });
-
-                log(
-                        Log.INFO,
-                        TAG,
-                        "SYSTEM_SCOPE installed FloatHandle restore hook "
-                                + method.toGenericString());
-            } catch (Throwable t) {
-                installedHooks.remove(
-                        "float-handle-restore:"
-                                + method.toGenericString());
-            }
-        }
-    }
-
     private void installLegacyZoomSupportHook(
             ClassLoader loader
     ) {
@@ -743,105 +593,39 @@ public final class GuardModule extends XposedModule {
                     }
 
                     hook(method).intercept(chain -> {
-                        List<Object> args =
-                                chain.getArgs();
-
                         String reason = null;
-                        Object resumingActivity = null;
-                        int booleanCount = 0;
-                        boolean firstBoolean = false;
-                        boolean secondBoolean = false;
 
-                        for (Object arg : args) {
+                        for (Object arg :
+                                chain.getArgs()) {
                             if (arg instanceof String) {
                                 reason = (String) arg;
-                            } else if (arg instanceof Boolean value) {
-                                if (booleanCount == 0) {
-                                    firstBoolean = value;
-                                } else if (booleanCount == 1) {
-                                    secondBoolean = value;
-                                }
-                                booleanCount++;
-                            } else if (arg != null
-                                    && arg.getClass()
-                                    .getName()
-                                    .endsWith(
-                                            ".ActivityRecord")) {
-                                resumingActivity = arg;
                             }
                         }
 
-                        boolean userLeaving =
-                                booleanCount >= 2
-                                        && firstBoolean;
-                        boolean uiSleeping =
-                                booleanCount >= 2
-                                        ? secondBoolean
-                                        : booleanCount == 1
-                                        && firstBoolean;
-
-                        Object task =
-                                taskFromContainer(
-                                        chain.getThisObject());
-
-                        EngineBridge current = engine;
-
                         if (reason != null
                                 && reason.contains(
-                                "pauseInRecentsAnim")
-                                && current != null
-                                && task != null
-                                && current
-                                .shouldSuppressRecentsPause(
-                                        task)) {
-                            diag(
-                                    "OPLUS_EDGE_PAUSE_BLOCK",
-                                    "taskId="
-                                            + taskId(task)
-                                            + " pkg="
-                                            + packageFromObject(task)
-                                            + " reason=" + reason);
-                            return false;
-                        }
+                                "pauseInRecentsAnim")) {
+                            Object task =
+                                    taskFromContainer(
+                                            chain.getThisObject());
 
-                        if (current != null
-                                && task != null) {
-                            Object resumedActivity =
-                                    fieldValue(
-                                            chain.getThisObject(),
-                                            "mResumedActivity");
+                            EngineBridge current = engine;
 
-                            boolean finishing =
-                                    Boolean.TRUE.equals(
-                                            fieldValue(
-                                                    resumedActivity,
-                                                    "finishing"));
-
-                            String resumingPackage =
-                                    packageFromObject(
-                                            resumingActivity);
-
-                            if (current
-                                    .shouldSuppressBackgroundPause(
-                                            task,
-                                            resumingPackage,
-                                            userLeaving,
-                                            uiSleeping,
-                                            reason,
-                                            finishing)) {
+                            if (current != null
+                                    && task != null
+                                    && current
+                                    .shouldSuppressRecentsPause(
+                                            task)) {
                                 diag(
-                                        "BACKGROUND_PAUSE_BLOCK",
-                                        "taskId=" + taskId(task)
+                                        "OPLUS_EDGE_PAUSE_BLOCK",
+                                        "taskId="
+                                                + taskId(task)
                                                 + " pkg="
-                                                + packageFromObject(task)
-                                                + " resumingPkg="
-                                                + resumingPackage
-                                                + " userLeaving="
-                                                + userLeaving
-                                                + " uiSleeping="
-                                                + uiSleeping
+                                                + packageFromObject(
+                                                task)
                                                 + " reason="
                                                 + reason);
+
                                 return false;
                             }
                         }
@@ -1023,11 +807,6 @@ public final class GuardModule extends XposedModule {
 
                             EngineBridge current = engine;
 
-                            if (current != null) {
-                                current.onFocusedActivity(
-                                        args.get(0));
-                            }
-
                             if (current != null
                                     && current.isEdgeHungTask(
                                     task)) {
@@ -1059,105 +838,6 @@ public final class GuardModule extends XposedModule {
                     installedHooks.remove(
                             method.toGenericString());
                 }
-            }
-        }
-    }
-
-    private void installBackgroundStopKeepaliveHook(
-            ClassLoader loader
-    ) {
-        Class<?> record =
-                load(
-                        loader,
-                        "com.android.server.wm.ActivityRecord");
-
-        if (record == null) return;
-
-        for (Method method :
-                record.getDeclaredMethods()) {
-            if (!"stopIfPossible"
-                    .equals(method.getName())
-                    || method.getReturnType()
-                    != void.class) {
-                continue;
-            }
-
-            try {
-                method.setAccessible(true);
-
-                String hookKey =
-                        "background-stop:"
-                                + method.toGenericString();
-
-                if (!installedHooks.add(hookKey)) {
-                    continue;
-                }
-
-                hook(method).intercept(chain -> {
-                    Object activityRecord =
-                            chain.getThisObject();
-
-                    String pkg =
-                            activityPackage(
-                                    activityRecord);
-
-                    EngineBridge current = engine;
-
-                    if (current == null
-                            || !current
-                            .isBackgroundPlaybackPackage(
-                                    pkg)) {
-                        return chain.proceed();
-                    }
-
-                    Object task =
-                            invokeNoArg(
-                                    activityRecord,
-                                    "getTask");
-
-                    boolean finishing =
-                            Boolean.TRUE.equals(
-                                    fieldValue(
-                                            activityRecord,
-                                            "finishing"));
-
-                    if (task == null
-                            || !current
-                            .shouldBlockBackgroundStop(
-                                    task,
-                                    finishing)) {
-                        return chain.proceed();
-                    }
-
-                    // stopIfPossible() normally calls this before scheduling
-                    // StopActivityItem. Do the harmless bookkeeping but do not
-                    // send STOP to the protected app process.
-                    invokeNoArg(
-                            activityRecord,
-                            "resumeKeyDispatchingLocked");
-
-                    diag(
-                            "BACKGROUND_STOP_BLOCK",
-                            "taskId="
-                                    + taskId(task)
-                                    + " pkg=" + pkg
-                                    + " activity="
-                                    + fieldValue(
-                                            activityRecord,
-                                            "mActivityComponent"));
-
-                    return null;
-                });
-
-                log(
-                        Log.INFO,
-                        TAG,
-                        "SYSTEM_SCOPE installed background stop guard "
-                                + method.toGenericString());
-            } catch (Throwable t) {
-                installedHooks.remove(
-                        "background-stop:"
-                                + method.toGenericString());
             }
         }
     }
@@ -1268,12 +948,109 @@ public final class GuardModule extends XposedModule {
             }
         }
 
-        // Do not suppress ActivityRecord.setVisibility(false) or
-        // makeInvisible() during keyguard. Playback keepalive and window
-        // visibility are separate: the task can stay alive while Android hides
-        // its surface behind the lock screen. Sleep/freezer/kill guards below
-        // remain active, and the app-process playback guard handles
-        // lifecycle-triggered player pause calls.
+        // OPlus itself hides the flexible Activity inside
+        // FlexibleTaskController.onScreenLockedChanged. For an always-foreground
+        // OPlus task, suppress only those exact visibility calls while the OEM
+        // lock callback is on this thread. This is deliberately NOT a global
+        // Activity lifecycle override.
+        Class<?> lockActivityRecord =
+                load(
+                        loader,
+                        "com.android.server.wm.ActivityRecord");
+
+        if (lockActivityRecord != null) {
+            for (Method method :
+                    lockActivityRecord.getDeclaredMethods()) {
+                String name = method.getName();
+
+                boolean visibilityMethod =
+                        "setVisibility".equals(name)
+                                && method.getReturnType()
+                                == void.class
+                                && method.getParameterCount()
+                                >= 1;
+
+                boolean makeInvisibleMethod =
+                        "makeInvisible".equals(name)
+                                && method.getReturnType()
+                                == void.class;
+
+                if (!visibilityMethod
+                        && !makeInvisibleMethod) {
+                    continue;
+                }
+
+                try {
+                    method.setAccessible(true);
+
+                    String hookKey =
+                            "lock-visibility:"
+                                    + method.toGenericString();
+
+                    if (!installedHooks.add(hookKey)) {
+                        continue;
+                    }
+
+                    hook(method).intercept(chain -> {
+                        if (visibilityMethod) {
+                            Boolean visible = null;
+
+                            for (Object arg :
+                                    chain.getArgs()) {
+                                if (arg instanceof Boolean) {
+                                    visible =
+                                            (Boolean) arg;
+                                    break;
+                                }
+                            }
+
+                            if (!Boolean.FALSE.equals(
+                                    visible)) {
+                                return chain.proceed();
+                            }
+                        }
+
+                        Object activityRecord =
+                                chain.getThisObject();
+
+                        String pkg =
+                                activityPackage(
+                                        activityRecord);
+
+                        Object task =
+                                invokeNoArg(
+                                        activityRecord,
+                                        "getTask");
+
+                        EngineBridge current = engine;
+
+                        if (current != null
+                                && task != null
+                                && current.shouldKeepTaskAwake(
+                                task)
+                                && isSleepingActivity(
+                                activityRecord)) {
+                            diag(
+                                    "OPLUS_LOCK_VISIBILITY_BLOCK",
+                                    "method=" + name
+                                            + " pkg=" + pkg
+                                            + " activity="
+                                            + fieldValue(
+                                            activityRecord,
+                                            "mActivityComponent"));
+
+                            return null;
+                        }
+
+                        return chain.proceed();
+                    });
+                } catch (Throwable t) {
+                    installedHooks.remove(
+                            "lock-visibility:"
+                                    + method.toGenericString());
+                }
+            }
+        }
 
         Class<?> taskFragment =
                 load(
@@ -1832,12 +1609,7 @@ public final class GuardModule extends XposedModule {
                                     ? null
                                     : component.getPackageName();
 
-                    EngineBridge current = engine;
-
-                    if (!isTargetPackage(pkg)
-                            || current == null
-                            || !current.shouldBlockTaskRemoval(
-                            pkg)) {
+                    if (!isTargetPackage(pkg)) {
                         return chain.proceed();
                     }
 
@@ -1941,20 +1713,6 @@ public final class GuardModule extends XposedModule {
 
                     if (!isTaskRemovalKillStack(
                             stack)) {
-                        return chain.proceed();
-                    }
-
-                    EngineBridge current = engine;
-
-                    if (current == null
-                            || !current.shouldBlockTaskRemoval(
-                            targetPackage)) {
-                        diag(
-                                "KILL_GUARD_PASS",
-                                "reason=ordinary-background-task-removal"
-                                        + " pkg=" + targetPackage
-                                        + " pid=" + pid
-                                        + " process=" + processName);
                         return chain.proceed();
                     }
 

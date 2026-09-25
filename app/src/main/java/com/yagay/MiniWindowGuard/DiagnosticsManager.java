@@ -59,10 +59,7 @@ final class DiagnosticsManager {
                 + " epochMs=" + started
                 + " foregroundPackages="
                 + GuardApp.getStringSet(
-                        ConfigKeys.FOREGROUND_PACKAGES)
-                + " backgroundPlaybackPackages="
-                + GuardApp.getStringSet(
-                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES));
+                        ConfigKeys.FOREGROUND_PACKAGES));
     }
 
     static void stopSession() {
@@ -70,10 +67,7 @@ final class DiagnosticsManager {
                 + " epochMs=" + System.currentTimeMillis()
                 + " foregroundPackages="
                 + GuardApp.getStringSet(
-                        ConfigKeys.FOREGROUND_PACKAGES)
-                + " backgroundPlaybackPackages="
-                + GuardApp.getStringSet(
-                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES));
+                        ConfigKeys.FOREGROUND_PACKAGES));
         GuardApp.putBoolean(ConfigKeys.DIAGNOSTICS_ACTIVE, false);
     }
 
@@ -273,9 +267,6 @@ final class DiagnosticsManager {
                 .append(GuardApp.getInt(ConfigKeys.ENGINE_RELOAD_SEQ)).append('\n');
         out.append(ConfigKeys.FOREGROUND_PACKAGES).append('=')
                 .append(GuardApp.getStringSet(ConfigKeys.FOREGROUND_PACKAGES)).append('\n');
-        out.append(ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES).append('=')
-                .append(GuardApp.getStringSet(
-                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES)).append('\n');
         out.append(ConfigKeys.FORCE_SUPPORT_PACKAGES).append('=')
                 .append(GuardApp.getStringSet(ConfigKeys.FORCE_SUPPORT_PACKAGES)).append('\n');
 
@@ -370,9 +361,6 @@ final class DiagnosticsManager {
         result.addAll(
                 GuardApp.getStringSet(
                         ConfigKeys.FOREGROUND_PACKAGES));
-        result.addAll(
-                GuardApp.getStringSet(
-                        ConfigKeys.BACKGROUND_PLAYBACK_PACKAGES));
         result.addAll(
                 GuardApp.getStringSet(
                         ConfigKeys.FORCE_SUPPORT_PACKAGES));

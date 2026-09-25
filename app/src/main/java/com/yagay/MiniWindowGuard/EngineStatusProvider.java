@@ -15,10 +15,6 @@ public final class EngineStatusProvider extends ContentProvider {
     static final String AUTHORITY = "com.yagay.MiniWindowGuard.engine_status";
     static final Uri URI = Uri.parse("content://" + AUTHORITY);
     static final String METHOD_MARK = "markEngine";
-    static final String METHOD_BACKGROUND_PLAYBACK =
-            "backgroundPlaybackNotification";
-    static final String KEY_PACKAGE_NAME = "package_name";
-    static final String KEY_ACTIVE = "active";
 
     private static final String PREFS = "engine_status";
     static final String KEY_VERSION = "version";
@@ -85,37 +81,6 @@ public final class EngineStatusProvider extends ContentProvider {
         int ownUid = context.getApplicationInfo().uid;
         if (caller != Process.SYSTEM_UID && caller != ownUid) {
             return null;
-        }
-
-        if (METHOD_BACKGROUND_PLAYBACK.equals(method)) {
-            String packageName =
-                    extras == null
-                            ? ""
-                            : extras.getString(
-                                    KEY_PACKAGE_NAME,
-                                    "");
-
-            boolean active =
-                    extras != null
-                            && extras.getBoolean(
-                                    KEY_ACTIVE,
-                                    false);
-
-            if (!packageName.isBlank()) {
-                if (active) {
-                    BackgroundPlaybackNotifier.show(
-                            context,
-                            packageName);
-                } else {
-                    BackgroundPlaybackNotifier.hide(
-                            context,
-                            packageName);
-                }
-            }
-
-            Bundle result = new Bundle();
-            result.putBoolean("ok", true);
-            return result;
         }
 
         if (METHOD_MARK.equals(method)) {

@@ -19,15 +19,13 @@ import dalvik.system.PathClassLoader;
  * HotReloadEngine loaded from the currently installed APK.
  */
 final class EngineBridge {
-    static final int BOOTSTRAP_API = 6;
+    static final int BOOTSTRAP_API = 1;
 
     private static final String TAG = "MiniWindowGuard";
     private static final String PACKAGE_NAME =
             "com.yagay.MiniWindowGuard";
     private static final String ENGINE_CLASS =
             "com.yagay.MiniWindowGuard.HotReloadEngine";
-    private static final String RELOADABLE_PREFIX =
-            "com.yagay.MiniWindowGuard.";
 
     private final Handler handler;
     private final Context context;
@@ -75,22 +73,14 @@ final class EngineBridge {
                             "installed APK path unavailable");
                 }
 
-                candidateLoader =
-                        new ReloadableEngineClassLoader(
-                                apkPath,
-                                systemClassLoader);
+                candidateLoader = new PathClassLoader(
+                        apkPath,
+                        systemClassLoader);
 
                 Class<?> engineClass = Class.forName(
                         ENGINE_CLASS,
                         true,
                         candidateLoader);
-
-                if (engineClass.getClassLoader()
-                        != candidateLoader) {
-                    throw new IllegalStateException(
-                            "engine class resolved from stale parent loader "
-                                    + engineClass.getClassLoader());
-                }
 
                 candidate = engineClass
                         .getDeclaredConstructor()
@@ -101,21 +91,6 @@ final class EngineBridge {
                                 candidate,
                                 "versionCode"))
                                 .longValue();
-
-                long installedVersion =
-                        installedVersionCode();
-
-                if (installedVersion > 0
-                        && candidateVersion
-                        != installedVersion) {
-                    throw new IllegalStateException(
-                            "engine version "
-                                    + candidateVersion
-                                    + " != installed version "
-                                    + installedVersion
-                                    + " apk="
-                                    + apkPath);
-                }
 
                 int requiredBootstrap =
                         ((Number) invoke(
@@ -313,18 +288,6 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
-    boolean isBackgroundPlaybackPackage(
-            String packageName
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "isBackgroundPlaybackPackage",
-                new Class<?>[]{String.class},
-                packageName);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
     boolean wantsPackage(String packageName) {
         Object value = safeInvoke(
                 currentEngine(),
@@ -362,16 +325,6 @@ final class EngineBridge {
                 taskInfo);
     }
 
-    void onFloatHandleOpened(
-            int taskId
-    ) {
-        safeInvoke(
-                currentEngine(),
-                "onFloatHandleOpened",
-                new Class<?>[]{int.class},
-                taskId);
-    }
-
     void onOplusFlexibleEvent(
             int taskId,
             int event
@@ -385,62 +338,6 @@ final class EngineBridge {
                 },
                 taskId,
                 event);
-    }
-
-    boolean shouldSuppressBackgroundPause(
-            Object task,
-            String resumingPackage,
-            boolean userLeaving,
-            boolean uiSleeping,
-            String reason,
-            boolean finishing
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "shouldSuppressBackgroundPause",
-                new Class<?>[]{
-                        Object.class,
-                        String.class,
-                        boolean.class,
-                        boolean.class,
-                        String.class,
-                        boolean.class
-                },
-                task,
-                resumingPackage,
-                userLeaving,
-                uiSleeping,
-                reason,
-                finishing);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
-    void onFocusedActivity(
-            Object activityRecord
-    ) {
-        safeInvoke(
-                currentEngine(),
-                "onFocusedActivity",
-                new Class<?>[]{Object.class},
-                activityRecord);
-    }
-
-    boolean shouldBlockBackgroundStop(
-            Object task,
-            boolean finishing
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "shouldBlockBackgroundStop",
-                new Class<?>[]{
-                        Object.class,
-                        boolean.class
-                },
-                task,
-                finishing);
-        return value instanceof Boolean
-                && (Boolean) value;
     }
 
     boolean shouldSuppressRecentsPause(
@@ -501,18 +398,6 @@ final class EngineBridge {
                 && (Boolean) value;
     }
 
-    boolean shouldBlockTaskRemoval(
-            String packageName
-    ) {
-        Object value = safeInvoke(
-                currentEngine(),
-                "shouldBlockTaskRemoval",
-                new Class<?>[]{String.class},
-                packageName);
-        return value instanceof Boolean
-                && (Boolean) value;
-    }
-
     String managedPackageForProcess(String processName) {
         Object value = safeInvoke(
                 currentEngine(),
@@ -547,53 +432,6 @@ final class EngineBridge {
         return value instanceof Boolean
                 ? (Boolean) value
                 : fallback;
-    }
-
-    private static final class ReloadableEngineClassLoader
-            extends PathClassLoader {
-        ReloadableEngineClassLoader(
-                String dexPath,
-                ClassLoader parent
-        ) {
-            super(
-                    dexPath,
-                    parent);
-        }
-
-        @Override
-        protected synchronized Class<?> loadClass(
-                String name,
-                boolean resolve
-        ) throws ClassNotFoundException {
-            Class<?> loaded =
-                    findLoadedClass(
-                            name);
-
-            if (loaded == null
-                    && name.startsWith(
-                            RELOADABLE_PREFIX)) {
-                try {
-                    loaded =
-                            findClass(
-                                    name);
-                } catch (ClassNotFoundException ignored) {
-                }
-            }
-
-            if (loaded == null) {
-                loaded =
-                        super.loadClass(
-                                name,
-                                false);
-            }
-
-            if (resolve) {
-                resolveClass(
-                        loaded);
-            }
-
-            return loaded;
-        }
     }
 
     private String resolveInstalledApkPath() throws Exception {

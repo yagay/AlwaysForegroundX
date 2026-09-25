@@ -1,10 +1,7 @@
 package com.yagay.MiniWindowGuard;
 
-import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.os.Build;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -38,8 +35,6 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        requestNotificationPermissionIfNeeded();
-
         ScrollView scroll =
                 new ScrollView(this);
 
@@ -71,7 +66,6 @@ public final class MainActivity extends Activity {
         addDiagnosticsCard(root);
 
         setContentView(scroll);
-        SystemBarInsets.apply(scroll);
         refreshStatus();
     }
 
@@ -85,24 +79,6 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         executor.shutdownNow();
         super.onDestroy();
-    }
-
-    private void requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT < 33) {
-            return;
-        }
-
-        if (checkSelfPermission(
-                Manifest.permission.POST_NOTIFICATIONS)
-                == PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-
-        requestPermissions(
-                new String[]{
-                        Manifest.permission.POST_NOTIFICATIONS
-                },
-                1001);
     }
 
     private void addHeader(LinearLayout parent) {
@@ -141,7 +117,7 @@ public final class MainActivity extends Activity {
                 card(
                         parent,
                         "运行状态",
-                        "系统核心运行在 system_server；后台播放应用会按需加入 LSPosed 作用域以加载通用播放守护。");
+                        "核心运行在 system_server，目标 App 不需要加入 LSPosed 作用域。");
 
         engineStatus =
                 statusLine(
@@ -151,7 +127,7 @@ public final class MainActivity extends Activity {
 
         card.addView(
                 statusLine(
-                        "LSPosed 系统作用域：system；后台播放应用按需动态加入"));
+                        "LSPosed 固定作用域：system / system_server"));
 
         addSwitch(
                 card,
@@ -237,28 +213,6 @@ public final class MainActivity extends Activity {
                         "始终前台",
                         "勾选的 App 只有在真实 OPlus FlexibleWindow、贴边/最小化小窗，或该小窗进入锁屏状态时才保持运行。普通全屏状态不干预。"));
 
-        Button background =
-                button(
-                        "后台播放应用");
-
-        background.setOnClickListener(v -> {
-            Intent intent =
-                    new Intent(
-                            this,
-                            TargetAppsActivity.class);
-            intent.putExtra(
-                    TargetAppsActivity.EXTRA_MODE,
-                    TargetAppsActivity.MODE_BACKGROUND_PLAYBACK);
-            startActivity(intent);
-        });
-
-        card.addView(background);
-
-        card.addView(
-                detailBlock(
-                        "普通后台播放",
-                        "从普通全屏切到桌面/其他 App 或锁屏时进入 BACKGROUND_PROTECTED；返回原 App 自动解除。"));
-
         Button support =
                 button(
                         "强制允许一加小窗应用");
@@ -288,25 +242,25 @@ public final class MainActivity extends Activity {
         LinearLayout card =
                 card(
                         parent,
-                        "运行保护",
-                        "小窗继续使用 OPlus 状态驱动；后台播放名单只在离开普通全屏后进入 BACKGROUND_PROTECTED。");
+                        "小窗前台保护",
+                        "普通全屏仍完全交给 OxygenOS；只有白名单中的真实一加小窗在贴边或锁屏时才做定向保活。");
 
         addSwitch(
                 card,
-                "受保护进程状态保持 TOP",
-                "对真实一加小窗/贴边/锁屏，以及 BACKGROUND_PROTECTED 普通后台进程返回 TOP。",
+                "小窗进程状态保持 TOP",
+                "仅对白名单中当前真实属于一加 FlexibleWindow、贴边小窗或锁屏保活状态的进程返回 TOP。",
                 ConfigKeys.SYSTEM_IMPORTANCE_TOP);
 
         addSwitch(
                 card,
-                "受保护任务视为存在 Resumed Activity",
-                "对真实一加小窗和 BACKGROUND_PROTECTED 任务返回 true；普通前台不修改。",
+                "小窗视为存在 Resumed Activity",
+                "仅对白名单中的真实一加小窗/锁屏保活状态返回 true；普通全屏不修改。",
                 ConfigKeys.SYSTEM_HAS_RESUMED);
 
         addSwitch(
                 card,
-                "阻止系统清理受保护进程",
-                "保护一加小窗和 BACKGROUND_PROTECTED 进程；强制停止/更新放行，普通后台任务被划掉时仍允许正常关闭。",
+                "阻止一加清理链路强杀小窗",
+                "保护白名单中的一加小窗、贴边小窗和锁屏保活进程；应用更新、强制停止和普通全屏状态放行。",
                 ConfigKeys.SYSTEM_BLOCK_REMOVE_KILL);
     }
 
