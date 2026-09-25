@@ -92,40 +92,6 @@ final class GuardConfig {
                 .contains(packageName);
     }
 
-    static final String PLAYBACK_MODE_AUTO = "auto";
-    static final String PLAYBACK_MODE_FORCE = "force";
-    static final String PLAYBACK_MODE_NATIVE = "native";
-
-    static String backgroundPlaybackMode(
-            String packageName
-    ) {
-        if (packageName == null
-                || packageName.isBlank()) {
-            return PLAYBACK_MODE_AUTO;
-        }
-
-        String prefix = packageName + "|";
-
-        for (String entry : stringSet(
-                ConfigKeys.BACKGROUND_PLAYBACK_MODES)) {
-            if (entry == null
-                    || !entry.startsWith(prefix)) {
-                continue;
-            }
-
-            String mode =
-                    entry.substring(prefix.length());
-
-            if (PLAYBACK_MODE_FORCE.equals(mode)
-                    || PLAYBACK_MODE_NATIVE.equals(mode)
-                    || PLAYBACK_MODE_AUTO.equals(mode)) {
-                return mode;
-            }
-        }
-
-        return PLAYBACK_MODE_AUTO;
-    }
-
     static boolean forceSupportPackage(String packageName) {
         return packageName != null
                 && stringSet(
