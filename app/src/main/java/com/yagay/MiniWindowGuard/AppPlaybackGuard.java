@@ -601,18 +601,29 @@ final class AppPlaybackGuard {
                         long token =
                                 backgroundProbeToken;
 
+                        boolean alreadyDetected =
+                                lifecyclePauseDetectedToken
+                                        == token;
+
                         lifecyclePauseDetectedToken =
                                 token;
 
                         if (adaptiveState
-                                == ADAPTIVE_FORCED) {
+                                == ADAPTIVE_FORCED
+                                || (alreadyDetected
+                                && method.getName()
+                                .contains("stop"))) {
                             lastPlaySignal = true;
 
                             log(
                                     Log.INFO,
                                     "APP_PLAYER_PAUSE_BLOCK",
                                     "pkg=" + packageName
-                                            + " mode=auto-forced"
+                                            + " mode="
+                                            + (adaptiveState
+                                            == ADAPTIVE_FORCED
+                                            ? "auto-forced"
+                                            : "auto-protect-stop")
                                             + " player="
                                             + className
                                             + " method="
@@ -626,11 +637,13 @@ final class AppPlaybackGuard {
 
                         lastPlaySignal = false;
 
-                        scheduleAutoForce(
-                                token,
-                                player,
-                                className,
-                                method.getName());
+                        if (!alreadyDetected) {
+                            scheduleAutoForce(
+                                    token,
+                                    player,
+                                    className,
+                                    method.getName());
+                        }
 
                         return result;
                     });
