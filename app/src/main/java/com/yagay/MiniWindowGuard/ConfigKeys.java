@@ -7,6 +7,8 @@ final class ConfigKeys {
     static final String MASTER_ENABLED = "master_enabled";
     static final String ENGINE_AUTO_RELOAD = "engine_auto_reload";
     static final String ENGINE_RELOAD_SEQ = "engine_reload_seq";
+    static final String AUTO_MINI_ON_BACKGROUND =
+            "auto_mini_on_background";
 
     static final String FOREGROUND_PACKAGES =
             "foreground_packages";
@@ -31,6 +33,7 @@ final class ConfigKeys {
         return switch (key) {
             case MASTER_ENABLED,
                     ENGINE_AUTO_RELOAD,
+                    AUTO_MINI_ON_BACKGROUND,
                     SYSTEM_IMPORTANCE_TOP,
                     SYSTEM_HAS_RESUMED,
                     SYSTEM_BLOCK_REMOVE_KILL -> true;
